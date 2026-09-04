@@ -1,0 +1,7 @@
+psutil>=5.9.0
+requests>=2.28.0
+tqdm>=4.64.0
+PyMuPDF>=1.23.0
+argostranslate>=1.9.0
+ctranslate2>=4.0.0
+customtkinter>=5.2.0

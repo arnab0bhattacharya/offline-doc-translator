@@ -153,6 +153,12 @@ class TestCoreEngine(unittest.TestCase):
         self.assertIn("&lt;revenue&gt;", escaped)
         self.assertIn("&gt;", escaped)
 
+    def test_escape_xml_strips_control_chars(self):
+        self.assertEqual(escape_xml("hello\x00world\x08!"), "helloworld!")
+        self.assertEqual(escape_xml("tab\there"), "tab\there")
+        self.assertEqual(escape_xml("line\nbreak"), "line\nbreak")
+        self.assertEqual(escape_xml("carriage\rreturn"), "carriage\rreturn")
+
     def test_clean_llm_response(self):
         self.assertEqual(clean_llm_response("  Hello World  "), "Hello World")
         self.assertEqual(

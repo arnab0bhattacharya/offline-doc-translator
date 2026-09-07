@@ -150,8 +150,12 @@ def unmask_protected_text(
     return text
 
 
+_XML_ILLEGAL_CHARS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
 def escape_xml(text: str) -> str:
-    """Escapes standard XML special characters to prevent malformed documents."""
+    """Escapes standard XML special characters and strips illegal control characters."""
+    text = _XML_ILLEGAL_CHARS.sub("", text)
     return (
         text.replace("&", "&amp;")
             .replace("<", "&lt;")

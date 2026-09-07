@@ -52,9 +52,17 @@ try:
         check_ram,
         check_disk_space,
     )
-    from engine.core import TranslationEngine, TranslationMode, DIRECTIONS, clean_llm_response
+    from engine.core import (
+        TranslationEngine,
+        TranslationMode,
+        DIRECTIONS,
+        clean_llm_response,
+        mask_numbers,
+        unmask_numbers,
+    )
     from engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
     from engine.backend_nmt import NMTBackend
+    from engine.backend_llm import LLMBackend
     from formats.registry import get_handler, SUPPORTED_EXTENSIONS
 except (ImportError, ValueError):
     from ..engine.errors import ErrorCode, TranslatorError
@@ -66,10 +74,19 @@ except (ImportError, ValueError):
         check_ram,
         check_disk_space,
     )
-    from ..engine.core import TranslationEngine, TranslationMode, DIRECTIONS, clean_llm_response
+    from ..engine.core import (
+        TranslationEngine,
+        TranslationMode,
+        DIRECTIONS,
+        clean_llm_response,
+        mask_numbers,
+        unmask_numbers,
+    )
     from ..engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
     from ..engine.backend_nmt import NMTBackend
+    from ..engine.backend_llm import LLMBackend
     from ..formats.registry import get_handler, SUPPORTED_EXTENSIONS
+
 
 
 # ── Color System (Dual Light/Dark Mode Tuples) ────────────────────
@@ -1234,48 +1251,30 @@ class TranslatorApp:
                 self.root.after(0, self._set_quick_result, "", "⚠ Ollama is offline. Please start Ollama service.")
                 return
 
-            lang_names = {
-                "ja": "Japanese",
-                "en": "English",
-                "zh": "Chinese",
-                "ko": "Korean",
-                "es": "Spanish",
-                "fr": "French",
-                "de": "German",
-            }
-            parts = direction.split("2") if "2" in direction else ("ja", "en")
-            src_lang = lang_names.get(parts[0], parts[0])
-            tgt_lang = lang_names.get(parts[1], parts[1])
+            backend = LLMBackend(model_name=model, context_window=4096)
 
-            prompt = (
-                f"You are an expert professional translator. Translate the following text from {src_lang} to {tgt_lang}.\n"
-                f"Requirements:\n"
-                f"- Output ONLY the direct translation.\n"
-                f"- Preserve formatting, line breaks, numbers, and proper nouns.\n"
-                f"- Do NOT include notes, explanations, commentary, or markdown quotes.\n\n"
-                f"Source Text:\n{text}"
+            masked_text, number_map = mask_numbers(text)
+            result, elapsed = backend.translate_single(
+                masked_text=masked_text,
+                number_map=number_map,
+                direction=direction,
             )
 
-            payload = {
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "keep_alive": "10m",
-                "options": {"temperature": 0.1, "num_ctx": 4096}
-            }
-
-            t0 = time.time()
-            res = requests.post("http://localhost:11434/api/generate", json=payload, timeout=120)
-            elapsed = time.time() - t0
-
-            if res.status_code == 200:
-                raw = res.json().get("response", "").strip()
-                cleaned = clean_llm_response(raw)
-                self.root.after(0, self._set_quick_result, cleaned, f"✓ Translated in {elapsed:.1f}s via {model}")
-            elif res.status_code == 404:
-                self.root.after(0, self._set_quick_result, "", f"⚠ Model '{model}' not found. Run 'ollama pull {model}'.")
+            if result:
+                final = unmask_numbers(result, number_map)
+                self.root.after(
+                    0,
+                    self._set_quick_result,
+                    final,
+                    f"✓ Translated in {elapsed:.1f}s via {model}",
+                )
             else:
-                self.root.after(0, self._set_quick_result, "", f"⚠ Ollama returned HTTP {res.status_code}")
+                self.root.after(
+                    0,
+                    self._set_quick_result,
+                    "",
+                    "⚠ Translation failed — model returned no valid output.",
+                )
 
         except requests.exceptions.ConnectionError:
             self.root.after(0, self._set_quick_result, "", "⚠ Could not connect to Ollama at http://localhost:11434.")
@@ -1284,9 +1283,13 @@ class TranslatorApp:
         except Exception as e:
             self.root.after(0, self._set_quick_result, "", f"⚠ Translation error: {str(e)[:50]}")
         finally:
-            def reenable():
-                self.quick_translate_btn.configure(state="normal", text="▶   Translate Text")
-            self.root.after(0, reenable)
+            self.root.after(
+                0,
+                lambda: self.quick_translate_btn.configure(
+                    state="normal", text="▶   Translate Text"
+                ),
+            )
+
 
     def _set_quick_result(self, text: str, status: str):
         self.quick_target.configure(state="normal")

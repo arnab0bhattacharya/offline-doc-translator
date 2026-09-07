@@ -15,7 +15,8 @@ import shutil
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from unittest.mock import patch
-from engine.core import TranslationEngine
+from engine.core import TranslationEngine, hash_text
+from engine.errors import ErrorCode, TranslatorError
 from formats.base import (
     BaseFormatHandler,
     MAX_EXTRACTED_BYTES,
@@ -27,6 +28,11 @@ from formats.xlsx_handler import XLSXHandler
 from formats.docx_handler import DOCXHandler
 from formats.pdf_handler import PDFHandler
 from formats.registry import get_handler, SUPPORTED_EXTENSIONS
+
+try:
+    import fitz
+except ImportError:
+    fitz = None
 
 
 
@@ -252,6 +258,114 @@ class TestZipExtractionSecurity(unittest.TestCase):
         self.assertTrue(os.path.exists(extracted_file))
         with open(extracted_file, "rb") as f:
             self.assertEqual(f.read(), b"safe content")
+
+
+@unittest.skipIf(fitz is None, "PyMuPDF (fitz) is not installed")
+class TestPDFHandler(unittest.TestCase):
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="test_pdf_handler_")
+        self.mock_engine = MockTranslationEngine()
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_basic_translation_ja2en(self):
+        doc = fitz.open()
+        page = doc.new_page(width=500, height=300)
+        page.insert_textbox(fitz.Rect(72, 72, 400, 120), "これはテスト文書です。", fontsize=14, fontname="japan")
+        input_path = os.path.join(self.test_dir, "test.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        with patch.object(self.mock_engine, "translate_chunk", return_value=("Translated English text.", True, False)):
+            handler = PDFHandler(self.mock_engine)
+            output_path = os.path.join(self.test_dir, "test_ja2en.pdf")
+            stats = handler.translate(input_path, output_path, "ja2en")
+
+            self.assertTrue(os.path.exists(output_path))
+            self.assertEqual(stats["total"], 1)
+            self.assertEqual(stats["translated"], 1)
+            self.assertEqual(stats["reverted"], 0)
+
+            out_doc = fitz.open(output_path)
+            self.assertEqual(len(out_doc), 1)
+            extracted_text = out_doc[0].get_text("text")
+            out_doc.close()
+            self.assertIn("Translated English text.", extracted_text)
+
+    def test_multipage_translation(self):
+        doc = fitz.open()
+        p1 = doc.new_page(width=500, height=300)
+        p1.insert_textbox(fitz.Rect(72, 72, 400, 120), "1ページ目の日本語です。", fontsize=14, fontname="japan")
+        p2 = doc.new_page(width=500, height=300)
+        p2.insert_textbox(fitz.Rect(72, 72, 400, 120), "2ページ目の日本語です。", fontsize=14, fontname="japan")
+        input_path = os.path.join(self.test_dir, "test_multi.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        def mock_translate(text, direction, **kw):
+            return f"Page Translated: {hash_text(text)[:6]}", True, False
+
+        with patch.object(self.mock_engine, "translate_chunk", side_effect=mock_translate):
+            handler = PDFHandler(self.mock_engine)
+            output_path = os.path.join(self.test_dir, "test_multi_ja2en.pdf")
+            stats = handler.translate(input_path, output_path, "ja2en")
+
+            self.assertTrue(os.path.exists(output_path))
+            self.assertEqual(stats["total"], 2)
+            self.assertEqual(stats["translated"], 2)
+
+            out_doc = fitz.open(output_path)
+            self.assertEqual(len(out_doc), 2)
+            self.assertIn("Page Translated:", out_doc[0].get_text("text"))
+            self.assertIn("Page Translated:", out_doc[1].get_text("text"))
+            out_doc.close()
+
+    def test_pdf_no_selectable_text_raises_e04(self):
+        doc = fitz.open()
+        doc.new_page(width=500, height=300)  # Empty page
+        input_path = os.path.join(self.test_dir, "empty.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        handler = PDFHandler(self.mock_engine)
+        output_path = os.path.join(self.test_dir, "empty_out.pdf")
+        with self.assertRaises(TranslatorError) as ctx:
+            handler.translate(input_path, output_path, "ja2en")
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("no selectable text", ctx.exception.detail)
+
+    def test_pdf_corrupt_file_raises_e04(self):
+        input_path = os.path.join(self.test_dir, "corrupt.pdf")
+        with open(input_path, "wb") as f:
+            f.write(b"NOT_A_VALID_PDF_HEADER")
+
+        handler = PDFHandler(self.mock_engine)
+        output_path = os.path.join(self.test_dir, "corrupt_out.pdf")
+        with self.assertRaises(TranslatorError) as ctx:
+            handler.translate(input_path, output_path, "ja2en")
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+
+    def test_pdf_overflow_fallback_reverts(self):
+        doc = fitz.open()
+        page = doc.new_page(width=500, height=300)
+        page.insert_textbox(fitz.Rect(72, 72, 180, 100), "テスト", fontsize=10, fontname="japan")
+        input_path = os.path.join(self.test_dir, "overflow.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        huge_text = "This is an extremely long string " * 30
+        with patch.object(self.mock_engine, "translate_chunk", return_value=(huge_text, True, False)):
+            handler = PDFHandler(self.mock_engine)
+            output_path = os.path.join(self.test_dir, "overflow_out.pdf")
+            review_log = os.path.join(self.test_dir, "review.log")
+            stats = handler.translate(input_path, output_path, "ja2en", review_log_path=review_log)
+
+            self.assertTrue(os.path.exists(output_path))
+            self.assertEqual(stats["total"], 1)
+            self.assertEqual(stats["reverted"], 1)
+            self.assertEqual(stats["translated"], 0)
 
 
 if __name__ == "__main__":

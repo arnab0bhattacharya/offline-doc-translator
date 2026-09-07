@@ -7,15 +7,27 @@ __pycache__/
 # C extensions
 *.so
 
-# Installer build artifacts / logs
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Installer build artifacts / logs / outputs
 installer/argos_install.log
+installer/Output/
 
 # Testing & Cache
 .pytest_cache/
 .coverage
 htmlcov/
 *.needs_review.log
+translation_cache.json
+.translation_cache.json
 translation_cache.json.tmp*
+
+# Chat review items
+ChatItems/
+chatitems/
 
 # Virtual environments
 venv/

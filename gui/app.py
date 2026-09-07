@@ -1457,7 +1457,7 @@ class TranslatorApp:
             d = os.path.dirname(os.path.abspath(self._last_output_path))
             if os.path.exists(d):
                 try:
-                    subprocess.Popen(f'explorer "{d}"')
+                    subprocess.Popen(["explorer", d])
                 except Exception:
                     pass
 

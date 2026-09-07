@@ -13,12 +13,8 @@ import shutil
 import tempfile
 from typing import Callable, Optional, Dict, Any, List
 
-try:
-    from .base import BaseFormatHandler
-    from ..engine.core import escape_xml, unescape_xml, hash_text, should_translate
-except (ImportError, ValueError):
-    from formats.base import BaseFormatHandler
-    from engine.core import escape_xml, unescape_xml, hash_text, should_translate
+from formats.base import BaseFormatHandler
+from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 
 
 class PPTXHandler(BaseFormatHandler):

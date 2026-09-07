@@ -42,50 +42,27 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-try:
-    from engine.errors import ErrorCode, TranslatorError
-    from engine.preflight import (
-        check_ollama_status,
-        list_installed_models,
-        run_preflight,
-        run_nmt_preflight,
-        check_ram,
-        check_disk_space,
-    )
-    from engine.core import (
-        TranslationEngine,
-        TranslationMode,
-        DIRECTIONS,
-        clean_llm_response,
-        mask_numbers,
-        unmask_numbers,
-    )
-    from engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
-    from engine.backend_nmt import NMTBackend
-    from engine.backend_llm import LLMBackend
-    from formats.registry import get_handler, SUPPORTED_EXTENSIONS
-except (ImportError, ValueError):
-    from ..engine.errors import ErrorCode, TranslatorError
-    from ..engine.preflight import (
-        check_ollama_status,
-        list_installed_models,
-        run_preflight,
-        run_nmt_preflight,
-        check_ram,
-        check_disk_space,
-    )
-    from ..engine.core import (
-        TranslationEngine,
-        TranslationMode,
-        DIRECTIONS,
-        clean_llm_response,
-        mask_numbers,
-        unmask_numbers,
-    )
-    from ..engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
-    from ..engine.backend_nmt import NMTBackend
-    from ..engine.backend_llm import LLMBackend
-    from ..formats.registry import get_handler, SUPPORTED_EXTENSIONS
+from engine.errors import ErrorCode, TranslatorError
+from engine.preflight import (
+    check_ollama_status,
+    list_installed_models,
+    run_preflight,
+    run_nmt_preflight,
+    check_ram,
+    check_disk_space,
+)
+from engine.core import (
+    TranslationEngine,
+    TranslationMode,
+    DIRECTIONS,
+    clean_llm_response,
+    mask_numbers,
+    unmask_numbers,
+)
+from engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
+from engine.backend_nmt import NMTBackend
+from engine.backend_llm import LLMBackend
+from formats.registry import get_handler, SUPPORTED_EXTENSIONS
 
 
 

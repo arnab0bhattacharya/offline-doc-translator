@@ -294,20 +294,14 @@ class TranslationEngine:
     @property
     def nmt_backend(self):
         if self._nmt_backend is None:
-            try:
-                from .backend_nmt import NMTBackend
-            except (ImportError, ValueError):
-                from engine.backend_nmt import NMTBackend
+            from engine.backend_nmt import NMTBackend
             self._nmt_backend = NMTBackend()
         return self._nmt_backend
 
     @property
     def llm_backend(self):
         if self._llm_backend is None:
-            try:
-                from .backend_llm import LLMBackend
-            except (ImportError, ValueError):
-                from engine.backend_llm import LLMBackend
+            from engine.backend_llm import LLMBackend
             self._llm_backend = LLMBackend(
                 model_name=self.model_name,
                 ollama_url=self.ollama_url,

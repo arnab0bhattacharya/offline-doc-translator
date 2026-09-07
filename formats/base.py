@@ -5,15 +5,13 @@ Abstract base class defining the contract for all document format handlers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any, TYPE_CHECKING
 import os
 import shutil
 import zipfile
 import tempfile
 
-try:
-    from ..engine.core import TranslationEngine
-except (ImportError, ValueError):
+if TYPE_CHECKING:
     from engine.core import TranslationEngine
 
 # Module-level constants for zip bomb protection
@@ -25,7 +23,7 @@ MAX_SINGLE_ENTRY_BYTES = 100 * 1024 * 1024  # 100 MB
 class BaseFormatHandler(ABC):
     """Base class for document format translation handlers."""
 
-    def __init__(self, engine: TranslationEngine):
+    def __init__(self, engine: "TranslationEngine"):
         self.engine = engine
 
     @abstractmethod

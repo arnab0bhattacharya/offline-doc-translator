@@ -11,10 +11,7 @@ import time
 import requests
 from typing import Dict, List, Tuple, Optional, Any, Callable
 
-try:
-    from .core import verify_placeholders, clean_llm_response, build_prompts
-except (ImportError, ValueError):
-    from engine.core import verify_placeholders, clean_llm_response, build_prompts
+from engine.core import verify_placeholders, clean_llm_response, build_prompts
 
 
 class LLMBackend:

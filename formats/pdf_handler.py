@@ -14,14 +14,9 @@ import shutil
 import tempfile
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
-try:
-    from .base import BaseFormatHandler
-    from ..engine.core import hash_text, should_translate
-    from ..engine.errors import ErrorCode, TranslatorError
-except (ImportError, ValueError):
-    from formats.base import BaseFormatHandler
-    from engine.core import hash_text, should_translate
-    from engine.errors import ErrorCode, TranslatorError
+from formats.base import BaseFormatHandler
+from engine.core import hash_text, should_translate
+from engine.errors import ErrorCode, TranslatorError
 
 
 class PDFHandler(BaseFormatHandler):

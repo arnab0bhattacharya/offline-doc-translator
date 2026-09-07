@@ -2,9 +2,9 @@
 engine/core.py
 ==============
 Core format-agnostic translation engine.
-Orchestrates the Hybrid Architecture:
-  - Fast NMT Path (ArgosTranslate / CTranslate2) for high-speed labels & tables
-  - Deep LLM Path (Ollama) with Macro-Polishing & Custom Glossary enforcement
+Orchestrates two translation modes:
+  - Fast NMT Mode (ArgosTranslate / CTranslate2) for high-speed offline translation
+  - Pure LLM Mode (Ollama) with isomorphic retry & custom glossary enforcement
   - Unified atomic caching, single-pass number masking, and bidirectional gates.
 """
 

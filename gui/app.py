@@ -1181,19 +1181,22 @@ class TranslatorApp:
         w["progress"].set(pct)
 
         if job.status == JobStatus.QUEUED:
-            w["status_label"].configure(text="⏳ Queued", text_color=THEME["text_secondary"])
+            w["status_label"].configure(text="⏳ Queued", text_color=THEME["text_secondary"], cursor="")
+            w["status_label"].unbind("<Button-1>")
         elif job.status == JobStatus.RUNNING:
             msg = job.progress_message
             if len(msg) > 20:
                 msg = msg[:18] + "..."
-            w["status_label"].configure(text=f"🔄 {job.progress:.0f}% {msg}", text_color=THEME["primary"])
+            w["status_label"].configure(text=f"🔄 {job.progress:.0f}% {msg}", text_color=THEME["primary"], cursor="")
+            w["status_label"].unbind("<Button-1>")
         elif job.status == JobStatus.COMPLETED:
             elapsed = ""
             if job.started_at and job.completed_at:
                 secs = int(job.completed_at - job.started_at)
                 m, s = divmod(secs, 60)
                 elapsed = f" ({m:02d}:{s:02d})"
-            w["status_label"].configure(text=f"✅ Done{elapsed}", text_color=THEME["success"])
+            w["status_label"].configure(text=f"✅ Done{elapsed}", text_color=THEME["success"], cursor="")
+            w["status_label"].unbind("<Button-1>")
             w["cancel_btn"].configure(state="disabled")
             w["progress"].set(1.0)
             self.open_file_btn.configure(state="normal")
@@ -1201,13 +1204,38 @@ class TranslatorApp:
             if self._last_review_log and os.path.exists(self._last_review_log) and os.path.getsize(self._last_review_log) > 0:
                 self.review_btn.configure(state="normal")
         elif job.status == JobStatus.FAILED:
-            err = job.error or "Failed"
-            if len(err) > 22:
-                err = err[:20] + "..."
-            w["status_label"].configure(text=f"❌ {err}", text_color=THEME["error"])
+            if job.error and hasattr(job.error, "title"):
+                err_display = job.error.title
+            else:
+                err_display = job.error_message or "Failed"
+            if len(err_display) > 22:
+                err_display = err_display[:20] + "..."
+            w["status_label"].configure(text=f"❌ {err_display}", text_color=THEME["error"])
             w["cancel_btn"].configure(state="disabled")
+
+            if job.error and hasattr(job.error, "format_user_dialog"):
+                w["status_label"].configure(cursor="hand2")
+                err_obj = job.error
+                w["status_label"].bind(
+                    "<Button-1>",
+                    lambda e, eo=err_obj: messagebox.showerror(
+                        f"Translation Error [{eo.code.value}]",
+                        eo.format_user_dialog(),
+                    ),
+                )
+            elif job.error_message:
+                w["status_label"].configure(cursor="hand2")
+                err_msg = job.error_message
+                w["status_label"].bind(
+                    "<Button-1>",
+                    lambda e, msg=err_msg: messagebox.showerror(
+                        "Translation Error",
+                        msg,
+                    ),
+                )
         elif job.status == JobStatus.CANCELLED:
-            w["status_label"].configure(text="⛔ Cancelled", text_color=THEME["text_secondary"])
+            w["status_label"].configure(text="⛔ Cancelled", text_color=THEME["text_secondary"], cursor="")
+            w["status_label"].unbind("<Button-1>")
             w["cancel_btn"].configure(state="disabled")
 
     def _clear_completed_jobs(self):

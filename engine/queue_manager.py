@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Dict, List, Union
 
 from engine.core import TranslationMode
+from engine.errors import TranslatorError
 from engine.run_job import execute_translation
 
 
@@ -31,11 +32,12 @@ class TranslationJob:
     status: JobStatus
     progress: float
     progress_message: str
-    error: Optional[str]
-    created_at: float
-    started_at: Optional[float]
-    completed_at: Optional[float]
-    review_log_path: str
+    error: Optional[TranslatorError] = None
+    error_message: Optional[str] = None
+    created_at: float = 0.0
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
+    review_log_path: str = ""
     include_source_text: bool = False
 
 
@@ -86,6 +88,7 @@ class TranslationQueue:
             progress=0.0,
             progress_message="Queued",
             error=None,
+            error_message=None,
             created_at=time.time(),
             started_at=None,
             completed_at=None,
@@ -182,9 +185,15 @@ class TranslationQueue:
                 job.status = JobStatus.COMPLETED
                 job.progress = 100.0
                 job.progress_message = "Completed"
+            except TranslatorError as te:
+                job.status = JobStatus.FAILED
+                job.error = te
+                job.error_message = te.title
+                job.progress_message = f"Failed: {te.title}"
             except Exception as e:
                 job.status = JobStatus.FAILED
-                job.error = str(e)
+                job.error = None
+                job.error_message = str(e)
                 job.progress_message = f"Failed: {str(e)}"
             finally:
                 job.completed_at = time.time()

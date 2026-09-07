@@ -11,10 +11,7 @@ from engine.errors import TranslatorError, ErrorCode
 from engine.core import TranslationEngine, TranslationMode
 from engine.preflight import run_preflight, run_nmt_preflight
 
-from formats.pptx_handler import PPTXHandler
-from formats.xlsx_handler import XLSXHandler
-from formats.docx_handler import DOCXHandler
-from formats.pdf_handler import PDFHandler
+from formats.registry import get_handler
 
 
 class JobStatus(str, Enum):
@@ -219,16 +216,7 @@ class TranslationQueue:
 
         # 3. Create format handler
         ext = os.path.splitext(job.input_path)[1].lower()
-        if ext == ".pptx":
-            handler = PPTXHandler(engine)
-        elif ext == ".xlsx":
-            handler = XLSXHandler(engine)
-        elif ext == ".docx":
-            handler = DOCXHandler(engine)
-        elif ext == ".pdf":
-            handler = PDFHandler(engine)
-        else:
-            raise TranslatorError(ErrorCode.E04, detail=f"Unsupported extension '{ext}'")
+        handler = get_handler(ext, engine)
 
         # 4. Progress/Log Callbacks
         def progress_cb(current: int, total: int, msg: str) -> None:

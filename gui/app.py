@@ -55,10 +55,7 @@ try:
     from engine.core import TranslationEngine, TranslationMode, DIRECTIONS, clean_llm_response
     from engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
     from engine.backend_nmt import NMTBackend
-    from formats.pptx_handler import PPTXHandler
-    from formats.xlsx_handler import XLSXHandler
-    from formats.docx_handler import DOCXHandler
-    from formats.pdf_handler import PDFHandler
+    from formats.registry import get_handler, SUPPORTED_EXTENSIONS
 except (ImportError, ValueError):
     from ..engine.errors import ErrorCode, TranslatorError
     from ..engine.preflight import (
@@ -72,10 +69,7 @@ except (ImportError, ValueError):
     from ..engine.core import TranslationEngine, TranslationMode, DIRECTIONS, clean_llm_response
     from ..engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
     from ..engine.backend_nmt import NMTBackend
-    from ..formats.pptx_handler import PPTXHandler
-    from ..formats.xlsx_handler import XLSXHandler
-    from ..formats.docx_handler import DOCXHandler
-    from ..formats.pdf_handler import PDFHandler
+    from ..formats.registry import get_handler, SUPPORTED_EXTENSIONS
 
 
 # ── Color System (Dual Light/Dark Mode Tuples) ────────────────────
@@ -915,7 +909,7 @@ class TranslatorApp:
     def _browse_folder(self):
         folder = filedialog.askdirectory(title="Select Folder of Documents")
         if folder:
-            valid_exts = {".pptx", ".xlsx", ".docx", ".pdf"}
+            valid_exts = SUPPORTED_EXTENSIONS
             added = 0
             for root_dir, _, files in os.walk(folder):
                 for file in files:

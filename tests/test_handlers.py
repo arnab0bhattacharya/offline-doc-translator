@@ -18,6 +18,8 @@ from engine.core import TranslationEngine
 from formats.pptx_handler import PPTXHandler
 from formats.xlsx_handler import XLSXHandler
 from formats.docx_handler import DOCXHandler
+from formats.pdf_handler import PDFHandler
+from formats.registry import get_handler, SUPPORTED_EXTENSIONS
 
 
 class MockTranslationEngine(TranslationEngine):
@@ -162,6 +164,27 @@ class TestFormatHandlers(unittest.TestCase):
             self.assertIn("[EN: 当四半期は 堅調に推移しました。]", trans_doc_xml)
             self.assertIn("[EN: 社外秘 &amp; 2024年度報告書]", trans_hdr_xml)
             self.assertNotIn("&amp;amp;", trans_hdr_xml)
+
+
+class TestFormatRegistry(unittest.TestCase):
+
+    def test_get_handler_valid(self):
+        engine = MockTranslationEngine()
+        self.assertIsInstance(get_handler(".pptx", engine), PPTXHandler)
+        self.assertIsInstance(get_handler(".PPTX", engine), PPTXHandler)
+        self.assertIsInstance(get_handler(".xlsx", engine), XLSXHandler)
+        self.assertIsInstance(get_handler(".docx", engine), DOCXHandler)
+        self.assertIsInstance(get_handler(".pdf", engine), PDFHandler)
+
+    def test_get_handler_unsupported(self):
+        engine = MockTranslationEngine()
+        from engine.errors import TranslatorError, ErrorCode
+        with self.assertRaises(TranslatorError) as ctx:
+            get_handler(".txt", engine)
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+
+    def test_supported_extensions(self):
+        self.assertEqual(SUPPORTED_EXTENSIONS, {".pptx", ".xlsx", ".docx", ".pdf"})
 
 
 if __name__ == "__main__":

@@ -29,10 +29,7 @@ from typing import Dict
 from engine.errors import TranslatorError
 from engine.preflight import run_preflight, run_nmt_preflight
 from engine.core import TranslationEngine, TranslationMode, DIRECTIONS
-from formats.pptx_handler import PPTXHandler
-from formats.xlsx_handler import XLSXHandler
-from formats.docx_handler import DOCXHandler
-from formats.pdf_handler import PDFHandler
+from formats.registry import get_handler, SUPPORTED_EXTENSIONS
 
 
 def parse_cli_glossary(glossary_arg: str) -> Dict[str, str]:
@@ -129,16 +126,10 @@ def run_cli(
 
     # 3. Dispatch Format Handler
     ext = os.path.splitext(input_path)[1].lower()
-    if ext == ".pptx":
-        handler = PPTXHandler(engine)
-    elif ext == ".xlsx":
-        handler = XLSXHandler(engine)
-    elif ext == ".docx":
-        handler = DOCXHandler(engine)
-    elif ext == ".pdf":
-        handler = PDFHandler(engine)
-    else:
-        print(f"[!] Error: Unsupported file extension '{ext}'.")
+    try:
+        handler = get_handler(ext, engine)
+    except TranslatorError as err:
+        print(f"[!] Error: {err.detail or err.user_message}")
         sys.exit(1)
 
     print(f"[3/3] Translating {ext.upper()} document...")

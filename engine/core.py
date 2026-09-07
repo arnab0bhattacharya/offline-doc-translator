@@ -167,8 +167,8 @@ def unescape_xml(text: str) -> str:
 
 
 def hash_text(text: str) -> str:
-    """MD5 hash for caching and deduplication."""
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    """SHA-256 hash for caching and deduplication."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def build_prompts(

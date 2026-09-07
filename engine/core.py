@@ -265,6 +265,7 @@ class TranslationEngine:
         context_window: int = 2048,
         cache_file: str = "translation_cache.json",
         allow_llm: Optional[bool] = None,
+        include_source_text: bool = False,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -274,10 +275,12 @@ class TranslationEngine:
         self.context_window = context_window
         self.cache_file = cache_file
         self.allow_llm = allow_llm
+        self.include_source_text = include_source_text
 
         self.cache: Dict[str, Any] = {}
         self.failed_this_run: set = set()
         self.logged_failed_keys: set = set()
+
 
         # Lazy-loaded backend instances
         self._nmt_backend = None
@@ -394,9 +397,10 @@ class TranslationEngine:
         location_id: str,
         chunk_id: str,
         original_text: str,
-        key: str
+        key: str,
+        include_source_text: Optional[bool] = None,
     ) -> None:
-        """Logs unrecoverable translation failures to audit log."""
+        """Logs translation failures to audit log. Source text omitted by default for privacy."""
         if not review_log_path:
             return
 
@@ -409,15 +413,27 @@ class TranslationEngine:
             return
 
         self.logged_failed_keys.add(key)
+        text_length = len(original_text)
+        text_hash = hashlib.sha256(original_text.encode("utf-8")).hexdigest()[:16]
+
+        should_include = (
+            include_source_text
+            if include_source_text is not None
+            else getattr(self, "include_source_text", False)
+        )
+
         try:
             with open(review_log_path, "a", encoding="utf-8") as f:
                 f.write(
                     f"Location: {location_id} | Chunk ID: {chunk_id}\n"
-                    f"Original Text: {original_text}\n"
-                    f"{'-' * 50}\n"
+                    f"Text Length: {text_length} chars | SHA-256: {text_hash}\n"
                 )
+                if should_include:
+                    f.write(f"Original Text: {original_text}\n")
+                f.write(f"{'-' * 50}\n")
         except Exception:
             pass
+
 
     def translate_chunk(
         self,

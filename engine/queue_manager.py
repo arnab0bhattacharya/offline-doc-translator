@@ -36,6 +36,7 @@ class TranslationJob:
     started_at: Optional[float]
     completed_at: Optional[float]
     review_log_path: str
+    include_source_text: bool = False
 
 
 class TranslationQueue:
@@ -65,7 +66,8 @@ class TranslationQueue:
         direction: str,
         mode: Union[TranslationMode, str],
         model_name: str,
-        glossary: Dict[str, str]
+        glossary: Dict[str, str],
+        include_source_text: bool = False,
     ) -> str:
         """Creates a TranslationJob and adds to queue. Returns job ID."""
         job_id = str(uuid.uuid4())
@@ -87,8 +89,10 @@ class TranslationQueue:
             created_at=time.time(),
             started_at=None,
             completed_at=None,
-            review_log_path=review_log_path
+            review_log_path=review_log_path,
+            include_source_text=include_source_text,
         )
+
         
         with self._lock:
             self._jobs.append(job)
@@ -206,4 +210,6 @@ class TranslationQueue:
             glossary=job.glossary,
             progress_cb=progress_cb,
             log_cb=log_cb,
+            include_source_text=job.include_source_text,
         )
+

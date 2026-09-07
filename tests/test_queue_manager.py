@@ -14,7 +14,7 @@ def queue_mgr():
 @patch('engine.queue_manager.execute_translation')
 def test_job_creation_and_processing(mock_execute, queue_mgr):
     # Setup mocks
-    def fake_execute(input_path, output_path, direction, mode, model_name, glossary, progress_cb=None, log_cb=None):
+    def fake_execute(input_path, output_path, direction, mode, model_name, glossary, progress_cb=None, log_cb=None, **kwargs):
         if progress_cb:
             progress_cb(1, 2, "Halfway")
             time.sleep(0.1)
@@ -22,6 +22,7 @@ def test_job_creation_and_processing(mock_execute, queue_mgr):
         return {"total": 2, "translated": 2, "reverted": 0, "skipped": 0}
 
     mock_execute.side_effect = fake_execute
+
 
     
     updates = []

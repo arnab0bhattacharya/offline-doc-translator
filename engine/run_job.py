@@ -20,6 +20,7 @@ def execute_translation(
     glossary: Dict[str, str],
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
     log_cb: Optional[Callable[[str], None]] = None,
+    include_source_text: bool = False,
 ) -> Dict[str, Any]:
     """
     Runs the full translation pipeline: preflight -> engine -> handler -> translate.
@@ -63,8 +64,10 @@ def execute_translation(
             ".translation_cache.json",
         ),
         allow_llm=llm_available,
+        include_source_text=include_source_text,
     )
     engine.load_cache(direction)
+
 
     # 4. Handler dispatch
     ext = os.path.splitext(input_path)[1].lower()

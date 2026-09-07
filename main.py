@@ -67,7 +67,8 @@ def run_cli(
     direction: str,
     mode_str: str,
     model_name: str,
-    glossary: Dict[str, str]
+    glossary: Dict[str, str],
+    include_source_text: bool = False
 ) -> None:
     """Executes translation in terminal with tqdm progress bar and live telemetry."""
     print(f"\n=======================================================")
@@ -80,7 +81,7 @@ def run_cli(
     print(f" Model      : {model_name}")
     if glossary:
         print(f" Glossary   : {len(glossary)} active rule(s)")
-    print(f"=======================================================\n")
+    print(f"=======================================================")
 
     mode_enum = mode_str if isinstance(mode_str, TranslationMode) else TranslationMode(mode_str)
     review_log_path = f"{output_path}.needs_review.log"
@@ -112,6 +113,7 @@ def run_cli(
             glossary=glossary,
             progress_cb=cli_progress,
             log_cb=cli_log,
+            include_source_text=include_source_text,
         )
         if pbar:
             pbar.close()
@@ -155,6 +157,7 @@ def main():
     parser.add_argument("--mode", default=TranslationMode.FAST_NMT.value, choices=[m.value for m in TranslationMode], help="Engine mode (default: fast_nmt)")
     parser.add_argument("--model", default="gemma4:e2b-it-qat", help="Ollama model name (default: gemma4:e2b-it-qat)")
     parser.add_argument("--glossary", help="Custom glossary string (e.g. 'Term:Translation') or text file path")
+    parser.add_argument("--include-source-text", action="store_true", help="Include original text in review log for debugging (default: false, for privacy)")
     parser.add_argument("--gui", action="store_true", help="Force launch Desktop GUI")
 
     args = parser.parse_args()
@@ -181,7 +184,8 @@ def main():
         base, ext = os.path.splitext(input_file)
         output_file = f"{base}_{direction}{ext}"
 
-    run_cli(input_file, output_file, direction, mode_str, model_name, glossary)
+    run_cli(input_file, output_file, direction, mode_str, model_name, glossary, include_source_text=args.include_source_text)
+
 
 
 if __name__ == "__main__":

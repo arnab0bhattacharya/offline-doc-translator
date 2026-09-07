@@ -191,6 +191,72 @@ class TestCoreEngine(unittest.TestCase):
         self.assertIn(masked, p1_ja)
         self.assertIn("[[N0]]", p2_ja)
 
+    def test_log_needs_review_default_omits_source_text(self):
+        with tempfile.TemporaryDirectory() as td:
+            log_path = os.path.join(td, "review.log")
+            engine = TranslationEngine()
+            secret_text = "CONFIDENTIAL: Acquisition of Company X for $50M"
+            key = "hash_key_1"
+
+            engine.log_needs_review(
+                review_log_path=log_path,
+                location_id="Slide 3",
+                chunk_id="ch_42",
+                original_text=secret_text,
+                key=key,
+            )
+
+            self.assertTrue(os.path.exists(log_path))
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            # Metadata must be present
+            self.assertIn("Location: Slide 3 | Chunk ID: ch_42", content)
+            self.assertIn(f"Text Length: {len(secret_text)} chars", content)
+            self.assertIn("SHA-256:", content)
+            # Source text must NOT be present
+            self.assertNotIn(secret_text, content)
+            self.assertNotIn("Original Text:", content)
+
+    def test_log_needs_review_include_source_text_opt_in(self):
+        with tempfile.TemporaryDirectory() as td:
+            log_path = os.path.join(td, "review.log")
+            engine = TranslationEngine(include_source_text=True)
+            text = "Some translatable text that failed"
+            key = "hash_key_2"
+
+            engine.log_needs_review(
+                review_log_path=log_path,
+                location_id="Page 1",
+                chunk_id="p_1",
+                original_text=text,
+                key=key,
+            )
+
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertIn("Location: Page 1 | Chunk ID: p_1", content)
+            self.assertIn("Text Length:", content)
+            self.assertIn(f"Original Text: {text}", content)
+
+    def test_log_needs_review_duplicate_occurrences(self):
+        with tempfile.TemporaryDirectory() as td:
+            log_path = os.path.join(td, "review.log")
+            engine = TranslationEngine()
+            text = "Repeated error string"
+            key = "hash_key_3"
+
+            engine.log_needs_review(log_path, "Section A", "1", text, key)
+            engine.log_needs_review(log_path, "Section B", "2", text, key)
+
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertIn("Location: Section A | Chunk ID: 1", content)
+            self.assertIn("  [Additional occurrence in Section B]", content)
+
 
 if __name__ == "__main__":
     unittest.main()
+

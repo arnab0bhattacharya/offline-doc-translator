@@ -469,7 +469,7 @@ class TranslatorApp:
             text_color=THEME["text_secondary"]
         ).pack(anchor="w", pady=(0, 4))
 
-        self.mode_var = ctk.StringVar(value="fast_nmt")
+        self.mode_var = ctk.StringVar(value=TranslationMode.FAST_NMT.value)
         self.mode_seg = ctk.CTkSegmentedButton(
             engine_box,
             values=["⚡ Fast NMT (Offline)", "🧠 Pure LLM (Ollama)"],
@@ -1005,12 +1005,12 @@ class TranslatorApp:
             return
 
         direction = self.direction_var.get()
-        mode = self.mode_var.get()
+        mode = TranslationMode(self.mode_var.get())
         model = self.model_var.get().strip() or "gemma4:e2b-it-qat"
         raw_glossary = self.glossary_text.get("0.0", "end")
         glossary = parse_glossary_text(raw_glossary)
 
-        if mode == "pure_llm" and not check_ollama_status():
+        if mode == TranslationMode.PURE_LLM and not check_ollama_status():
             if not messagebox.askyesno(
                 "Ollama Offline",
                 "Pure LLM mode requires Ollama, but Ollama is offline.\n\nContinue anyway?"
@@ -1036,7 +1036,7 @@ class TranslatorApp:
             self._last_review_log = f"{output_path}.needs_review.log"
             added += 1
 
-        self._log(f"[Queue] Dispatched {added} document(s) via {mode.upper()} ({direction}).")
+        self._log(f"[Queue] Dispatched {added} document(s) via {mode.value.upper()} ({direction}).")
         self._clear_selected_files()
 
     def _add_to_queue_only(self):
@@ -1392,10 +1392,10 @@ class TranslatorApp:
 
     def _on_mode_seg_changed(self, value: str):
         if "Pure LLM" in value:
-            self.mode_var.set("pure_llm")
+            self.mode_var.set(TranslationMode.PURE_LLM.value)
             self.model_combo.configure(state="normal")
         else:
-            self.mode_var.set("fast_nmt")
+            self.mode_var.set(TranslationMode.FAST_NMT.value)
             self.model_combo.configure(state="disabled")
 
     def _on_direction_changed(self, display_value: str):

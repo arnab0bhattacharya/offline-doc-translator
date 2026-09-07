@@ -5,7 +5,7 @@ import threading
 import queue
 from enum import Enum
 from dataclasses import dataclass
-from typing import Optional, Callable, Dict, List
+from typing import Optional, Callable, Dict, List, Union
 
 from engine.errors import TranslatorError, ErrorCode
 from engine.core import TranslationEngine, TranslationMode
@@ -31,7 +31,7 @@ class TranslationJob:
     input_path: str
     output_path: str
     direction: str
-    mode: str
+    mode: TranslationMode
     model_name: str
     glossary: Dict[str, str]
     status: JobStatus
@@ -69,20 +69,21 @@ class TranslationQueue:
         input_path: str,
         output_path: str,
         direction: str,
-        mode: str,
+        mode: Union[TranslationMode, str],
         model_name: str,
         glossary: Dict[str, str]
     ) -> str:
         """Creates a TranslationJob and adds to queue. Returns job ID."""
         job_id = str(uuid.uuid4())
         review_log_path = f"{output_path}.needs_review.log"
+        mode_enum = mode if isinstance(mode, TranslationMode) else TranslationMode(mode)
         
         job = TranslationJob(
             id=job_id,
             input_path=input_path,
             output_path=output_path,
             direction=direction,
-            mode=mode,
+            mode=mode_enum,
             model_name=model_name,
             glossary=glossary,
             status=JobStatus.QUEUED,
@@ -193,24 +194,23 @@ class TranslationQueue:
                 self._queue.task_done()
 
     def _process_job(self, job: TranslationJob) -> None:
-        llm_available = job.mode == "pure_llm"
+        llm_available = job.mode == TranslationMode.PURE_LLM
         
         # 1. Preflight
         run_preflight(
             model_name=job.model_name,
             input_path=job.input_path,
             output_path=job.output_path,
-            check_model=(job.mode == "pure_llm"),
-            require_ollama=(job.mode == "pure_llm")
+            check_model=(job.mode == TranslationMode.PURE_LLM),
+            require_ollama=(job.mode == TranslationMode.PURE_LLM)
         )
-        if job.mode == "fast_nmt":
+        if job.mode == TranslationMode.FAST_NMT:
             run_nmt_preflight(job.direction)
 
         # 2. Setup Engine
-        mode_enum = TranslationMode(job.mode)
         engine = TranslationEngine(
             model_name=job.model_name,
-            mode=mode_enum,
+            mode=job.mode,
             glossary=job.glossary,
             cache_file=os.path.join(os.path.dirname(os.path.abspath(job.output_path)), ".translation_cache.json"),
             allow_llm=llm_available

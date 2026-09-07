@@ -93,19 +93,21 @@ def run_cli(
         except Exception:
             pass
 
+    mode_enum = mode_str if isinstance(mode_str, TranslationMode) else TranslationMode(mode_str)
+
     # 1. Run Preflight. Local file/disk validation always applies; Ollama is
     # required only for Pure LLM mode, while Fast NMT requires Argos packages.
     print("[1/3] Running system diagnostics & preflight...")
-    llm_available = mode_str == "pure_llm"
+    llm_available = mode_enum == TranslationMode.PURE_LLM
     try:
         run_preflight(
             model_name=model_name,
             input_path=input_path,
             output_path=output_path,
-            check_model=(mode_str == "pure_llm"),
-            require_ollama=(mode_str == "pure_llm")
+            check_model=(mode_enum == TranslationMode.PURE_LLM),
+            require_ollama=(mode_enum == TranslationMode.PURE_LLM)
         )
-        if mode_str == "fast_nmt":
+        if mode_enum == TranslationMode.FAST_NMT:
             run_nmt_preflight(direction)
         print("  -> Preflight checks passed successfully.")
     except TranslatorError as err:
@@ -115,8 +117,7 @@ def run_cli(
         sys.exit(1)
 
     # 2. Initialize Engine & Cache
-    mode_enum = TranslationMode(mode_str)
-    print(f"[2/3] Initializing {mode_str.upper()} engine & persistent cache...")
+    print(f"[2/3] Initializing {mode_enum.value.upper()} engine & persistent cache...")
     engine = TranslationEngine(
         model_name=model_name,
         mode=mode_enum,
@@ -206,7 +207,7 @@ def main():
     parser.add_argument("--input", help="Source document path (.pptx, .xlsx, .docx, .pdf)")
     parser.add_argument("--output", help="Output path. Defaults to '<input>_<direction>.<ext>'")
     parser.add_argument("--direction", choices=DIRECTIONS, help="Translation direction: ja2en or en2ja")
-    parser.add_argument("--mode", default="fast_nmt", choices=["fast_nmt", "pure_llm"], help="Engine mode (default: fast_nmt)")
+    parser.add_argument("--mode", default=TranslationMode.FAST_NMT.value, choices=[m.value for m in TranslationMode], help="Engine mode (default: fast_nmt)")
     parser.add_argument("--model", default="gemma4:e2b-it-qat", help="Ollama model name (default: gemma4:e2b-it-qat)")
     parser.add_argument("--glossary", help="Custom glossary string (e.g. 'Term:Translation') or text file path")
     parser.add_argument("--gui", action="store_true", help="Force launch Desktop GUI")

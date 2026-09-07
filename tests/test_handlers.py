@@ -14,12 +14,20 @@ import shutil
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from unittest.mock import patch
 from engine.core import TranslationEngine
+from formats.base import (
+    BaseFormatHandler,
+    MAX_EXTRACTED_BYTES,
+    MAX_ARCHIVE_ENTRIES,
+    MAX_SINGLE_ENTRY_BYTES,
+)
 from formats.pptx_handler import PPTXHandler
 from formats.xlsx_handler import XLSXHandler
 from formats.docx_handler import DOCXHandler
 from formats.pdf_handler import PDFHandler
 from formats.registry import get_handler, SUPPORTED_EXTENSIONS
+
 
 
 class MockTranslationEngine(TranslationEngine):
@@ -187,5 +195,65 @@ class TestFormatRegistry(unittest.TestCase):
         self.assertEqual(SUPPORTED_EXTENSIONS, {".pptx", ".xlsx", ".docx", ".pdf"})
 
 
+class TestZipExtractionSecurity(unittest.TestCase):
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="test_zip_sec_")
+        self.dummy_zip = os.path.join(self.test_dir, "test.zip")
+        with zipfile.ZipFile(self.dummy_zip, "w") as z:
+            z.writestr("test.txt", b"safe content")
+        self.extract_dir = os.path.join(self.test_dir, "out")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_extract_zip_rejects_single_entry_over_limit(self):
+        fake_info = zipfile.ZipInfo("huge_file.xml")
+        fake_info.file_size = MAX_SINGLE_ENTRY_BYTES + 1024
+
+        with patch.object(zipfile.ZipFile, "infolist", return_value=[fake_info]):
+            with self.assertRaises(zipfile.BadZipFile) as ctx:
+                BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir)
+            self.assertIn("max 100 MB", str(ctx.exception))
+
+    def test_extract_zip_rejects_total_size_over_limit(self):
+        # 11 entries of 100 MB each = 1100 MB > 1000 MB
+        fake_members = []
+        for i in range(11):
+            zi = zipfile.ZipInfo(f"part_{i}.xml")
+            zi.file_size = 100 * 1024 * 1024
+            fake_members.append(zi)
+
+        with patch.object(zipfile.ZipFile, "infolist", return_value=fake_members):
+            with self.assertRaises(zipfile.BadZipFile) as ctx:
+                BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir)
+            self.assertIn("possible zip bomb", str(ctx.exception))
+
+    def test_extract_zip_rejects_too_many_entries(self):
+        fake_members = [zipfile.ZipInfo(f"part_{i}.xml") for i in range(MAX_ARCHIVE_ENTRIES + 1)]
+
+        with patch.object(zipfile.ZipFile, "infolist", return_value=fake_members):
+            with self.assertRaises(zipfile.BadZipFile) as ctx:
+                BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir)
+            self.assertIn("possible zip bomb", str(ctx.exception))
+
+    def test_extract_zip_rejects_path_traversal(self):
+        fake_info = zipfile.ZipInfo("../../etc/passwd")
+        fake_info.file_size = 50
+
+        with patch.object(zipfile.ZipFile, "infolist", return_value=[fake_info]):
+            with self.assertRaises(zipfile.BadZipFile) as ctx:
+                BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir)
+            self.assertIn("Unsafe archive member", str(ctx.exception))
+
+    def test_extract_zip_normal_extraction(self):
+        BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir)
+        extracted_file = os.path.join(self.extract_dir, "test.txt")
+        self.assertTrue(os.path.exists(extracted_file))
+        with open(extracted_file, "rb") as f:
+            self.assertEqual(f.read(), b"safe content")
+
+
 if __name__ == "__main__":
     unittest.main()
+

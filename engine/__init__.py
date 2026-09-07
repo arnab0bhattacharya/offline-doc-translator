@@ -31,6 +31,7 @@ from .core import (
     hash_text,
     TranslationEngine,
 )
+from .run_job import execute_translation
 
 __all__ = [
     "ErrorCode",
@@ -60,4 +61,5 @@ __all__ = [
     "mask_glossary_terms",
     "hash_text",
     "TranslationEngine",
+    "execute_translation",
 ]

@@ -27,9 +27,8 @@ from tqdm import tqdm
 from typing import Dict
 
 from engine.errors import TranslatorError
-from engine.preflight import run_preflight, run_nmt_preflight
-from engine.core import TranslationEngine, TranslationMode, DIRECTIONS
-from formats.registry import get_handler, SUPPORTED_EXTENSIONS
+from engine.core import TranslationMode, DIRECTIONS
+from engine.run_job import execute_translation
 
 
 def parse_cli_glossary(glossary_arg: str) -> Dict[str, str]:
@@ -83,56 +82,8 @@ def run_cli(
         print(f" Glossary   : {len(glossary)} active rule(s)")
     print(f"=======================================================\n")
 
-    review_log_path = f"{output_path}.needs_review.log"
-    if os.path.exists(review_log_path):
-        try:
-            os.remove(review_log_path)
-        except Exception:
-            pass
-
     mode_enum = mode_str if isinstance(mode_str, TranslationMode) else TranslationMode(mode_str)
-
-    # 1. Run Preflight. Local file/disk validation always applies; Ollama is
-    # required only for Pure LLM mode, while Fast NMT requires Argos packages.
-    print("[1/3] Running system diagnostics & preflight...")
-    llm_available = mode_enum == TranslationMode.PURE_LLM
-    try:
-        run_preflight(
-            model_name=model_name,
-            input_path=input_path,
-            output_path=output_path,
-            check_model=(mode_enum == TranslationMode.PURE_LLM),
-            require_ollama=(mode_enum == TranslationMode.PURE_LLM)
-        )
-        if mode_enum == TranslationMode.FAST_NMT:
-            run_nmt_preflight(direction)
-        print("  -> Preflight checks passed successfully.")
-    except TranslatorError as err:
-        print(f"\n[!] PREFLIGHT FAILED: [{err.code.value}] {err.title}")
-        print(f"    Message: {err.user_message}")
-        print(f"    Action : {err.action}")
-        sys.exit(1)
-
-    # 2. Initialize Engine & Cache
-    print(f"[2/3] Initializing {mode_enum.value.upper()} engine & persistent cache...")
-    engine = TranslationEngine(
-        model_name=model_name,
-        mode=mode_enum,
-        glossary=glossary,
-        cache_file=os.path.join(os.path.dirname(os.path.abspath(output_path)), ".translation_cache.json"),
-        allow_llm=llm_available
-    )
-    engine.load_cache(direction)
-
-    # 3. Dispatch Format Handler
-    ext = os.path.splitext(input_path)[1].lower()
-    try:
-        handler = get_handler(ext, engine)
-    except TranslatorError as err:
-        print(f"[!] Error: {err.detail or err.user_message}")
-        sys.exit(1)
-
-    print(f"[3/3] Translating {ext.upper()} document...")
+    review_log_path = f"{output_path}.needs_review.log"
 
     pbar = None
 
@@ -149,16 +100,18 @@ def run_cli(
         if pbar:
             pbar.write(msg)
         else:
-            print(msg)
+            print(f"  -> {msg}")
 
     try:
-        stats = handler.translate(
+        stats = execute_translation(
             input_path=input_path,
             output_path=output_path,
             direction=direction,
-            review_log_path=review_log_path,
+            mode=mode_enum,
+            model_name=model_name,
+            glossary=glossary,
             progress_cb=cli_progress,
-            log_cb=cli_log
+            log_cb=cli_log,
         )
         if pbar:
             pbar.close()
@@ -189,6 +142,7 @@ def run_cli(
             pbar.close()
         print(f"\n[!] Unexpected Error: {e}")
         sys.exit(1)
+
 
 
 def main():

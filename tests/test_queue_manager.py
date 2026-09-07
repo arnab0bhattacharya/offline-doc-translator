@@ -11,22 +11,18 @@ def queue_mgr():
     yield qm
     qm.shutdown()
 
-@patch('engine.queue_manager.run_preflight')
-@patch('engine.queue_manager.TranslationEngine')
-@patch('engine.queue_manager.DOCXHandler')
-def test_job_creation_and_processing(mock_handler, mock_engine, mock_preflight, queue_mgr):
+@patch('engine.queue_manager.execute_translation')
+def test_job_creation_and_processing(mock_execute, queue_mgr):
     # Setup mocks
-
-    mock_instance = mock_handler.return_value
-    
-    # We will simulate a translation that takes a small amount of time and triggers progress
-    def fake_translate(input_path, output_path, direction, review_log_path, progress_cb, log_cb):
-        progress_cb(1, 2, "Halfway")
-        time.sleep(0.1)
-        progress_cb(2, 2, "Done")
+    def fake_execute(input_path, output_path, direction, mode, model_name, glossary, progress_cb=None, log_cb=None):
+        if progress_cb:
+            progress_cb(1, 2, "Halfway")
+            time.sleep(0.1)
+            progress_cb(2, 2, "Done")
         return {"total": 2, "translated": 2, "reverted": 0, "skipped": 0}
-        
-    mock_instance.translate.side_effect = fake_translate
+
+    mock_execute.side_effect = fake_execute
+
     
     updates = []
     def on_update(job: TranslationJob):

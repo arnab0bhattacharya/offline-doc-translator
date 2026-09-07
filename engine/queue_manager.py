@@ -7,11 +7,8 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Callable, Dict, List, Union
 
-from engine.errors import TranslatorError, ErrorCode
-from engine.core import TranslationEngine, TranslationMode
-from engine.preflight import run_preflight, run_nmt_preflight
-
-from formats.registry import get_handler
+from engine.core import TranslationMode
+from engine.run_job import execute_translation
 
 
 class JobStatus(str, Enum):
@@ -191,34 +188,6 @@ class TranslationQueue:
                 self._queue.task_done()
 
     def _process_job(self, job: TranslationJob) -> None:
-        llm_available = job.mode == TranslationMode.PURE_LLM
-        
-        # 1. Preflight
-        run_preflight(
-            model_name=job.model_name,
-            input_path=job.input_path,
-            output_path=job.output_path,
-            check_model=(job.mode == TranslationMode.PURE_LLM),
-            require_ollama=(job.mode == TranslationMode.PURE_LLM)
-        )
-        if job.mode == TranslationMode.FAST_NMT:
-            run_nmt_preflight(job.direction)
-
-        # 2. Setup Engine
-        engine = TranslationEngine(
-            model_name=job.model_name,
-            mode=job.mode,
-            glossary=job.glossary,
-            cache_file=os.path.join(os.path.dirname(os.path.abspath(job.output_path)), ".translation_cache.json"),
-            allow_llm=llm_available
-        )
-        engine.load_cache(job.direction)
-
-        # 3. Create format handler
-        ext = os.path.splitext(job.input_path)[1].lower()
-        handler = get_handler(ext, engine)
-
-        # 4. Progress/Log Callbacks
         def progress_cb(current: int, total: int, msg: str) -> None:
             pct = (current / max(1, total)) * 100.0 if total > 0 else 0.0
             job.progress = pct
@@ -228,21 +197,13 @@ class TranslationQueue:
         def log_cb(msg: str) -> None:
             self._log(job.id, msg)
 
-        # Clear old review log if it exists
-        if os.path.exists(job.review_log_path):
-            try:
-                os.remove(job.review_log_path)
-            except OSError:
-                pass
-
-        # 5. Translate
-        # For mock injection during testing, we can check if it's monkey-patched, 
-        # but Python handles monkeypatching transparently.
-        handler.translate(
+        execute_translation(
             input_path=job.input_path,
             output_path=job.output_path,
             direction=job.direction,
-            review_log_path=job.review_log_path,
+            mode=job.mode,
+            model_name=job.model_name,
+            glossary=job.glossary,
             progress_cb=progress_cb,
-            log_cb=log_cb
+            log_cb=log_cb,
         )

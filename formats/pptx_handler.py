@@ -218,7 +218,7 @@ class PPTXHandler(BaseFormatHandler):
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(processed_xml)
 
-                self.engine.save_cache_atomically()
+                self.engine.save_cache_atomically(log_cb=log_cb)
 
             if progress_cb:
                 progress_cb(progress_state["total"], progress_state["total"], "Packing translated PowerPoint file...")

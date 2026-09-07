@@ -231,7 +231,7 @@ class PDFHandler(BaseFormatHandler):
                         align=fitz.TEXT_ALIGN_LEFT
                     )
 
-                self.engine.save_cache_atomically()
+                self.engine.save_cache_atomically(log_cb=log_cb)
 
             if progress_cb:
                 progress_cb(progress_state["total"], progress_state["total"], "Saving translated PDF document...")

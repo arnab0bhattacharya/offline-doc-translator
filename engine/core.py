@@ -339,7 +339,7 @@ class TranslationEngine:
         direction_cache = mode_cache.setdefault(direction, {})
         return direction_cache.setdefault(self._cache_fingerprint(context), {})
 
-    def save_cache_atomically(self) -> None:
+    def save_cache_atomically(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
         """Saves cache via .tmp file replacement to prevent corruption on crash."""
         cache_dir = os.path.dirname(os.path.abspath(self.cache_file))
         temp_file = None
@@ -349,8 +349,9 @@ class TranslationEngine:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self.cache, f, ensure_ascii=False, indent=2)
             os.replace(temp_file, self.cache_file)
-        except Exception:
-            pass
+        except Exception as e:
+            if log_cb:
+                log_cb(f"[!] Warning: Failed to save translation cache: {e}")
         finally:
             if temp_file and os.path.exists(temp_file):
                 try:

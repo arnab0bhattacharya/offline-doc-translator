@@ -134,6 +134,15 @@ class TestCoreEngine(unittest.TestCase):
             changed_model.load_cache("ja2en")
             self.assertNotIn("key", changed_model._get_direction_cache("ja2en", "Slide A"))
 
+    def test_save_cache_atomically_logs_error(self):
+        with tempfile.NamedTemporaryFile() as tmp:
+            invalid_cache = os.path.join(tmp.name, "sub", "cache.json")
+            engine = TranslationEngine(cache_file=invalid_cache)
+            logs = []
+            engine.save_cache_atomically(log_cb=lambda msg: logs.append(msg))
+            self.assertEqual(len(logs), 1)
+            self.assertIn("Warning: Failed to save translation cache", logs[0])
+
     def test_fast_nmt_never_falls_back_to_llm(self):
         class UnreadyNMT:
             def is_ready(self, direction):

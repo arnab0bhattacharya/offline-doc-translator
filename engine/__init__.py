@@ -17,6 +17,7 @@ from .backend_nmt import NMTBackend
 from .backend_llm import LLMBackend
 from .core import (
     DIRECTIONS,
+    CACHE_TTL_DAYS,
     TranslationMode,
     contains_japanese,
     contains_latin,
@@ -48,6 +49,7 @@ __all__ = [
     "NMTBackend",
     "LLMBackend",
     "DIRECTIONS",
+    "CACHE_TTL_DAYS",
     "TranslationMode",
     "contains_japanese",
     "contains_latin",
@@ -63,3 +65,4 @@ __all__ = [
     "TranslationEngine",
     "execute_translation",
 ]
+

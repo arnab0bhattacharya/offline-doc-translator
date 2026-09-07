@@ -26,6 +26,8 @@ from .errors import ErrorCode, TranslatorError
 # Supported translation directions
 DIRECTIONS = ("ja2en", "en2ja")
 PLACEHOLDER_PATTERN = re.compile(r"\[\[[A-Z][A-Z_0-9]*\]\]")
+CACHE_TTL_DAYS = 30
+
 
 
 class TranslationMode(str, Enum):
@@ -266,6 +268,7 @@ class TranslationEngine:
         cache_file: str = "translation_cache.json",
         allow_llm: Optional[bool] = None,
         include_source_text: bool = False,
+        cache_ttl_days: int = CACHE_TTL_DAYS,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -276,10 +279,12 @@ class TranslationEngine:
         self.cache_file = cache_file
         self.allow_llm = allow_llm
         self.include_source_text = include_source_text
+        self.cache_ttl_days = cache_ttl_days
 
         self.cache: Dict[str, Any] = {}
         self.failed_this_run: set = set()
         self.logged_failed_keys: set = set()
+
 
 
         # Lazy-loaded backend instances
@@ -311,7 +316,7 @@ class TranslationEngine:
         return self._llm_backend
 
     def load_cache(self, direction: str) -> None:
-        """Loads cache namespaced by mode -> direction -> configuration fingerprint -> hash."""
+        """Loads cache namespaced by mode -> direction -> configuration fingerprint -> hash, pruning entries older than CACHE_TTL_DAYS."""
         if os.path.exists(self.cache_file):
             try:
                 with open(self.cache_file, "r", encoding="utf-8") as f:
@@ -321,7 +326,93 @@ class TranslationEngine:
         else:
             self.cache = {}
 
+        # Prune stale entries
+        meta = self.cache.get("_meta", {})
+        last_prune = meta.get("last_prune", 0)
+        now = time.time()
+        if now - last_prune > 86400:  # prune at most once per day
+            pruned = self._prune_cache(now)
+            self.cache.setdefault("_meta", {})["last_prune"] = now
+            if pruned > 0:
+                self.save_cache_atomically()
+
         self._get_direction_cache(direction)
+
+    def _record_cache_access(
+        self,
+        direction: str,
+        context: Optional[str],
+        key: str,
+        timestamp: Optional[float] = None
+    ) -> None:
+        """Records last accessed timestamp for a cache entry."""
+        mode_str = self.mode.value if isinstance(self.mode, TranslationMode) else str(self.mode)
+        fp = self._cache_fingerprint(context)
+        compound_key = f"{mode_str}|{direction}|{fp}|{key}"
+        timestamps = self.cache.setdefault("_timestamps", {})
+        timestamps[compound_key] = timestamp if timestamp is not None else time.time()
+
+    def _prune_cache(self, now: Optional[float] = None) -> int:
+        """Removes cache entries older than cache_ttl_days. Returns number of pruned entries."""
+        if now is None:
+            now = time.time()
+        cutoff = now - (self.cache_ttl_days * 86400)
+        timestamps = self.cache.setdefault("_timestamps", {})
+
+        # Populate timestamps for untracked entries
+        for mode_key in list(self.cache.keys()):
+            if mode_key.startswith("_"):
+                continue
+            mode_dict = self.cache.get(mode_key)
+            if not isinstance(mode_dict, dict):
+                continue
+            for dir_key, dir_dict in mode_dict.items():
+                if not isinstance(dir_dict, dict):
+                    continue
+                for fp_key, fp_dict in dir_dict.items():
+                    if not isinstance(fp_dict, dict):
+                        continue
+                    for k in list(fp_dict.keys()):
+                        ck = f"{mode_key}|{dir_key}|{fp_key}|{k}"
+                        if ck not in timestamps:
+                            timestamps[ck] = now
+
+        stale_keys = [k for k, ts in timestamps.items() if ts < cutoff]
+        pruned_count = 0
+        for ck in stale_keys:
+            timestamps.pop(ck, None)
+            parts = ck.split("|", 3)
+            if len(parts) == 4:
+                m, d, fp, k = parts
+                bucket = self.cache.get(m, {}).get(d, {}).get(fp, {})
+                if isinstance(bucket, dict) and k in bucket:
+                    bucket.pop(k, None)
+                    pruned_count += 1
+
+        # Clean up empty branches
+        for mode_key in list(self.cache.keys()):
+            if mode_key.startswith("_"):
+                continue
+            mode_dict = self.cache.get(mode_key)
+            if isinstance(mode_dict, dict):
+                for dir_key in list(mode_dict.keys()):
+                    dir_dict = mode_dict.get(dir_key)
+                    if isinstance(dir_dict, dict):
+                        for fp_key in list(dir_dict.keys()):
+                            fp_dict = dir_dict.get(fp_key)
+                            if isinstance(fp_dict, dict) and not fp_dict:
+                                dir_dict.pop(fp_key, None)
+                        if not dir_dict:
+                            mode_dict.pop(dir_key, None)
+                if not mode_dict:
+                    self.cache.pop(mode_key, None)
+
+        return pruned_count
+
+    def clear_cache(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+        """Wipes the entire cache and saves an empty cache file."""
+        self.cache = {}
+        self.save_cache_atomically(log_cb=log_cb)
 
     def _cache_fingerprint(self, context: Optional[str] = None) -> str:
         """Prevents reuse across models, glossaries, and context-sensitive translations."""
@@ -361,6 +452,7 @@ class TranslationEngine:
                     os.remove(temp_file)
                 except OSError:
                     pass
+
 
     def check_and_clear_memory(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
         """Flushes Ollama KV/model if available system RAM falls below threshold."""
@@ -463,6 +555,7 @@ class TranslationEngine:
         if key in dir_cache:
             cached_trans = dir_cache[key]
             if verify_placeholders(cached_trans, placeholder_map, masked_text):
+                self._record_cache_access(direction, context, key)
                 final_cached = unmask_protected_text(cached_trans, number_map, glossary_map)
                 preview_src = (text[:24] + "..") if len(text) > 26 else text
                 preview_res = (final_cached[:24] + "..") if len(final_cached) > 26 else final_cached
@@ -492,6 +585,7 @@ class TranslationEngine:
 
                     if verify_placeholders(nmt_res, placeholder_map, masked_text):
                         dir_cache[key] = nmt_res
+                        self._record_cache_access(direction, context, key)
                         final_trans = unmask_protected_text(nmt_res, number_map, glossary_map)
                         preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
                         path_tag = "⚡ Fast NMT"
@@ -543,7 +637,9 @@ class TranslationEngine:
 
         if llm_result:
             dir_cache[key] = llm_result
+            self._record_cache_access(direction, context, key)
             final_trans = unmask_protected_text(llm_result, number_map, glossary_map)
+
             preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
             if log_cb:
                 log_cb(f"  [✓ Done in {elapsed:.1f}s] \"{preview_src}\" => \"{preview_res}\"")

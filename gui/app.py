@@ -885,6 +885,65 @@ class TranslatorApp:
         )
         self.sys_hw_desc.pack(anchor="w", pady=(6, 0))
 
+        # Card: Translation Cache
+        card_cache = ctk.CTkFrame(
+            scroll, fg_color=THEME["card_bg"],
+            border_color=THEME["card_border"], border_width=1, corner_radius=12
+        )
+        card_cache.pack(fill="x", pady=(0, 14))
+
+        cc_inner = ctk.CTkFrame(card_cache, fg_color="transparent")
+        cc_inner.pack(fill="x", padx=16, pady=16)
+
+        ctk.CTkLabel(
+            cc_inner, text="💾  Translation Cache",
+            font=ctk.CTkFont(size=15, weight="bold"), text_color=THEME["text_primary"]
+        ).pack(anchor="w")
+
+        self.sys_cache_desc = ctk.CTkLabel(
+            cc_inner, text="Persistent cache stores previously translated text chunks to accelerate future runs.",
+            font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"], justify="left"
+        )
+        self.sys_cache_desc.pack(anchor="w", pady=(6, 12))
+
+        cache_action_row = ctk.CTkFrame(cc_inner, fg_color="transparent")
+        cache_action_row.pack(fill="x")
+
+        self.sys_clear_cache_btn = ctk.CTkButton(
+            cache_action_row, text="🗑   Clear Translation Cache",
+            height=32, font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=THEME["btn_secondary"], hover_color=THEME["btn_sec_hover"],
+            command=self._clear_cache_gui
+        )
+        self.sys_clear_cache_btn.pack(side="left", padx=(0, 10))
+
+        self.sys_cache_msg = ctk.CTkLabel(cache_action_row, text="", font=ctk.CTkFont(size=11))
+        self.sys_cache_msg.pack(side="left")
+
+    def _clear_cache_gui(self):
+        confirm = messagebox.askyesno(
+            "Clear Translation Cache",
+            "Are you sure you want to clear the local translation cache? All cached sentence pairs will be removed."
+        )
+        if not confirm:
+            return
+
+        engine = TranslationEngine()
+        engine.clear_cache()
+        for cp in [
+            os.path.abspath("translation_cache.json"),
+            os.path.abspath(".translation_cache.json"),
+        ]:
+            if os.path.exists(cp):
+                try:
+                    os.remove(cp)
+                except OSError:
+                    pass
+
+        self.sys_cache_msg.configure(text="✓ Cache cleared successfully", text_color=THEME["success"])
+        self.root.after(3000, lambda: self.sys_cache_msg.configure(text=""))
+
+
     # ══════════════════════════════════════════════════════════════
     #  MULTI-DOCUMENT BATCH ACTIONS
     # ══════════════════════════════════════════════════════════════

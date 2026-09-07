@@ -9,6 +9,8 @@ import unittest
 import os
 import sys
 import tempfile
+import json
+import time
 
 # Ensure parent directory is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -27,7 +29,9 @@ from engine.core import (
     build_prompts,
     TranslationEngine,
     TranslationMode,
+    CACHE_TTL_DAYS,
 )
+
 from engine.errors import ErrorCode, TranslatorError
 
 
@@ -256,7 +260,85 @@ class TestCoreEngine(unittest.TestCase):
             self.assertIn("Location: Section A | Chunk ID: 1", content)
             self.assertIn("  [Additional occurrence in Section B]", content)
 
+    def test_cache_ttl_and_access_recording(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            engine = TranslationEngine(cache_file=cache_file, cache_ttl_days=30)
+            now = time.time()
+
+            # Record access for fresh key and stale key
+            engine._record_cache_access("ja2en", None, "key_fresh", timestamp=now - (5 * 86400))
+            engine._record_cache_access("ja2en", None, "key_stale", timestamp=now - (35 * 86400))
+
+            # Add data to cache bucket
+            bucket = engine._get_direction_cache("ja2en")
+            bucket["key_fresh"] = "Fresh Translation"
+            bucket["key_stale"] = "Stale Translation"
+
+            # Verify both in cache
+            self.assertEqual(bucket["key_fresh"], "Fresh Translation")
+            self.assertEqual(bucket["key_stale"], "Stale Translation")
+
+            # Prune cache
+            pruned = engine._prune_cache(now=now)
+            self.assertEqual(pruned, 1)
+
+            # Stale must be removed, fresh must remain
+            self.assertIn("key_fresh", bucket)
+            self.assertNotIn("key_stale", bucket)
+
+    def test_load_cache_prunes_stale_once_per_day(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            now = time.time()
+            stale_time = now - (40 * 86400)
+            engine = TranslationEngine(cache_file=cache_file, cache_ttl_days=30)
+
+            # Manually prepare a cache file with stale entry and last_prune > 1 day ago
+            fp = engine._cache_fingerprint(None)
+            ck = f"fast_nmt|ja2en|{fp}|stale_key"
+            cache_data = {
+                "_meta": {"last_prune": now - 100000},
+                "_timestamps": {ck: stale_time},
+                "fast_nmt": {
+                    "ja2en": {
+                        fp: {
+                            "stale_key": "Old Translated Text"
+                        }
+                    }
+                }
+            }
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f)
+
+            # Loading cache should trigger pruning
+            engine.load_cache("ja2en")
+            bucket = engine._get_direction_cache("ja2en")
+            self.assertNotIn("stale_key", bucket)
+            self.assertGreaterEqual(engine.cache["_meta"]["last_prune"], now - 5)
+
+    def test_clear_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            engine = TranslationEngine(cache_file=cache_file)
+            bucket = engine._get_direction_cache("ja2en")
+            bucket["k1"] = "Translation 1"
+            engine._record_cache_access("ja2en", None, "k1")
+            engine.save_cache_atomically()
+
+            self.assertTrue(os.path.exists(cache_file))
+
+            engine.clear_cache()
+            self.assertEqual(engine.cache, {})
+
+            # Reload and verify empty
+            new_engine = TranslationEngine(cache_file=cache_file)
+            new_engine.load_cache("ja2en")
+            new_bucket = new_engine._get_direction_cache("ja2en")
+            self.assertEqual(len(new_bucket), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -19,6 +19,7 @@ class LLMBackend:
     Handles Ollama inference, single-prompt isomorphic retries,
     and multi-line Macro Polishing with Glossary enforcement.
     """
+    name: str = "llm"
 
     def __init__(
         self,
@@ -30,6 +31,38 @@ class LLMBackend:
         self.ollama_url = ollama_url.rstrip("/")
         self.generate_url = f"{self.ollama_url}/api/generate"
         self.context_window = context_window
+
+    def is_available(self) -> bool:
+        """Returns True if Ollama service is reachable."""
+        try:
+            r = requests.get(f"{self.ollama_url}/api/tags", timeout=2.0)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def is_ready(self, direction: str) -> bool:
+        """Returns True if Ollama is reachable and ready for translation."""
+        return self.is_available()
+
+    def translate(
+        self,
+        text: str,
+        direction: str,
+        placeholder_map: Optional[Dict[str, str]] = None,
+        context: Optional[str] = None,
+        log_cb: Optional[Callable[[str], None]] = None,
+    ) -> Tuple[Optional[str], float]:
+        """
+        Unified TranslationBackend protocol method.
+        Executes standard 2-attempt translation with isomorphic few-shot fallback.
+        """
+        return self.translate_single(
+            masked_text=text,
+            number_map=placeholder_map or {},
+            direction=direction,
+            context=context,
+            log_cb=log_cb,
+        )
 
     def translate_single(
         self,

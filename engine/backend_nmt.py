@@ -7,6 +7,7 @@ Executes batch translations in 10ms - 50ms per item on CPU with zero external se
 
 import re
 import os
+import time
 from typing import List, Optional, Tuple, Dict, Any, Callable
 
 # Language code mapping
@@ -38,6 +39,7 @@ class NMTBackend:
     Manages CTranslate2 / Argos Translate models, translation lifecycle,
     and automated offline package loading.
     """
+    name: str = "nmt"
 
     def __init__(self):
         self._argos_available = False
@@ -118,6 +120,28 @@ class NMTBackend:
             if log_cb:
                 log_cb(f"[!] Failed to auto-install Argos package: {e}")
         return False
+
+    def translate(
+        self,
+        text: str,
+        direction: str,
+        placeholder_map: Optional[Dict[str, str]] = None,
+        context: Optional[str] = None,
+        log_cb: Optional[Callable[[str], None]] = None,
+    ) -> Tuple[Optional[str], float]:
+        """
+        Unified TranslationBackend protocol method.
+        Translates a single text unit using CTranslate2/Argos and returns (result, elapsed).
+        """
+        t0 = time.time()
+        try:
+            res = self.translate_single(text, direction)
+            elapsed = time.time() - t0
+            return res, elapsed
+        except Exception as e:
+            if log_cb:
+                log_cb(f"  [-] NMT backend error: {e}")
+            return None, time.time() - t0
 
     def translate_single(self, text: str, direction: str) -> str:
         """Translates a single string using CTranslate2/Argos."""

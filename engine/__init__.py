@@ -15,6 +15,7 @@ from .preflight import (
 )
 from .backend_nmt import NMTBackend
 from .backend_llm import LLMBackend
+from .backend_base import TranslationBackend
 from .core import (
     DIRECTIONS,
     CACHE_TTL_DAYS,
@@ -55,6 +56,7 @@ __all__ = [
     "run_preflight",
     "NMTBackend",
     "LLMBackend",
+    "TranslationBackend",
     "DIRECTIONS",
     "CACHE_TTL_DAYS",
     "TranslationMode",

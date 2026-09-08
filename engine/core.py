@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, Any, List, Callable
 
 from .errors import ErrorCode, TranslatorError
+from .backend_base import TranslationBackend
 
 # Supported translation directions
 DIRECTIONS = ("ja2en", "en2ja")
@@ -287,6 +288,7 @@ class TranslationEngine:
         allow_llm: Optional[bool] = None,
         include_source_text: bool = False,
         cache_ttl_days: int = CACHE_TTL_DAYS,
+        backend: Optional[TranslationBackend] = None,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -303,11 +305,10 @@ class TranslationEngine:
         self.failed_this_run: set = set()
         self.logged_failed_keys: set = set()
 
-
-
         # Lazy-loaded backend instances
         self._nmt_backend = None
         self._llm_backend = None
+        self._custom_backend = backend
 
     @property
     def nmt_backend(self):
@@ -326,6 +327,24 @@ class TranslationEngine:
                 context_window=self.context_window
             )
         return self._llm_backend
+
+    def get_backend(self, mode: Optional[TranslationMode] = None) -> TranslationBackend:
+        """Returns the active or requested translation backend instance."""
+        if mode is None and self._custom_backend is not None:
+            return self._custom_backend
+        effective_mode = mode if mode is not None else self.mode
+        if effective_mode == TranslationMode.FAST_NMT:
+            return self.nmt_backend
+        return self.llm_backend
+
+    def set_backend(self, backend: TranslationBackend, mode: Optional[TranslationMode] = None) -> None:
+        """Registers a custom or replacement translation backend."""
+        if mode is None:
+            self._custom_backend = backend
+        elif mode == TranslationMode.FAST_NMT:
+            self._nmt_backend = backend
+        else:
+            self._llm_backend = backend
 
     def load_cache(self, direction: str) -> None:
         """Loads cache namespaced by mode -> direction -> configuration fingerprint -> hash, pruning entries older than CACHE_TTL_DAYS."""
@@ -592,101 +611,115 @@ class TranslationEngine:
 
         preview_src = (text[:30] + "..") if len(text) > 32 else text
 
-        # ================= PATH A: FAST NMT MODE =================
+        backend = self.get_backend()
+        backend_name = getattr(backend, "name", "nmt" if self.mode == TranslationMode.FAST_NMT else "llm")
+
+        # 3. Check backend readiness / resource gating
         if self.mode == TranslationMode.FAST_NMT:
-            nmt_ready = self.nmt_backend.is_ready(direction)
-            if nmt_ready:
-                t0 = time.time()
-                try:
-                    nmt_res = self.nmt_backend.translate_single(masked_text, direction)
-                    elapsed = time.time() - t0
+            if not backend.is_ready(direction):
+                raise TranslatorError(
+                    ErrorCode.E08,
+                    detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed."
+                )
+        else:
+            if self.allow_llm is not False:
+                self.check_and_clear_memory(log_cb)
 
-                    if verify_placeholders(nmt_res, placeholder_map, masked_text):
-                        dir_cache[key] = nmt_res
-                        self._record_cache_access(direction, context, key)
-                        final_trans = unmask_protected_text(nmt_res, number_map, glossary_map)
-                        preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
-                        path_tag = "⚡ Fast NMT"
-                        if log_cb:
-                            log_cb(f"  [{path_tag} in {elapsed:.2f}s] {location_id}: \"{preview_src}\" => \"{preview_res}\"")
-                        return TranslationResult(
-                            text=final_trans,
-                            was_translated=True,
-                            was_reverted=False,
-                            elapsed=elapsed,
-                            source_backend="nmt",
-                        )
-                    else:
-                        self.failed_this_run.add(key)
-                        if log_cb:
-                            log_cb(f"  [⚠ Skipped] {location_id}: NMT output dropped placeholder(s). Original kept.")
-                        if review_log_path:
-                            self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-                        return TranslationResult(
-                            text=text,
-                            was_translated=False,
-                            was_reverted=True,
-                            elapsed=elapsed,
-                            source_backend="nmt",
-                        )
-                except Exception as e:
-                    if log_cb:
-                        log_cb(f"  [-] NMT translation error for {location_id}: {e}. Original kept.")
-                    self.failed_this_run.add(key)
-                    if review_log_path:
-                        self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-                    return TranslationResult(
-                        text=text,
-                        was_translated=False,
-                        was_reverted=True,
-                        source_backend="nmt",
-                    )
-
-            if not nmt_ready:
-                raise TranslatorError(ErrorCode.E08, detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed.")
-
-        # ================= PATH B: PURE LLM =================
-        if self.allow_llm is not False:
-            self.check_and_clear_memory(log_cb)
-
-        if log_cb:
-            path_label = "🤖 Pure LLM"
-            log_cb(f"  [{path_label}] {location_id}: \"{preview_src}\"...")
-
-        if self.allow_llm is False:
             if log_cb:
-                log_cb(f"  [❌ Fallback] No LLM backend is available for {location_id}.")
+                path_label = "🤖 Pure LLM"
+                log_cb(f"  [{path_label}] {location_id}: \"{preview_src}\"...")
+
+            if self.allow_llm is False:
+                if log_cb:
+                    log_cb(f"  [❌ Fallback] No LLM backend is available for {location_id}.")
+                self.failed_this_run.add(key)
+                if review_log_path:
+                    self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
+                return TranslationResult(
+                    text=text,
+                    was_translated=False,
+                    was_reverted=True,
+                    source_backend=backend_name,
+                )
+
+        # 4. Dispatch translation via backend
+        elapsed = 0.0
+        try:
+            if hasattr(backend, "translate"):
+                translated_masked, elapsed = backend.translate(
+                    text=masked_text,
+                    direction=direction,
+                    placeholder_map=placeholder_map,
+                    context=context,
+                    log_cb=log_cb,
+                )
+            else:
+                # Backward compatibility for legacy test mocks defining only translate_single
+                t0 = time.time()
+                if self.mode == TranslationMode.FAST_NMT:
+                    translated_masked = backend.translate_single(masked_text, direction)
+                else:
+                    res_tuple = backend.translate_single(
+                        masked_text=masked_text,
+                        number_map=placeholder_map,
+                        direction=direction,
+                        context=context,
+                        log_cb=log_cb,
+                    )
+                    if isinstance(res_tuple, tuple):
+                        translated_masked, elapsed = res_tuple
+                    else:
+                        translated_masked = res_tuple
+                if elapsed == 0.0:
+                    elapsed = time.time() - t0
+        except Exception as e:
+            if log_cb:
+                log_cb(f"  [-] {backend_name.upper()} translation error for {location_id}: {e}. Original kept.")
             self.failed_this_run.add(key)
             if review_log_path:
                 self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-            return TranslationResult(text=text, was_translated=False, was_reverted=True)
-
-        # Standard LLM translate with isomorphic retry
-        llm_result, elapsed = self.llm_backend.translate_single(
-            masked_text=masked_text,
-            number_map=placeholder_map,
-            direction=direction,
-            context=context,
-            log_cb=log_cb
-        )
-
-        if llm_result:
-            dir_cache[key] = llm_result
-            self._record_cache_access(direction, context, key)
-            final_trans = unmask_protected_text(llm_result, number_map, glossary_map)
-
-            preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
-            if log_cb:
-                log_cb(f"  [✓ Done in {elapsed:.1f}s] \"{preview_src}\" => \"{preview_res}\"")
             return TranslationResult(
-                text=final_trans,
-                was_translated=True,
-                was_reverted=False,
-                elapsed=elapsed,
-                source_backend="llm",
+                text=text,
+                was_translated=False,
+                was_reverted=True,
+                source_backend=backend_name,
             )
 
-        # ================= Fallback: Revert & Log =================
+        # 5. Output validation & placeholder verification
+        if translated_masked:
+            if verify_placeholders(translated_masked, placeholder_map, masked_text):
+                dir_cache[key] = translated_masked
+                self._record_cache_access(direction, context, key)
+                final_trans = unmask_protected_text(translated_masked, number_map, glossary_map)
+                preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
+                if log_cb:
+                    if self.mode == TranslationMode.FAST_NMT:
+                        path_tag = "⚡ Fast NMT"
+                        log_cb(f"  [{path_tag} in {elapsed:.2f}s] {location_id}: \"{preview_src}\" => \"{preview_res}\"")
+                    else:
+                        log_cb(f"  [✓ Done in {elapsed:.1f}s] \"{preview_src}\" => \"{preview_res}\"")
+                return TranslationResult(
+                    text=final_trans,
+                    was_translated=True,
+                    was_reverted=False,
+                    elapsed=elapsed,
+                    source_backend=backend_name,
+                )
+            else:
+                self.failed_this_run.add(key)
+                if log_cb:
+                    log_cb(f"  [⚠ Skipped] {location_id}: {backend_name.upper()} output dropped placeholder(s). Original kept.")
+                if review_log_path:
+                    self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
+                return TranslationResult(
+                    text=text,
+                    was_translated=False,
+                    was_reverted=True,
+                    elapsed=elapsed,
+                    source_backend=backend_name,
+                )
+
+        # 6. Fallback if backend returned None
         if log_cb:
             log_cb(f"  [❌ Fallback] Reverting {location_id} to original text & logging.")
         self.failed_this_run.add(key)
@@ -698,5 +731,6 @@ class TranslationEngine:
             was_translated=False,
             was_reverted=True,
             elapsed=elapsed,
-            source_backend="llm",
+            source_backend=backend_name,
         )
+

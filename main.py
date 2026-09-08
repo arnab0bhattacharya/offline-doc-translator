@@ -29,6 +29,7 @@ from typing import Dict
 from engine.errors import TranslatorError
 from engine.core import TranslationMode, DIRECTIONS
 from engine.run_job import execute_translation
+from engine.logging import TranslationLogger, TranslationLogEvent
 
 
 def parse_cli_glossary(glossary_arg: str) -> Dict[str, str]:
@@ -97,11 +98,16 @@ def run_cli(
         pbar.set_description(f"{msg[:30]}")
         pbar.refresh()
 
-    def cli_log(msg: str):
+    cli_logger = TranslationLogger(name="cli")
+
+    def cli_event_handler(event: TranslationLogEvent):
+        msg = event.to_cli_string()
         if pbar:
             pbar.write(msg)
         else:
             print(f"  -> {msg}")
+
+    cli_logger.subscribe(cli_event_handler)
 
     try:
         stats = execute_translation(
@@ -112,8 +118,9 @@ def run_cli(
             model_name=model_name,
             glossary=glossary,
             progress_cb=cli_progress,
-            log_cb=cli_log,
+            log_cb=cli_logger.as_log_cb(),
             include_source_text=include_source_text,
+            logger=cli_logger,
         )
         if pbar:
             pbar.close()

@@ -10,6 +10,7 @@ from typing import Dict, Optional, Callable, Any, Union
 from .core import TranslationEngine, TranslationMode
 from .errors import ErrorCode, TranslatorError
 from .preflight import run_preflight, run_nmt_preflight
+from .logging import TranslationLogger
 from formats.registry import get_handler
 
 
@@ -25,6 +26,7 @@ def execute_translation(
     include_source_text: bool = False,
     policy: Optional[Any] = None,
     cancel_event: Optional[threading.Event] = None,
+    logger: Optional[TranslationLogger] = None,
 ) -> Dict[str, Any]:
     """
     Runs the full translation pipeline: preflight -> engine -> handler -> translate.
@@ -39,9 +41,13 @@ def execute_translation(
     llm_available = (mode == TranslationMode.PURE_LLM)
     review_log_path = f"{output_path}.needs_review.log"
 
+    if logger is not None and log_cb is not None:
+        logger.add_legacy_callback(log_cb)
+    effective_log_cb = log_cb if log_cb is not None else (logger.as_log_cb() if logger is not None else None)
+
     # 1. Preflight
-    if log_cb:
-        log_cb("Running system diagnostics & preflight...")
+    if effective_log_cb:
+        effective_log_cb("Running system diagnostics & preflight...")
     run_preflight(
         model_name=model_name,
         input_path=input_path,
@@ -63,8 +69,8 @@ def execute_translation(
             pass
 
     # 3. Engine + Cache
-    if log_cb:
-        log_cb(f"Initializing {mode.value.upper()} engine & persistent cache...")
+    if effective_log_cb:
+        effective_log_cb(f"Initializing {mode.value.upper()} engine & persistent cache...")
     engine = TranslationEngine(
         model_name=model_name,
         mode=mode,
@@ -75,6 +81,7 @@ def execute_translation(
         ),
         allow_llm=llm_available,
         include_source_text=include_source_text,
+        logger=logger,
     )
     engine.load_cache(direction)
 
@@ -89,15 +96,15 @@ def execute_translation(
         handler = get_handler(ext, engine)
 
     # 5. Translate
-    if log_cb:
-        log_cb(f"Translating {ext.upper()} document...")
+    if effective_log_cb:
+        effective_log_cb(f"Translating {ext.upper()} document...")
     stats = handler.translate(
         input_path=input_path,
         output_path=output_path,
         direction=direction,
         review_log_path=review_log_path,
         progress_cb=progress_cb,
-        log_cb=log_cb,
+        log_cb=effective_log_cb,
         cancel_event=cancel_event,
     )
 

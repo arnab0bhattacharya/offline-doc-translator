@@ -25,6 +25,7 @@ from typing import Dict, Tuple, Optional, Any, List, Callable
 from .errors import ErrorCode, TranslatorError
 from .backend_base import TranslationBackend
 from .cache import TranslationCache, JSONFileCache, NullCache, CACHE_TTL_DAYS
+from .logging import TranslationLogger, TranslationLogEvent, get_logger
 
 # Supported translation directions
 DIRECTIONS = ("ja2en", "en2ja")
@@ -290,6 +291,7 @@ class TranslationEngine:
         cache_ttl_days: int = CACHE_TTL_DAYS,
         backend: Optional[TranslationBackend] = None,
         cache: Optional[TranslationCache] = None,
+        logger: Optional[TranslationLogger] = None,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -301,6 +303,7 @@ class TranslationEngine:
         self.allow_llm = allow_llm
         self.include_source_text = include_source_text
         self.cache_ttl_days = cache_ttl_days
+        self.logger = logger if logger is not None else get_logger()
 
         self.failed_this_run: set = set()
         self.logged_failed_keys: set = set()
@@ -534,6 +537,13 @@ class TranslationEngine:
                 final_cached = unmask_protected_text(cached_trans, number_map, glossary_map)
                 preview_src = (text[:24] + "..") if len(text) > 26 else text
                 preview_res = (final_cached[:24] + "..") if len(final_cached) > 26 else final_cached
+                if self.logger:
+                    self.logger.info(
+                        message=f'"{preview_src}" => "{preview_res}"',
+                        category="cache",
+                        location=location_id,
+                        elapsed=0.0,
+                    )
                 if log_cb:
                     log_cb(f"  [⚡ Cache] {location_id}: \"{preview_src}\" => \"{preview_res}\"")
                 return TranslationResult(
@@ -549,6 +559,12 @@ class TranslationEngine:
 
         # 2. Check runtime failure tracker
         if key in self.failed_this_run:
+            if self.logger:
+                self.logger.warning(
+                    message=f"Skipped {location_id} (previously failed this run)",
+                    category="translation",
+                    location=location_id,
+                )
             if log_cb:
                 log_cb(f"  [⏩ Skipped] {location_id}")
             if review_log_path:
@@ -576,6 +592,12 @@ class TranslationEngine:
                 log_cb(f"  [{path_label}] {location_id}: \"{preview_src}\"...")
 
             if self.allow_llm is False:
+                if self.logger:
+                    self.logger.error(
+                        message=f"No LLM backend is available for {location_id}.",
+                        category="backend",
+                        location=location_id,
+                    )
                 if log_cb:
                     log_cb(f"  [❌ Fallback] No LLM backend is available for {location_id}.")
                 self.failed_this_run.add(key)
@@ -619,6 +641,13 @@ class TranslationEngine:
                 if elapsed == 0.0:
                     elapsed = time.time() - t0
         except Exception as e:
+            if self.logger:
+                self.logger.error(
+                    message=f"{backend_name.upper()} translation error for {location_id}: {e}. Original kept.",
+                    category="translation",
+                    location=location_id,
+                    details={"error": str(e)},
+                )
             if log_cb:
                 log_cb(f"  [-] {backend_name.upper()} translation error for {location_id}: {e}. Original kept.")
             self.failed_this_run.add(key)
@@ -639,6 +668,14 @@ class TranslationEngine:
                 self._record_cache_access(direction, context, key)
                 final_trans = unmask_protected_text(translated_masked, number_map, glossary_map)
                 preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
+                if self.logger:
+                    self.logger.info(
+                        message=f'"{preview_src}" => "{preview_res}"',
+                        category="translation",
+                        location=location_id,
+                        elapsed=elapsed,
+                        details={"source_backend": backend_name},
+                    )
                 if log_cb:
                     if self.mode == TranslationMode.FAST_NMT:
                         path_tag = "⚡ Fast NMT"
@@ -654,6 +691,13 @@ class TranslationEngine:
                 )
             else:
                 self.failed_this_run.add(key)
+                if self.logger:
+                    self.logger.warning(
+                        message=f"{backend_name.upper()} output dropped placeholder(s). Original kept.",
+                        category="translation",
+                        location=location_id,
+                        elapsed=elapsed,
+                    )
                 if log_cb:
                     log_cb(f"  [⚠ Skipped] {location_id}: {backend_name.upper()} output dropped placeholder(s). Original kept.")
                 if review_log_path:
@@ -667,6 +711,13 @@ class TranslationEngine:
                 )
 
         # 6. Fallback if backend returned None
+        if self.logger:
+            self.logger.warning(
+                message=f"Reverting {location_id} to original text & logging.",
+                category="translation",
+                location=location_id,
+                elapsed=elapsed,
+            )
         if log_cb:
             log_cb(f"  [❌ Fallback] Reverting {location_id} to original text & logging.")
         self.failed_this_run.add(key)
@@ -680,4 +731,5 @@ class TranslationEngine:
             elapsed=elapsed,
             source_backend=backend_name,
         )
+
 

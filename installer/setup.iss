@@ -25,14 +25,14 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=Output
 OutputBaseFilename=OfflineTranslatorSetup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ; Minimum Windows 10
@@ -47,12 +47,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-; Main application files from PyInstaller dist
+; Main application files from PyInstaller standalone distribution (bundled Python in _internal/)
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Installer helper scripts
+; Standalone CLI helper script (optional headless use)
 Source: "install_argos_packages.py"; DestDir: "{app}\installer"; Flags: ignoreversion
-Source: "check_python.bat"; DestDir: "{app}\installer"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -66,7 +65,6 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 [Code]
 var
   GemmaModelPage: TInputOptionWizardPage;
-  PythonInstalled: Boolean;
 
 // ─────────────────────────────────────────────────────────
 //  CUSTOM WIZARD PAGES
@@ -78,7 +76,7 @@ begin
   GemmaModelPage := CreateInputOptionPage(
     wpSelectTasks,
     'Gemma 4 Model Selection',
-    'Choose which Gemma 4 model to download via Ollama.',
+    'Choose which Gemma 4 model to pull via Ollama.',
     'Select the model variant that matches your GPU. You can also download models later from within the application.',
     True,  // Exclusive (radio buttons)
     False  // Not list box
@@ -92,28 +90,28 @@ begin
 end;
 
 // ─────────────────────────────────────────────────────────
-//  PYTHON DETECTION
+//  SHA-256 HASH VERIFICATION HELPER
 // ─────────────────────────────────────────────────────────
 
-function IsPythonInstalled: Boolean;
-var
-  ResultCode: Integer;
-begin
-  Result := Exec('cmd.exe', '/C python --version', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
-end;
-
-function GetPythonVersion: String;
+function VerifyFileSHA256(const FilePath, ExpectedHash: String): Boolean;
 var
   TmpFile: String;
   ResultCode: Integer;
   Lines: TArrayOfString;
+  ActualHash: String;
 begin
-  Result := '';
-  TmpFile := ExpandConstant('{tmp}\pyver.txt');
-  if Exec('cmd.exe', '/C python --version > "' + TmpFile + '" 2>&1', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  Result := False;
+  if not FileExists(FilePath) then Exit;
+  TmpFile := ExpandConstant('{tmp}\hash_result.txt');
+  if Exec('powershell.exe',
+    '-NoProfile -Command "(Get-FileHash -Path ''' + FilePath + ''' -Algorithm SHA256).Hash.ToLower().Trim() | Out-File -Encoding ascii ''' + TmpFile + '''"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
   begin
     if LoadStringsFromFile(TmpFile, Lines) and (GetArrayLength(Lines) > 0) then
-      Result := Lines[0];
+    begin
+      ActualHash := Trim(Lowercase(Lines[0]));
+      Result := (CompareText(ActualHash, Lowercase(Trim(ExpectedHash))) = 0);
+    end;
     DeleteFile(TmpFile);
   end;
 end;
@@ -130,21 +128,6 @@ begin
 end;
 
 // ─────────────────────────────────────────────────────────
-//  FILE DOWNLOAD HELPER (Native curl / PowerShell)
-// ─────────────────────────────────────────────────────────
-
-function DownloadFile(const Url, TargetFile: String): Boolean;
-var
-  ResultCode: Integer;
-begin
-  // Try Windows built-in curl.exe first
-  Result := Exec('cmd.exe', '/C curl.exe -L -s -S -o "' + TargetFile + '" "' + Url + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) and FileExists(TargetFile);
-  // Fallback to PowerShell if curl is unavailable
-  if not Result then
-    Result := Exec('powershell.exe', '-NoProfile -Command "(New-Object Net.WebClient).DownloadFile(''' + Url + ''', ''' + TargetFile + ''')"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) and FileExists(TargetFile);
-end;
-
-// ─────────────────────────────────────────────────────────
 //  POST-INSTALL ACTIONS
 // ─────────────────────────────────────────────────────────
 
@@ -152,128 +135,32 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
   SelectedModel: String;
-  StatusText: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    // ── Step 1: Check/Install Python ──
-    WizardForm.StatusLabel.Caption := 'Checking Python installation...';
-    WizardForm.StatusLabel.Update;
-
-    PythonInstalled := IsPythonInstalled;
-
-    if not PythonInstalled then
+    // ── Check Ollama for Pure LLM Mode ──
+    if not IsOllamaInstalled then
     begin
-      if MsgBox('Python 3.14 is required but not found.' + #13#10 + #13#10 +
-                'Would you like to download and install Python 3.14 now?' + #13#10 +
-                '(This requires an internet connection)',
+      if MsgBox('Ollama was not detected on this system.' + #13#10 + #13#10 +
+                'Ollama is required for Pure LLM mode (Fast NMT mode works fully offline without Ollama).' + #13#10 + #13#10 +
+                'Would you like to open the official Ollama download page (https://ollama.com) now?',
                 mbConfirmation, MB_YESNO) = IDYES then
       begin
-        WizardForm.StatusLabel.Caption := 'Downloading Python 3.14 installer...';
-        WizardForm.StatusLabel.Update;
-
-        // Download Python installer
-        if not DownloadFile(
-          'https://www.python.org/ftp/python/3.14.0/python-3.14.0-amd64.exe',
-          ExpandConstant('{tmp}\python_installer.exe')) then
-        begin
-          MsgBox('Failed to download Python installer. Please install Python 3.14+ manually from python.org.',
-                 mbError, MB_OK);
-        end
-        else
-        begin
-          WizardForm.StatusLabel.Caption := 'Installing Python 3.14 (this may take a few minutes)...';
-          WizardForm.StatusLabel.Update;
-
-          Exec(ExpandConstant('{tmp}\python_installer.exe'),
-               'InstallAllUsers=1 PrependPath=1 Include_pip=1 /quiet',
-               '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-
-          if ResultCode = 0 then
-            PythonInstalled := True
-          else
-            MsgBox('Python installation may have encountered issues. Please verify Python is installed.',
-                   mbInformation, MB_OK);
-        end;
+        ShellExec('open', 'https://ollama.com/download', '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
       end;
     end
     else
     begin
-      StatusText := GetPythonVersion;
-      Log('Python found: ' + StatusText);
-    end;
-
-    // ── Step 2: Install pip dependencies ──
-    if PythonInstalled then
-    begin
-      WizardForm.StatusLabel.Caption := 'Installing Python dependencies...';
-      WizardForm.StatusLabel.Update;
-
-      Exec('cmd.exe',
-           '/C python -m pip install -r "' + ExpandConstant('{app}') + '\requirements.txt" --quiet',
-           ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-      if ResultCode <> 0 then
-        Log('pip install returned code: ' + IntToStr(ResultCode));
-    end;
-
-    // ── Step 3: Install Argos language packages ──
-    if PythonInstalled then
-    begin
-      WizardForm.StatusLabel.Caption := 'Installing Argos translation packages (~200MB)...';
-      WizardForm.StatusLabel.Update;
-
-      Exec('cmd.exe',
-           '/C python "' + ExpandConstant('{app}') + '\installer\install_argos_packages.py"',
-           ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-      if ResultCode <> 0 then
-        Log('Argos package install returned code: ' + IntToStr(ResultCode));
-    end;
-
-    // ── Step 4: Check/Install Ollama ──
-    if not IsOllamaInstalled then
-    begin
-      if MsgBox('Ollama is not installed. Ollama is required for the Pure LLM translation mode.' + #13#10 + #13#10 +
-                'Would you like to download and install Ollama now?' + #13#10 +
-                '(Fast NMT mode works without Ollama)',
-                mbConfirmation, MB_YESNO) = IDYES then
+      // ── Pull selected Gemma model if Ollama is available ──
+      if GemmaModelPage.SelectedValueIndex < 3 then  // Not "Skip"
       begin
-        WizardForm.StatusLabel.Caption := 'Downloading Ollama installer...';
-        WizardForm.StatusLabel.Update;
-
-        if not DownloadFile(
-          'https://ollama.com/download/OllamaSetup.exe',
-          ExpandConstant('{tmp}\OllamaSetup.exe')) then
-        begin
-          MsgBox('Failed to download Ollama. You can install it later from https://ollama.com',
-                 mbInformation, MB_OK);
-        end
-        else
-        begin
-          WizardForm.StatusLabel.Caption := 'Installing Ollama...';
-          WizardForm.StatusLabel.Update;
-
-          Exec(ExpandConstant('{tmp}\OllamaSetup.exe'),
-               '/VERYSILENT /NORESTART',
-               '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+        case GemmaModelPage.SelectedValueIndex of
+          0: SelectedModel := 'gemma4:e2b-it-qat';
+          1: SelectedModel := 'gemma4:12b-it-qat';
+          2: SelectedModel := 'gemma4:27b-it-qat';
         end;
-      end;
-    end;
 
-    // ── Step 5: Pull selected Gemma model ──
-    if GemmaModelPage.SelectedValueIndex < 3 then  // Not "Skip"
-    begin
-      case GemmaModelPage.SelectedValueIndex of
-        0: SelectedModel := 'gemma4:e2b-it-qat';
-        1: SelectedModel := 'gemma4:12b-it-qat';
-        2: SelectedModel := 'gemma4:27b-it-qat';
-      end;
-
-      if IsOllamaInstalled or (MsgBox('Ollama must be running to download the model. Continue?',
-                                       mbConfirmation, MB_YESNO) = IDYES) then
-      begin
-        WizardForm.StatusLabel.Caption := 'Downloading ' + SelectedModel + ' (this may take a while)...';
+        WizardForm.StatusLabel.Caption := 'Pulling ' + SelectedModel + ' via Ollama (this may take a few minutes)...';
         WizardForm.StatusLabel.Update;
 
         Exec('cmd.exe',
@@ -281,8 +168,9 @@ begin
              '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
 
         if ResultCode <> 0 then
-          MsgBox('Model download may have failed. You can pull the model later using:' + #13#10 +
-                 'ollama pull ' + SelectedModel, mbInformation, MB_OK);
+          MsgBox('Model download may have encountered an issue. You can pull the model anytime using:' + #13#10 +
+                 'ollama pull ' + SelectedModel + #13#10#13#10 +
+                 'or from within the application System Settings.', mbInformation, MB_OK);
       end;
     end;
 

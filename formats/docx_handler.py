@@ -14,7 +14,7 @@ import tempfile
 import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
-from formats.base import BaseFormatHandler
+from formats.base import BaseFormatHandler, XML_TAG_ATTRS
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
 
@@ -44,7 +44,7 @@ class DOCXHandler(BaseFormatHandler):
         log_cb: Optional[Callable[[str], None]],
         cancel_event: Optional[threading.Event] = None,
     ) -> str:
-        p_pattern = re.compile(r"(<w:p(?: [^>]+)?>)(.*?)(</w:p>)", re.DOTALL)
+        p_pattern = re.compile(rf"(<w:p\b{XML_TAG_ATTRS}>)(.*?)(</w:p>)", re.DOTALL)
         recent_paragraphs: List[str] = []
 
         def p_repl(match):

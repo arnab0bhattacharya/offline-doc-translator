@@ -14,7 +14,7 @@ import tempfile
 import threading
 from typing import Callable, Optional, Dict, Any, List
 
-from formats.base import BaseFormatHandler
+from formats.base import BaseFormatHandler, XML_TAG_ATTRS
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
 
@@ -24,7 +24,7 @@ class PPTXHandler(BaseFormatHandler):
 
     def _extract_slide_title(self, xml_str: str) -> Optional[str]:
         """Heuristically extracts the first non-empty text paragraph (typically the title/heading)."""
-        p_pattern = re.compile(r"<a:p(?: [^>]+)?>(.*?)</a:p>", re.DOTALL)
+        p_pattern = re.compile(rf"<a:p\b{XML_TAG_ATTRS}>(.*?)</a:p>", re.DOTALL)
         for p_match in p_pattern.finditer(xml_str):
             full_text, _ = self.extract_paragraph_text_nodes(p_match.group(1), tag_prefix="a")
             full_text = full_text.strip()
@@ -62,7 +62,7 @@ class PPTXHandler(BaseFormatHandler):
         cancel_event: Optional[threading.Event] = None,
     ) -> str:
         # 1. Protect <a:fld> blocks
-        fld_pattern = re.compile(r"<a:fld.*?</a:fld>", re.DOTALL)
+        fld_pattern = re.compile(rf"<a:fld\b{XML_TAG_ATTRS}>.*?</a:fld>", re.DOTALL)
         flds: Dict[str, str] = {}
 
         def fld_repl(m):
@@ -73,7 +73,7 @@ class PPTXHandler(BaseFormatHandler):
         xml_str = fld_pattern.sub(fld_repl, xml_str)
 
         # 2. Extract and translate paragraphs
-        p_pattern = re.compile(r"(<a:p(?: [^>]+)?>)(.*?)(</a:p>)", re.DOTALL)
+        p_pattern = re.compile(rf"(<a:p\b{XML_TAG_ATTRS}>)(.*?)(</a:p>)", re.DOTALL)
 
         def p_repl(match):
             if cancel_event and cancel_event.is_set():

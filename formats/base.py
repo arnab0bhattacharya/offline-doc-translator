@@ -25,6 +25,9 @@ MAX_EXTRACTED_BYTES = DEFAULT_POLICY.max_extracted_bytes
 MAX_ARCHIVE_ENTRIES = DEFAULT_POLICY.max_archive_entries
 MAX_SINGLE_ENTRY_BYTES = DEFAULT_POLICY.max_single_entry_bytes
 
+# Regex pattern for XML tag attribute matching that handles quoted attributes with '>'
+XML_TAG_ATTRS = r'(?:[^>"\']|"[^"]*"|\'[^\']*\')*'
+
 
 class BaseFormatHandler(ABC):
     """Base class for document format translation handlers."""
@@ -180,8 +183,8 @@ class BaseFormatHandler(ABC):
         tag_prefix is 'w' for Word (.docx) or 'a' for PowerPoint (.pptx).
         """
         total = 0
-        p_pattern = re.compile(rf"<{tag_prefix}:p(?: [^>]+)?>(.*?)</{tag_prefix}:p>", re.DOTALL)
-        t_pattern = re.compile(rf"<{tag_prefix}:t(?:\s[^>]*)?>(.*?)</{tag_prefix}:t>", re.DOTALL)
+        p_pattern = re.compile(rf"<{tag_prefix}:p\b{XML_TAG_ATTRS}>(.*?)</{tag_prefix}:p>", re.DOTALL)
+        t_pattern = re.compile(rf"<{tag_prefix}:t\b{XML_TAG_ATTRS}>(.*?)</{tag_prefix}:t>", re.DOTALL)
 
         for p_match in p_pattern.finditer(xml_str):
             t_matches = t_pattern.findall(p_match.group(1))
@@ -199,7 +202,7 @@ class BaseFormatHandler(ABC):
         Extracts unescaped aggregated text and regex match objects for <prefix:t> nodes.
         tag_prefix is 'w' for Word (.docx) or 'a' for PowerPoint (.pptx).
         """
-        t_pattern = re.compile(rf"(<{tag_prefix}:t(?:\s[^>]*)?>)(.*?)(</{tag_prefix}:t>)", re.DOTALL)
+        t_pattern = re.compile(rf"(<{tag_prefix}:t\b{XML_TAG_ATTRS}>)(.*?)(</{tag_prefix}:t>)", re.DOTALL)
         t_matches = list(t_pattern.finditer(p_content))
         if not t_matches:
             return "", []

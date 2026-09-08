@@ -15,7 +15,7 @@ import tempfile
 import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
-from formats.base import BaseFormatHandler
+from formats.base import BaseFormatHandler, XML_TAG_ATTRS
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
 
@@ -32,8 +32,8 @@ class XLSXHandler(BaseFormatHandler):
         with open(shared_strings_path, "r", encoding="utf-8") as f:
             xml_data = f.read()
 
-        si_pattern = re.compile(r"<si>(.*?)</si>", re.DOTALL)
-        t_pattern = re.compile(r"<t(?:\s[^>]*)?>(.*?)</t>", re.DOTALL)
+        si_pattern = re.compile(rf"<si\b{XML_TAG_ATTRS}>(.*?)</si>", re.DOTALL)
+        t_pattern = re.compile(rf"<t\b{XML_TAG_ATTRS}>(.*?)</t>", re.DOTALL)
 
         strings = []
         for si_match in si_pattern.finditer(xml_data):
@@ -51,7 +51,7 @@ class XLSXHandler(BaseFormatHandler):
     ) -> int:
         """Fast pre-scan to calculate the exact total number of translatable text cells."""
         total_count = 0
-        cell_pattern = re.compile(r"<c\s+([^>]*?)(?:>(.*?)</c>|/>)", re.DOTALL)
+        cell_pattern = re.compile(rf"<c(\b{XML_TAG_ATTRS}?)(?:>(.*?)</c>|/>)", re.DOTALL)
 
         for filename in os.listdir(sheets_dir):
             if not (filename.startswith("sheet") and filename.endswith(".xml")):
@@ -78,7 +78,7 @@ class XLSXHandler(BaseFormatHandler):
                         if 0 <= s_idx < len(shared_strings):
                             cell_text = shared_strings[s_idx]
                 elif cell_type == "inlineStr":
-                    t_matches = re.findall(r"<t(?:\s[^>]*)?>(.*?)</t>", body, re.DOTALL)
+                    t_matches = re.findall(rf"<t\b{XML_TAG_ATTRS}>(.*?)</t>", body, re.DOTALL)
                     cell_text = unescape_xml("".join(t_matches))
 
                 if cell_text.strip() and should_translate(cell_text, direction):
@@ -99,8 +99,8 @@ class XLSXHandler(BaseFormatHandler):
         log_cb: Optional[Callable[[str], None]],
         cancel_event: Optional[threading.Event] = None,
     ) -> str:
-        row_pattern = re.compile(r"(<row(?:\s[^>]*)?>)(.*?)(</row>)", re.DOTALL)
-        cell_pattern = re.compile(r"<c\s+([^>]*?)(?:>(.*?)</c>|/>)", re.DOTALL)
+        row_pattern = re.compile(rf"(<row\b{XML_TAG_ATTRS}>)(.*?)(</row>)", re.DOTALL)
+        cell_pattern = re.compile(rf"<c(\b{XML_TAG_ATTRS}?)(?:>(.*?)</c>|/>)", re.DOTALL)
 
         def row_repl(row_match):
             if cancel_event and cancel_event.is_set():
@@ -140,7 +140,7 @@ class XLSXHandler(BaseFormatHandler):
                                 cell_text = shared_strings[s_idx]
                                 is_text_cell = True
                     elif cell_type == "inlineStr":
-                        t_matches = re.findall(r"<t(?:\s[^>]*)?>(.*?)</t>", body, re.DOTALL)
+                        t_matches = re.findall(rf"<t\b{XML_TAG_ATTRS}>(.*?)</t>", body, re.DOTALL)
                         cell_text = unescape_xml("".join(t_matches))
                         is_text_cell = True
 

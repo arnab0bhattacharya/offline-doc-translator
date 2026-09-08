@@ -8,13 +8,113 @@ Executes batch translations in 10ms - 50ms per item on CPU with zero external se
 import re
 import os
 import time
+import json
+import zipfile
+import hashlib
 from typing import List, Optional, Tuple, Dict, Any, Callable
+
+DEFAULT_TRUSTED_PACKAGES_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "trusted_packages.json"
+)
 
 # Language code mapping
 LANG_MAP = {
     "ja2en": ("ja", "en"),
     "en2ja": ("en", "ja"),
 }
+
+
+def load_trusted_packages(manifest_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Loads known-good Argos language model package metadata and pinned SHA-256 hashes.
+    Falls back to built-in verified hashes if the JSON manifest is missing or unreadable.
+    """
+    path = manifest_path or DEFAULT_TRUSTED_PACKAGES_PATH
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {k: v for k, v in data.items() if not k.startswith("_")}
+        except Exception:
+            pass
+
+    return {
+        "ja-en": {
+            "from_code": "ja",
+            "to_code": "en",
+            "package_version": "1.1",
+            "sha256": "623e3477959a815eb0a5ef53e09079ae8f1f9d3bbcd230473baf28c03fb83335",
+            "url": "https://argos-net.com/v1/translate-ja_en-1_1.argosmodel",
+        },
+        "en-ja": {
+            "from_code": "en",
+            "to_code": "ja",
+            "package_version": "1.1",
+            "sha256": "16300cc4eaa85320520cabcf433b63d01be40ef6966251de72043a083408f716",
+            "url": "https://argos-net.com/v1/translate-en_ja-1_1.argosmodel",
+        },
+    }
+
+
+def compute_file_sha256(file_path: str, chunk_size: int = 65536) -> str:
+    """Computes SHA-256 hexadecimal hash of a file."""
+    sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def verify_package_archive(
+    archive_path: str,
+    expected_hash: Optional[str] = None,
+    log_cb: Optional[Callable[[str], None]] = None,
+) -> Tuple[bool, str]:
+    """
+    Validates a downloaded .argosmodel package archive:
+    1. Computes SHA-256 digest and compares with expected_hash (if provided).
+    2. Validates zip file integrity via CRC test (testzip).
+    3. Prevents path traversal / ZipSlip vulnerabilities.
+    Returns (is_valid, digest).
+    """
+    if not os.path.exists(archive_path):
+        if log_cb:
+            log_cb(f"[!] Package file does not exist: {archive_path}")
+        return False, ""
+
+    try:
+        digest = compute_file_sha256(archive_path)
+
+        # 1. SHA-256 comparison if expected_hash provided
+        if expected_hash:
+            if digest.lower() != expected_hash.strip().lower():
+                if log_cb:
+                    log_cb(
+                        f"[!] Security Error: Package SHA-256 mismatch!\n"
+                        f"    Expected: {expected_hash.lower()}\n"
+                        f"    Actual:   {digest.lower()}"
+                    )
+                return False, digest
+
+        # 2. Zip archive validation and ZipSlip check
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            if zf.testzip() is not None:
+                if log_cb:
+                    log_cb(f"[!] Package archive failed CRC validation: {archive_path}")
+                return False, digest
+
+            for member in zf.infolist():
+                norm = os.path.normpath(member.filename)
+                if norm.startswith("..") or os.path.isabs(norm) or norm.startswith("/") or norm.startswith("\\"):
+                    if log_cb:
+                        log_cb(f"[!] Security Error: Unsafe path in package archive: {member.filename}")
+                    return False, digest
+
+        return True, digest
+    except Exception as e:
+        if log_cb:
+            log_cb(f"[!] Failed to verify package integrity: {e}")
+        return False, ""
 
 
 def normalize_nmt_placeholders(text: str) -> str:
@@ -41,7 +141,14 @@ class NMTBackend:
     """
     name: str = "nmt"
 
-    def __init__(self):
+    def __init__(
+        self,
+        trusted_manifest_path: Optional[str] = None,
+        strict_pinning: bool = True,
+    ):
+        self.trusted_manifest_path = trusted_manifest_path
+        self.strict_pinning = strict_pinning
+        self._trusted_manifest = load_trusted_packages(trusted_manifest_path)
         self._argos_available = False
         self._installed_pairs = set()
         self._check_availability()
@@ -79,20 +186,50 @@ class NMTBackend:
         pair = LANG_MAP.get(direction)
         return bool(pair and self._argos_available and self.has_language_pair(*pair))
 
+    def get_expected_hash(self, from_code: str, to_code: str) -> Optional[str]:
+        """Returns the pinned SHA-256 hash for a language pair if defined in trusted manifest."""
+        keys = [
+            f"{from_code}-{to_code}",
+            f"{from_code}2{to_code}",
+            f"{from_code}_{to_code}",
+        ]
+        for k in keys:
+            entry = self._trusted_manifest.get(k)
+            if entry and isinstance(entry, dict) and "sha256" in entry:
+                return entry["sha256"]
+        return None
+
+    def _verify_package(self, download_path: str, expected_hash: str) -> bool:
+        """Verifies package integrity and SHA-256 against expected hash."""
+        is_valid, _ = verify_package_archive(download_path, expected_hash=expected_hash)
+        return is_valid
+
     def install_language_pair(
         self,
         from_code: str,
         to_code: str,
-        log_cb: Optional[Callable[[str], None]] = None
+        log_cb: Optional[Callable[[str], None]] = None,
+        verify_hash: bool = True,
     ) -> bool:
         """
         Downloads and installs an offline Argos language package if connected.
+        Verifies SHA-256 hash against trusted manifest and checks zip integrity
+        prior to installing.
         """
         if not self._argos_available:
             return False
 
         if self.has_language_pair(from_code, to_code):
             return True
+
+        expected_hash = self.get_expected_hash(from_code, to_code)
+        if verify_hash and not expected_hash and self.strict_pinning:
+            if log_cb:
+                log_cb(
+                    f"[!] Security Error: No trusted SHA-256 entry for language pair "
+                    f"{from_code} -> {to_code}. Refusing to install unpinned package."
+                )
+            return False
 
         try:
             import argostranslate.package
@@ -107,15 +244,37 @@ class NMTBackend:
                     target_pkg = pkg
                     break
 
-            if target_pkg:
+            if not target_pkg:
                 if log_cb:
-                    log_cb(f"[*] Downloading offline model: {target_pkg} (~100MB)...")
-                download_path = target_pkg.download()
-                argostranslate.package.install_from_path(download_path)
-                self._installed_pairs.add((from_code, to_code))
+                    log_cb(f"[!] Language pair {from_code} -> {to_code} not found in Argos package index.")
+                return False
+
+            if log_cb:
+                log_cb(f"[*] Downloading offline model: {target_pkg} (~100MB)...")
+            download_path = target_pkg.download()
+
+            # Cryptographic SHA-256 & zip safety verification
+            if verify_hash:
+                is_valid, digest = verify_package_archive(
+                    download_path, expected_hash=expected_hash, log_cb=log_cb
+                )
+                if not is_valid:
+                    if log_cb:
+                        log_cb("[!] Security Error: Package failed verification! Aborting install.")
+                    if os.path.exists(download_path):
+                        try:
+                            os.remove(download_path)
+                        except OSError:
+                            pass
+                    return False
                 if log_cb:
-                    log_cb(f"[✓] Successfully installed {from_code} -> {to_code} translation package.")
-                return True
+                    log_cb(f"[✓] Package verified: SHA-256 matched trusted manifest ({digest[:16]}...).")
+
+            argostranslate.package.install_from_path(download_path)
+            self._installed_pairs.add((from_code, to_code))
+            if log_cb:
+                log_cb(f"[✓] Successfully installed {from_code} -> {to_code} translation package.")
+            return True
         except Exception as e:
             if log_cb:
                 log_cb(f"[!] Failed to auto-install Argos package: {e}")

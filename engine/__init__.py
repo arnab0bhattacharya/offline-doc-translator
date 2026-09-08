@@ -13,7 +13,12 @@ from .preflight import (
     run_nmt_preflight,
     run_preflight,
 )
-from .backend_nmt import NMTBackend
+from .backend_nmt import (
+    NMTBackend,
+    load_trusted_packages,
+    verify_package_archive,
+    compute_file_sha256,
+)
 from .backend_llm import LLMBackend
 from .backend_base import TranslationBackend
 from .cache import (
@@ -64,6 +69,9 @@ __all__ = [
     "run_nmt_preflight",
     "run_preflight",
     "NMTBackend",
+    "load_trusted_packages",
+    "verify_package_archive",
+    "compute_file_sha256",
     "LLMBackend",
     "TranslationBackend",
     "TranslationCache",

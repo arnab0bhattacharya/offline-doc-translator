@@ -1,0 +1,17 @@
+{
+  "_comment": "Known-good Argos Translate language model package hashes and provenance URLs",
+  "ja-en": {
+    "from_code": "ja",
+    "to_code": "en",
+    "package_version": "1.1",
+    "sha256": "623e3477959a815eb0a5ef53e09079ae8f1f9d3bbcd230473baf28c03fb83335",
+    "url": "https://argos-net.com/v1/translate-ja_en-1_1.argosmodel"
+  },
+  "en-ja": {
+    "from_code": "en",
+    "to_code": "ja",
+    "package_version": "1.1",
+    "sha256": "16300cc4eaa85320520cabcf433b63d01be40ef6966251de72043a083408f716",
+    "url": "https://argos-net.com/v1/translate-en_ja-1_1.argosmodel"
+  }
+}

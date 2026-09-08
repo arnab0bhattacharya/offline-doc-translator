@@ -47,10 +47,16 @@ def check_privileges():
             pass
 
 
-def verify_package_archive(archive_path: str) -> Tuple[bool, str]:
+TRUSTED_PACKAGE_HASHES = {
+    ("ja", "en"): "623e3477959a815eb0a5ef53e09079ae8f1f9d3bbcd230473baf28c03fb83335",
+    ("en", "ja"): "16300cc4eaa85320520cabcf433b63d01be40ef6966251de72043a083408f716",
+}
+
+
+def verify_package_archive(archive_path: str, expected_hash: Optional[str] = None) -> Tuple[bool, str]:
     """
     Validates the downloaded .argosmodel package archive:
-    1. Computes SHA-256 digest.
+    1. Computes SHA-256 digest and verifies against expected_hash (if provided).
     2. Validates zip file integrity.
     3. Prevents path traversal vulnerabilities.
     """
@@ -63,6 +69,12 @@ def verify_package_archive(archive_path: str) -> Tuple[bool, str]:
             for chunk in iter(lambda: f.read(65536), b""):
                 sha256.update(chunk)
         digest = sha256.hexdigest()
+
+        if expected_hash and digest.lower() != expected_hash.strip().lower():
+            log(f"[!] Security Error: Package SHA-256 mismatch!\n"
+                f"    Expected: {expected_hash.lower()}\n"
+                f"    Actual:   {digest.lower()}")
+            return False, digest
 
         with zipfile.ZipFile(archive_path, "r") as zf:
             if zf.testzip() is not None:
@@ -116,7 +128,8 @@ def install_pair(from_code: str, to_code: str) -> bool:
         log(f"[*] Downloading offline model: {target_pkg} (~100MB)...")
         download_path = target_pkg.download()
 
-        is_safe, digest = verify_package_archive(download_path)
+        expected_hash = TRUSTED_PACKAGE_HASHES.get((from_code, to_code))
+        is_safe, digest = verify_package_archive(download_path, expected_hash=expected_hash)
         if not is_safe:
             log(f"[!] Downloaded package failed integrity verification. Aborting installation.")
             if os.path.exists(download_path):

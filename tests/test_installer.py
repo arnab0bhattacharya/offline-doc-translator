@@ -42,6 +42,14 @@ class TestInstallerSecurity(unittest.TestCase):
         self.assertTrue(is_safe)
         self.assertEqual(len(digest), 64)  # 64-char hex SHA-256
 
+        # With matching expected_hash
+        is_safe_match, _ = verify_package_archive(zip_path, expected_hash=digest)
+        self.assertTrue(is_safe_match)
+
+        # With mismatching expected_hash
+        is_safe_mismatch, _ = verify_package_archive(zip_path, expected_hash="0000000000000000000000000000000000000000000000000000000000000000")
+        self.assertFalse(is_safe_mismatch)
+
     def test_verify_package_archive_corrupt(self):
         corrupt_path = os.path.join(self.test_dir, "corrupt.argosmodel")
         with open(corrupt_path, "wb") as f:

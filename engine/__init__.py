@@ -31,6 +31,7 @@ from .core import (
     mask_glossary_terms,
     hash_text,
     TranslationEngine,
+    TranslationResult,
 )
 from .run_job import execute_translation
 
@@ -51,6 +52,7 @@ __all__ = [
     "DIRECTIONS",
     "CACHE_TTL_DAYS",
     "TranslationMode",
+    "TranslationResult",
     "contains_japanese",
     "contains_latin",
     "should_translate",

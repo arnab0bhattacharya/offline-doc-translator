@@ -15,7 +15,7 @@ import shutil
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from unittest.mock import patch
-from engine.core import TranslationEngine, hash_text
+from engine.core import TranslationEngine, hash_text, TranslationResult
 from engine.errors import ErrorCode, TranslatorError
 from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
 from formats.base import (
@@ -47,10 +47,10 @@ class MockTranslationEngine(TranslationEngine):
         if log_cb:
             log_cb(f"Mock translating: {text[:20]}")
         if direction == "ja2en":
-            return f"[EN: {text}]", True, False
+            return TranslationResult(f"[EN: {text}]", True, False, elapsed=0.01, source_backend="mock")
         elif direction == "en2ja":
-            return f"[JA: {text}]", True, False
-        return text, False, False
+            return TranslationResult(f"[JA: {text}]", True, False, elapsed=0.01, source_backend="mock")
+        return TranslationResult(text, False, False, elapsed=0.0, source_backend="mock")
 
 
 class TestFormatHandlers(unittest.TestCase):

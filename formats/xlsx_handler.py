@@ -16,7 +16,13 @@ import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
 from formats.base import BaseFormatHandler, XML_TAG_ATTRS
-from engine.core import escape_xml, unescape_xml, hash_text, should_translate
+from engine.core import (
+    escape_xml,
+    unescape_xml,
+    hash_text,
+    should_translate,
+    TranslationResult,
+)
 from engine.errors import ErrorCode, TranslatorError
 
 
@@ -192,7 +198,7 @@ class XLSXHandler(BaseFormatHandler):
                         context = f"Sheet: {sheet_name} | Row context: {row_context_str}" if row_context_str else f"Sheet: {sheet_name}"
                         chunk_id = f"{cell['ref']}_{hash_text(raw_text)[:6]}"
 
-                        translated_text, was_translated, was_reverted = self.engine.translate_chunk(
+                        result = self.engine.translate_chunk(
                             text=raw_text,
                             direction=direction,
                             context=context,
@@ -201,13 +207,15 @@ class XLSXHandler(BaseFormatHandler):
                             review_log_path=review_log_path,
                             log_cb=log_cb
                         )
+                        if isinstance(result, tuple):
+                            result = TranslationResult(*result)
 
                         if cancel_event and cancel_event.is_set():
                             raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
-                        if was_translated:
+                        if result.was_translated:
                             stats["translated"] += 1
-                            escaped_text = escape_xml(translated_text)
+                            escaped_text = escape_xml(result.text)
                             new_cell_xml = (
                                 f'<c r="{cell["ref"]}" t="inlineStr"{cell["style_attr"]}>'
                                 f'<is><t xml:space="preserve">{escaped_text}</t></is>'
@@ -216,7 +224,7 @@ class XLSXHandler(BaseFormatHandler):
                             new_row_content += new_cell_xml
                             last_idx = cell["end"]
                             continue
-                        elif was_reverted:
+                        elif result.was_reverted:
                             stats["reverted"] += 1
                     else:
                         stats["skipped"] += 1

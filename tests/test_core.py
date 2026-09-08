@@ -29,6 +29,7 @@ from engine.core import (
     build_prompts,
     TranslationEngine,
     TranslationMode,
+    TranslationResult,
     CACHE_TTL_DAYS,
 )
 
@@ -336,6 +337,72 @@ class TestCoreEngine(unittest.TestCase):
             new_engine.load_cache("ja2en")
             new_bucket = new_engine._get_direction_cache("ja2en")
             self.assertEqual(len(new_bucket), 0)
+
+    def test_translation_result_dataclass_properties(self):
+        """Validates TranslationResult attributes, indexing, and unpacking."""
+        res = TranslationResult(
+            text="Translated Text",
+            was_translated=True,
+            was_reverted=False,
+            elapsed=0.42,
+            source_backend="nmt"
+        )
+        self.assertEqual(res.text, "Translated Text")
+        self.assertTrue(res.was_translated)
+        self.assertFalse(res.was_reverted)
+        self.assertEqual(res.elapsed, 0.42)
+        self.assertEqual(res.source_backend, "nmt")
+
+        # Tuple unpacking
+        text, was_trans, was_rev = res
+        self.assertEqual(text, "Translated Text")
+        self.assertTrue(was_trans)
+        self.assertFalse(was_rev)
+
+        # Index access
+        self.assertEqual(res[0], "Translated Text")
+        self.assertEqual(res[1], True)
+        self.assertEqual(res[2], False)
+
+    def test_translate_chunk_returns_translation_result(self):
+        """Verifies translate_chunk returns a TranslationResult instance with source_backend and telemetry."""
+        class FakeNMT:
+            def is_ready(self, direction):
+                return True
+            def translate_single(self, text, direction):
+                return f"[NMT: {text}]"
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            engine = TranslationEngine(
+                mode=TranslationMode.FAST_NMT,
+                cache_file=cache_file,
+            )
+            engine._nmt_backend = FakeNMT()
+
+            # 1. First translation via NMT
+            res = engine.translate_chunk("これはテストです。", "ja2en")
+            self.assertIsInstance(res, TranslationResult)
+            self.assertTrue(res.was_translated)
+            self.assertFalse(res.was_reverted)
+            self.assertEqual(res.source_backend, "nmt")
+            self.assertIn("[NMT:", res.text)
+            self.assertGreaterEqual(res.elapsed, 0.0)
+
+            # 2. Second translation via cache hit
+            res2 = engine.translate_chunk("これはテストです。", "ja2en")
+            self.assertIsInstance(res2, TranslationResult)
+            self.assertTrue(res2.was_translated)
+            self.assertFalse(res2.was_reverted)
+            self.assertEqual(res2.source_backend, "cache")
+            self.assertEqual(res2.elapsed, 0.0)
+
+            # 3. Skipped text (not translatable)
+            res3 = engine.translate_chunk("12345", "ja2en")
+            self.assertIsInstance(res3, TranslationResult)
+            self.assertFalse(res3.was_translated)
+            self.assertFalse(res3.was_reverted)
+            self.assertEqual(res3.text, "12345")
 
 
 if __name__ == "__main__":

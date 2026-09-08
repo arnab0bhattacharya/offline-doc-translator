@@ -13,7 +13,13 @@ import zipfile
 import tempfile
 import threading
 
-from engine.core import escape_xml, unescape_xml, hash_text, should_translate
+from engine.core import (
+    escape_xml,
+    unescape_xml,
+    hash_text,
+    should_translate,
+    TranslationResult,
+)
 from engine.errors import ErrorCode, TranslatorError
 from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
 
@@ -280,7 +286,7 @@ class BaseFormatHandler(ABC):
         context_str = context(full_text) if callable(context) else context
         chunk_id = hash_text(full_text)[:8]
 
-        translated_text, was_translated, was_reverted = self.engine.translate_chunk(
+        result = self.engine.translate_chunk(
             text=full_text,
             direction=direction,
             context=context_str,
@@ -289,11 +295,13 @@ class BaseFormatHandler(ABC):
             review_log_path=review_log_path,
             log_cb=log_cb,
         )
+        if isinstance(result, tuple):
+            result = TranslationResult(*result)
 
         if cancel_event and cancel_event.is_set():
             raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
-        if was_reverted:
+        if result.was_reverted:
             stats["reverted"] += 1
             if recent_paragraphs is not None:
                 recent_paragraphs.append(full_text.strip())
@@ -301,12 +309,12 @@ class BaseFormatHandler(ABC):
                     recent_paragraphs.pop(0)
             return None
 
-        if was_translated:
+        if result.was_translated:
             stats["translated"] += 1
-            escaped_translation = escape_xml(translated_text)
+            escaped_translation = escape_xml(result.text)
 
             if recent_paragraphs is not None:
-                recent_paragraphs.append(translated_text.strip())
+                recent_paragraphs.append(result.text.strip())
                 if len(recent_paragraphs) > 2:
                     recent_paragraphs.pop(0)
 

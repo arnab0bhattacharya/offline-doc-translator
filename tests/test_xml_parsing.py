@@ -15,7 +15,7 @@ import threading
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from engine.core import TranslationEngine, escape_xml, unescape_xml
+from engine.core import TranslationEngine, escape_xml, unescape_xml, TranslationResult
 from engine.errors import ErrorCode, TranslatorError
 from formats.base import BaseFormatHandler, XML_TAG_ATTRS
 from formats.docx_handler import DOCXHandler
@@ -37,8 +37,8 @@ class MockXMLTranslationEngine(TranslationEngine):
         self.received_texts.append(text)
         self.received_contexts.append(context)
         if self.should_revert:
-            return text, False, True
-        return f"{self.translation_prefix}{text}]", True, False
+            return TranslationResult(text, False, True, elapsed=0.01, source_backend="mock")
+        return TranslationResult(f"{self.translation_prefix}{text}]", True, False, elapsed=0.01, source_backend="mock")
 
 
 class TestXMLParsingEdgeCases(unittest.TestCase):

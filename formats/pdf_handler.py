@@ -16,7 +16,7 @@ import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
 from formats.base import BaseFormatHandler
-from engine.core import hash_text, should_translate
+from engine.core import hash_text, should_translate, TranslationResult
 from engine.errors import ErrorCode, TranslatorError
 
 
@@ -169,7 +169,7 @@ class PDFHandler(BaseFormatHandler):
 
                     chunk_id = f"p{page_num}_b{block_no}_{hash_text(clean_text)[:6]}"
 
-                    trans_text, was_translated, was_reverted = self.engine.translate_chunk(
+                    result = self.engine.translate_chunk(
                         text=clean_text,
                         direction=direction,
                         context=page_context,
@@ -178,19 +178,21 @@ class PDFHandler(BaseFormatHandler):
                         review_log_path=review_log_path,
                         log_cb=log_cb
                     )
+                    if isinstance(result, tuple):
+                        result = TranslationResult(*result)
 
                     if cancel_event and cancel_event.is_set():
                         raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
-                    if was_reverted:
+                    if result.was_reverted:
                         stats["reverted"] += 1
                         continue
 
-                    if was_translated:
+                    if result.was_translated:
                         stats["translated"] += 1
                         translated_blocks.append({
                             "rect": fitz.Rect(x0, y0, x1, y1),
-                            "text": trans_text,
+                            "text": result.text,
                             "original": clean_text,
                             "block_no": block_no
                         })

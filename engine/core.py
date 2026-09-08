@@ -19,6 +19,7 @@ from collections import Counter
 import psutil
 import requests
 from enum import Enum
+from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, Any, List, Callable
 
 from .errors import ErrorCode, TranslatorError
@@ -28,6 +29,23 @@ DIRECTIONS = ("ja2en", "en2ja")
 PLACEHOLDER_PATTERN = re.compile(r"\[\[[A-Z][A-Z_0-9]*\]\]")
 CACHE_TTL_DAYS = 30
 
+
+@dataclass
+class TranslationResult:
+    """Encapsulates the result and telemetry of translating a text chunk."""
+    text: str
+    was_translated: bool
+    was_reverted: bool
+    elapsed: float = 0.0
+    source_backend: str = ""  # "nmt", "llm", "cache"
+
+    def __iter__(self):
+        """Supports backward-compatible unpacking: (text, was_translated, was_reverted) = result."""
+        return iter((self.text, self.was_translated, self.was_reverted))
+
+    def __getitem__(self, index):
+        """Supports index-based tuple access for backward compatibility."""
+        return (self.text, self.was_translated, self.was_reverted)[index]
 
 
 class TranslationMode(str, Enum):
@@ -530,13 +548,13 @@ class TranslationEngine:
         chunk_id: str = "0",
         review_log_path: Optional[str] = None,
         log_cb: Optional[Callable[[str], None]] = None
-    ) -> Tuple[str, bool, bool]:
+    ) -> TranslationResult:
         """
         Translates a single piece of text according to the selected TranslationMode.
-        Returns: (result_text, was_translated, was_reverted)
+        Returns: TranslationResult(text, was_translated, was_reverted, elapsed, source_backend)
         """
         if not should_translate(text, direction):
-            return text, False, False
+            return TranslationResult(text=text, was_translated=False, was_reverted=False)
 
         glossary_masked_text, glossary_map = mask_glossary_terms(text, self.glossary)
         masked_text, number_map = mask_numbers(glossary_masked_text)
@@ -555,7 +573,13 @@ class TranslationEngine:
                 preview_res = (final_cached[:24] + "..") if len(final_cached) > 26 else final_cached
                 if log_cb:
                     log_cb(f"  [⚡ Cache] {location_id}: \"{preview_src}\" => \"{preview_res}\"")
-                return final_cached, True, False
+                return TranslationResult(
+                    text=final_cached,
+                    was_translated=True,
+                    was_reverted=False,
+                    elapsed=0.0,
+                    source_backend="cache",
+                )
             del dir_cache[key]
 
         # 2. Check runtime failure tracker
@@ -564,7 +588,7 @@ class TranslationEngine:
                 log_cb(f"  [⏩ Skipped] {location_id}")
             if review_log_path:
                 self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-            return text, False, True
+            return TranslationResult(text=text, was_translated=False, was_reverted=True)
 
         preview_src = (text[:30] + "..") if len(text) > 32 else text
 
@@ -585,21 +609,38 @@ class TranslationEngine:
                         path_tag = "⚡ Fast NMT"
                         if log_cb:
                             log_cb(f"  [{path_tag} in {elapsed:.2f}s] {location_id}: \"{preview_src}\" => \"{preview_res}\"")
-                        return final_trans, True, False
+                        return TranslationResult(
+                            text=final_trans,
+                            was_translated=True,
+                            was_reverted=False,
+                            elapsed=elapsed,
+                            source_backend="nmt",
+                        )
                     else:
                         self.failed_this_run.add(key)
                         if log_cb:
                             log_cb(f"  [⚠ Skipped] {location_id}: NMT output dropped placeholder(s). Original kept.")
                         if review_log_path:
                             self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-                        return text, False, True
+                        return TranslationResult(
+                            text=text,
+                            was_translated=False,
+                            was_reverted=True,
+                            elapsed=elapsed,
+                            source_backend="nmt",
+                        )
                 except Exception as e:
                     if log_cb:
                         log_cb(f"  [-] NMT translation error for {location_id}: {e}. Original kept.")
                     self.failed_this_run.add(key)
                     if review_log_path:
                         self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-                    return text, False, True
+                    return TranslationResult(
+                        text=text,
+                        was_translated=False,
+                        was_reverted=True,
+                        source_backend="nmt",
+                    )
 
             if not nmt_ready:
                 raise TranslatorError(ErrorCode.E08, detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed.")
@@ -618,7 +659,7 @@ class TranslationEngine:
             self.failed_this_run.add(key)
             if review_log_path:
                 self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-            return text, False, True
+            return TranslationResult(text=text, was_translated=False, was_reverted=True)
 
         # Standard LLM translate with isomorphic retry
         llm_result, elapsed = self.llm_backend.translate_single(
@@ -637,7 +678,13 @@ class TranslationEngine:
             preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
             if log_cb:
                 log_cb(f"  [✓ Done in {elapsed:.1f}s] \"{preview_src}\" => \"{preview_res}\"")
-            return final_trans, True, False
+            return TranslationResult(
+                text=final_trans,
+                was_translated=True,
+                was_reverted=False,
+                elapsed=elapsed,
+                source_backend="llm",
+            )
 
         # ================= Fallback: Revert & Log =================
         if log_cb:
@@ -646,4 +693,10 @@ class TranslationEngine:
         if review_log_path:
             self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
 
-        return text, False, True
+        return TranslationResult(
+            text=text,
+            was_translated=False,
+            was_reverted=True,
+            elapsed=elapsed,
+            source_backend="llm",
+        )

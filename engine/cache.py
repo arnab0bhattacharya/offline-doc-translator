@@ -3,17 +3,118 @@ engine/cache.py
 ===============
 Modular translation caching subsystem.
 Provides abstract TranslationCache interface, JSONFileCache with atomic writes and TTL,
-and NullCache for ephemeral/privacy-sensitive sessions.
+EncryptedFileCache for encrypted-at-rest persistence, and NullCache for ephemeral sessions.
 """
 
 from abc import ABC, abstractmethod
 import os
+import sys
 import json
 import time
+import uuid
+import base64
+import getpass
+import platform
+import logging
 import tempfile
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, Union
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    HAS_CRYPTOGRAPHY = True
+except ImportError:
+    HAS_CRYPTOGRAPHY = False
+    Fernet = None
+    InvalidToken = Exception
+    PBKDF2HMAC = None
+    hashes = None
 
 CACHE_TTL_DAYS = 30
+CACHE_SALT_DEFAULT = b"offline-doc-translator-cache-salt-v1"
+
+
+def derive_machine_key(salt: Optional[bytes] = None) -> bytes:
+    """
+    Derives a deterministic, machine- and user-bound 32-byte urlsafe base64 Fernet key.
+    Combines Windows MachineGuid (if on Windows), hardware node UUID, platform hostname,
+    and current OS username, then hashes via PBKDF2HMAC (SHA-256, 100,000 iterations).
+    """
+    if not HAS_CRYPTOGRAPHY or PBKDF2HMAC is None or hashes is None:
+        raise RuntimeError("The 'cryptography' library is required to derive a Fernet key.")
+
+    parts = []
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as rk:
+                guid, _ = winreg.QueryValueEx(rk, "MachineGuid")
+                parts.append(str(guid))
+        except Exception:
+            pass
+
+    try:
+        parts.append(str(uuid.getnode()))
+    except Exception:
+        pass
+
+    parts.append(platform.node() or os.environ.get("COMPUTERNAME", ""))
+    parts.append(getpass.getuser() or os.environ.get("USERNAME", ""))
+
+    material = ":".join(parts).encode("utf-8")
+    salt = salt or CACHE_SALT_DEFAULT
+
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100_000,
+    )
+    return base64.urlsafe_b64encode(kdf.derive(material))
+
+
+def derive_fernet_key(
+    key_material: Optional[Union[str, bytes]] = None,
+    salt: Optional[bytes] = None,
+) -> bytes:
+    """
+    Normalizes or derives a valid 32-byte urlsafe base64-encoded Fernet key.
+    - If key_material is None, calls derive_machine_key(salt).
+    - If key_material is already a 44-byte urlsafe base64 string/bytes decodable to 32 bytes, returns it as bytes.
+    - If key_material is raw 32 bytes, returns base64.urlsafe_b64encode(key_material).
+    - Otherwise, treats key_material as a passphrase and derives a 32-byte key via PBKDF2HMAC.
+    """
+    if not HAS_CRYPTOGRAPHY:
+        raise RuntimeError("The 'cryptography' library is required to derive a Fernet key.")
+
+    if key_material is None:
+        return derive_machine_key(salt=salt)
+
+    if isinstance(key_material, str):
+        key_material = key_material.encode("utf-8")
+
+    # If it's already a 44-byte base64url Fernet key
+    if len(key_material) == 44:
+        try:
+            decoded = base64.urlsafe_b64decode(key_material)
+            if len(decoded) == 32:
+                return key_material
+        except Exception:
+            pass
+
+    # If it's 32 raw bytes
+    if len(key_material) == 32:
+        return base64.urlsafe_b64encode(key_material)
+
+    salt = salt or CACHE_SALT_DEFAULT
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100_000,
+    )
+    return base64.urlsafe_b64encode(kdf.derive(key_material))
 
 
 class TranslationCache(ABC):
@@ -275,3 +376,111 @@ class NullCache(TranslationCache):
 
     def get_bucket(self, direction: str, fingerprint: str, mode: str = "default") -> Dict[str, str]:
         return {}
+
+
+class EncryptedFileCache(JSONFileCache):
+    """
+    Encrypted file-backed persistent translation cache.
+    Uses cryptography.fernet with a machine-derived or user-specified key to encrypt
+    the cache at rest. Transparently handles atomic writes, TTL pruning, and falls back
+    to plaintext JSON if cryptography is unavailable or when reading legacy cache files.
+    """
+
+    def __init__(
+        self,
+        cache_file: str = "translation_cache.enc",
+        key: Optional[Union[str, bytes]] = None,
+        ttl_days: int = CACHE_TTL_DAYS,
+        fallback_to_plain: bool = True,
+    ):
+        super().__init__(cache_file=cache_file, ttl_days=ttl_days)
+        self.key = key
+        self.fallback_to_plain = fallback_to_plain
+        self.fernet: Optional[Any] = None
+        self._crypto_available: bool = HAS_CRYPTOGRAPHY
+
+        if HAS_CRYPTOGRAPHY:
+            try:
+                key_material = key if key is not None else os.environ.get("TRANSLATION_CACHE_KEY")
+                derived_key = derive_fernet_key(key_material)
+                self.fernet = Fernet(derived_key)
+            except Exception as e:
+                if not fallback_to_plain:
+                    raise
+                logging.warning("[!] Failed to initialize cache encryption (%s); falling back to plaintext.", e)
+                self.fernet = None
+        else:
+            if not fallback_to_plain:
+                raise RuntimeError("The 'cryptography' library is required for EncryptedFileCache but is not installed.")
+            logging.warning("[!] 'cryptography' library is not available; EncryptedFileCache operating in plaintext fallback mode.")
+
+    def load(self, direction: Optional[str] = None) -> None:
+        """Loads and decrypts cache file from disk, automatically triggering once-per-day TTL prune."""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, "rb") as f:
+                    raw_bytes = f.read()
+
+                if not raw_bytes:
+                    self._data = {}
+                elif self.fernet is not None:
+                    stripped = raw_bytes.lstrip()
+                    # Backward compatibility: if the file is plaintext JSON, load it directly
+                    if stripped.startswith(b"{") or stripped.startswith(b"["):
+                        self._data = json.loads(raw_bytes.decode("utf-8"))
+                    else:
+                        try:
+                            decrypted = self.fernet.decrypt(raw_bytes)
+                            self._data = json.loads(decrypted.decode("utf-8"))
+                        except (InvalidToken, Exception) as decrypt_err:
+                            logging.warning(
+                                "[!] Warning: Failed to decrypt cache file '%s' (%s). Initializing fresh cache.",
+                                self.cache_file,
+                                decrypt_err,
+                            )
+                            self._data = {}
+                else:
+                    self._data = json.loads(raw_bytes.decode("utf-8"))
+            except Exception as e:
+                logging.warning("[!] Warning: Failed to load cache file '%s': %s", self.cache_file, e)
+                self._data = {}
+        else:
+            self._data = {}
+        self._loaded = True
+
+        # Prune stale entries at most once per day
+        meta = self._data.get("_meta", {})
+        last_prune = meta.get("last_prune", 0)
+        now = time.time()
+        if now - last_prune > 86400:
+            pruned = self.prune(now)
+            self._data.setdefault("_meta", {})["last_prune"] = now
+            if pruned > 0:
+                self.save()
+
+    def save(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+        """Atomically persists encrypted cache payload to disk."""
+        cache_dir = os.path.dirname(os.path.abspath(self.cache_file))
+        temp_file = None
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            fd, temp_file = tempfile.mkstemp(prefix=".translation_cache_enc_", suffix=".tmp", dir=cache_dir)
+            plaintext = json.dumps(self._data, ensure_ascii=False, indent=2).encode("utf-8")
+            if self.fernet is not None:
+                payload = self.fernet.encrypt(plaintext)
+            else:
+                payload = plaintext
+
+            with os.fdopen(fd, "wb") as f:
+                f.write(payload)
+            os.replace(temp_file, self.cache_file)
+        except Exception as e:
+            if log_cb:
+                log_cb(f"[!] Warning: Failed to save encrypted translation cache: {e}")
+            logging.warning("[!] Warning: Failed to save encrypted translation cache: %s", e)
+        finally:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except OSError:
+                    pass

@@ -20,11 +20,11 @@ import psutil
 import requests
 from enum import Enum
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, Any, List, Callable
+from typing import Dict, Tuple, Optional, Any, List, Callable, Union
 
 from .errors import ErrorCode, TranslatorError
 from .backend_base import TranslationBackend
-from .cache import TranslationCache, JSONFileCache, NullCache, CACHE_TTL_DAYS
+from .cache import TranslationCache, JSONFileCache, NullCache, EncryptedFileCache, CACHE_TTL_DAYS
 from .logging import TranslationLogger, TranslationLogEvent, get_logger
 
 # Supported translation directions
@@ -292,6 +292,8 @@ class TranslationEngine:
         backend: Optional[TranslationBackend] = None,
         cache: Optional[TranslationCache] = None,
         logger: Optional[TranslationLogger] = None,
+        encrypted_cache: bool = False,
+        cache_key: Optional[Union[str, bytes]] = None,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -310,6 +312,12 @@ class TranslationEngine:
 
         if cache is not None:
             self._cache_mgr = cache
+        elif encrypted_cache:
+            self._cache_mgr = EncryptedFileCache(
+                cache_file=cache_file,
+                key=cache_key,
+                ttl_days=cache_ttl_days,
+            )
         else:
             self._cache_mgr = JSONFileCache(cache_file=cache_file, ttl_days=cache_ttl_days)
 

@@ -16,7 +16,14 @@ from .preflight import (
 from .backend_nmt import NMTBackend
 from .backend_llm import LLMBackend
 from .backend_base import TranslationBackend
-from .cache import TranslationCache, JSONFileCache, NullCache
+from .cache import (
+    TranslationCache,
+    JSONFileCache,
+    NullCache,
+    EncryptedFileCache,
+    derive_machine_key,
+    derive_fernet_key,
+)
 from .logging import TranslationLogger, TranslationLogEvent, get_logger
 from .core import (
     DIRECTIONS,
@@ -62,6 +69,9 @@ __all__ = [
     "TranslationCache",
     "JSONFileCache",
     "NullCache",
+    "EncryptedFileCache",
+    "derive_machine_key",
+    "derive_fernet_key",
     "TranslationLogger",
     "TranslationLogEvent",
     "get_logger",

@@ -15,7 +15,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from engine.cache import TranslationCache, JSONFileCache, NullCache, CACHE_TTL_DAYS
+from engine.cache import (
+    TranslationCache,
+    JSONFileCache,
+    NullCache,
+    EncryptedFileCache,
+    derive_machine_key,
+    derive_fernet_key,
+    CACHE_TTL_DAYS,
+    HAS_CRYPTOGRAPHY,
+)
 from engine.core import TranslationEngine, TranslationMode, TranslationResult
 
 
@@ -208,6 +217,260 @@ class TestEngineCacheIntegration(unittest.TestCase):
         # 3. Save cache forwards to custom cache save()
         engine.save_cache_atomically()
         self.assertEqual(custom_cache.save_calls, 1)
+
+
+class TestKeyDerivation(unittest.TestCase):
+    """Verifies machine-bound and explicit Fernet key derivation routines."""
+
+    def test_derive_machine_key(self):
+        key1 = derive_machine_key()
+        key2 = derive_machine_key()
+        self.assertEqual(key1, key2)
+        self.assertEqual(len(key1), 44)
+
+        # Different salt produces different key
+        key3 = derive_machine_key(salt=b"custom-salt-12345678")
+        self.assertNotEqual(key1, key3)
+        self.assertEqual(len(key3), 44)
+
+    def test_derive_fernet_key_with_explicit_keys(self):
+        from cryptography.fernet import Fernet
+        # 1. Native 44-char urlsafe base64 Fernet key
+        gen_key = Fernet.generate_key()
+        derived = derive_fernet_key(gen_key)
+        self.assertEqual(derived, gen_key)
+
+        # 2. Raw 32 bytes
+        raw_32 = b"12345678901234567890123456789012"
+        derived_raw = derive_fernet_key(raw_32)
+        self.assertEqual(len(derived_raw), 44)
+        Fernet(derived_raw)
+
+        # 3. Arbitrary passphrase string
+        passphrase = "my-secret-vault-passphrase"
+        derived_pass = derive_fernet_key(passphrase)
+        self.assertEqual(len(derived_pass), 44)
+        Fernet(derived_pass)
+
+        # 4. None falls back to machine key
+        derived_none = derive_fernet_key(None)
+        self.assertEqual(derived_none, derive_machine_key())
+
+
+class TestEncryptedFileCache(unittest.TestCase):
+    """Verifies EncryptedFileCache CRUD, atomic encryption at rest, and resilience."""
+
+    def test_put_get_delete(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.enc")
+            cache = EncryptedFileCache(cache_file=cache_file)
+
+            self.assertIsNone(cache.get("h1", "ja2en", "fp1", mode="fast_nmt"))
+            cache.put("h1", "ja2en", "fp1", "Secret Translated Text", mode="fast_nmt")
+            self.assertEqual(cache.get("h1", "ja2en", "fp1", mode="fast_nmt"), "Secret Translated Text")
+
+            deleted = cache.delete("h1", "ja2en", "fp1", mode="fast_nmt")
+            self.assertTrue(deleted)
+            self.assertIsNone(cache.get("h1", "ja2en", "fp1", mode="fast_nmt"))
+
+    def test_ciphertext_on_disk_is_encrypted_not_plaintext(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.enc")
+            cache = EncryptedFileCache(cache_file=cache_file)
+            cache.put("secret_k", "ja2en", "fp1", "TOP SECRET TRANSLATION", mode="fast_nmt")
+            cache.save()
+
+            self.assertTrue(os.path.exists(cache_file))
+            with open(cache_file, "rb") as f:
+                raw_bytes = f.read()
+
+            # Verify it is Fernet ciphertext (starts with standard Fernet version header gAAAAA)
+            self.assertTrue(raw_bytes.startswith(b"gAAAAA"))
+            self.assertNotIn(b"TOP SECRET TRANSLATION", raw_bytes)
+            self.assertNotIn(b"secret_k", raw_bytes)
+
+            # Plain JSON parser must fail
+            with self.assertRaises(json.JSONDecodeError):
+                json.loads(raw_bytes.decode("utf-8"))
+
+    def test_save_and_reload_with_explicit_key(self):
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key()
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.enc")
+            cache1 = EncryptedFileCache(cache_file=cache_file, key=key)
+            cache1.put("k1", "en2ja", "fpA", "秘密の翻訳", mode="pure_llm")
+            cache1.save()
+
+            # Reload with same key
+            cache2 = EncryptedFileCache(cache_file=cache_file, key=key)
+            cache2.load("en2ja")
+            self.assertEqual(cache2.get("k1", "en2ja", "fpA", mode="pure_llm"), "秘密の翻訳")
+
+    def test_save_and_reload_with_machine_derived_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.enc")
+            cache1 = EncryptedFileCache(cache_file=cache_file, key=None)
+            cache1.put("k_auto", "ja2en", "fpB", "Auto Key Text", mode="fast_nmt")
+            cache1.save()
+
+            cache2 = EncryptedFileCache(cache_file=cache_file, key=None)
+            cache2.load("ja2en")
+            self.assertEqual(cache2.get("k_auto", "ja2en", "fpB", mode="fast_nmt"), "Auto Key Text")
+
+    def test_reload_with_wrong_key_fails_gracefully(self):
+        from cryptography.fernet import Fernet
+        key1 = Fernet.generate_key()
+        key2 = Fernet.generate_key()
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.enc")
+            cache1 = EncryptedFileCache(cache_file=cache_file, key=key1)
+            cache1.put("k1", "ja2en", "fp", "Data", mode="fast_nmt")
+            cache1.save()
+
+            # Attempt loading with key2: must not raise, should reset to empty cache
+            cache2 = EncryptedFileCache(cache_file=cache_file, key=key2)
+            cache2.load()
+            self.assertEqual([k for k in cache2.data if not k.startswith("_")], [])
+            self.assertIsNone(cache2.get("k1", "ja2en", "fp", mode="fast_nmt"))
+
+    def test_corrupt_file_recovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.enc")
+            with open(cache_file, "wb") as f:
+                f.write(b"NOT_A_VALID_FERNET_TOKEN_GARBAGE_BYTES")
+
+            cache = EncryptedFileCache(cache_file=cache_file)
+            cache.load()
+            self.assertEqual([k for k in cache.data if not k.startswith("_")], [])
+            self.assertIsNone(cache.get("any_key", "ja2en", "fp", mode="fast_nmt"))
+
+    def test_plaintext_json_backward_compatibility(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            # Write a plain JSON cache file
+            plain_data = {
+                "_meta": {"last_prune": 0},
+                "fast_nmt": {
+                    "ja2en": {
+                        "fp_legacy": {
+                            "legacy_key": "Plain Legacy Translation"
+                        }
+                    }
+                }
+            }
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(plain_data, f)
+
+            # EncryptedFileCache should transparently load plain JSON
+            cache = EncryptedFileCache(cache_file=cache_file)
+            cache.load()
+            self.assertEqual(cache.get("legacy_key", "ja2en", "fp_legacy", mode="fast_nmt"), "Plain Legacy Translation")
+
+            # Subsequent save re-encrypts the file
+            cache.save()
+            with open(cache_file, "rb") as f:
+                saved_bytes = f.read()
+            self.assertTrue(saved_bytes.startswith(b"gAAAAA"))
+
+    def test_clear_writes_encrypted_empty_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.enc")
+            cache = EncryptedFileCache(cache_file=cache_file)
+            cache.put("k1", "ja2en", "fp", "Data", mode="fast_nmt")
+            cache.save()
+
+            cache.clear()
+            self.assertEqual(cache.data, {})
+
+            # Disk file is valid encrypted token containing empty dict
+            with open(cache_file, "rb") as f:
+                saved_bytes = f.read()
+            self.assertTrue(saved_bytes.startswith(b"gAAAAA"))
+
+            # Reload to verify
+            cache_reloaded = EncryptedFileCache(cache_file=cache_file)
+            cache_reloaded.load()
+            self.assertEqual([k for k in cache_reloaded.data if not k.startswith("_")], [])
+            self.assertIsNone(cache_reloaded.get("k1", "ja2en", "fp", mode="fast_nmt"))
+
+    def test_fallback_when_cryptography_missing(self):
+        with patch("engine.cache.HAS_CRYPTOGRAPHY", False):
+            # 1. With fallback_to_plain=False, raises RuntimeError
+            with self.assertRaises(RuntimeError):
+                EncryptedFileCache(fallback_to_plain=False)
+
+            # 2. With fallback_to_plain=True, operates in plain mode
+            with tempfile.TemporaryDirectory() as td:
+                cache_file = os.path.join(td, "plain_fallback.json")
+                cache = EncryptedFileCache(cache_file=cache_file, fallback_to_plain=True)
+                self.assertIsNone(cache.fernet)
+                cache.put("k", "ja2en", "fp", "Plain Fallback", mode="fast_nmt")
+                cache.save()
+
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    content = json.load(f)
+                self.assertEqual(content["fast_nmt"]["ja2en"]["fp"]["k"], "Plain Fallback")
+
+
+class TestEngineEncryptedCacheIntegration(unittest.TestCase):
+    """Verifies TranslationEngine integration with encrypted_cache=True."""
+
+    def test_engine_encrypted_cache_end_to_end(self):
+        class MockNMT:
+            name = "nmt"
+            def __init__(self):
+                self.calls = 0
+            def is_ready(self, direction):
+                return True
+            def translate(self, text, direction, **kwargs):
+                self.calls += 1
+                return f"[NMT:{text}]", 0.01
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "engine_cache.enc")
+            backend = MockNMT()
+
+            engine1 = TranslationEngine(
+                mode=TranslationMode.FAST_NMT,
+                backend=backend,
+                encrypted_cache=True,
+                cache_file=cache_file,
+            )
+            self.assertIsInstance(engine1.cache_mgr, EncryptedFileCache)
+
+            # Translate chunk 1
+            res1 = engine1.translate_chunk("テスト文章", "ja2en")
+            self.assertEqual(res1.source_backend, "nmt")
+            self.assertEqual(backend.calls, 1)
+
+            # Translate chunk 1 again (hit memory cache)
+            res2 = engine1.translate_chunk("テスト文章", "ja2en")
+            self.assertEqual(res2.source_backend, "cache")
+            self.assertEqual(backend.calls, 1)
+
+            # Persist to disk
+            engine1.save_cache_atomically()
+
+            # Verify file on disk is encrypted
+            with open(cache_file, "rb") as f:
+                disk_bytes = f.read()
+            self.assertTrue(disk_bytes.startswith(b"gAAAAA"))
+
+            # New engine loading the encrypted cache
+            backend2 = MockNMT()
+            engine2 = TranslationEngine(
+                mode=TranslationMode.FAST_NMT,
+                backend=backend2,
+                encrypted_cache=True,
+                cache_file=cache_file,
+            )
+            engine2.cache_mgr.load()
+
+            # Translating the same chunk should now be served from disk-restored cache!
+            res3 = engine2.translate_chunk("テスト文章", "ja2en")
+            self.assertEqual(res3.source_backend, "cache")
+            self.assertEqual(backend2.calls, 0)
 
 
 if __name__ == "__main__":

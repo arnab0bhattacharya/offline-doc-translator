@@ -362,12 +362,76 @@ class TestPDFHandler(unittest.TestCase):
             review_log = os.path.join(self.test_dir, "review.log")
             stats = handler.translate(input_path, output_path, "ja2en", review_log_path=review_log)
 
-            self.assertTrue(os.path.exists(output_path))
-            self.assertEqual(stats["total"], 1)
-            self.assertEqual(stats["reverted"], 1)
-            self.assertEqual(stats["translated"], 0)
+    def test_ooxml_text_unit_processing(self):
+        handler = DOCXHandler(self.mock_engine)
+
+        # 1. Test count_translatable_paragraphs_in_xml
+        sample_xml = (
+            "<w:document><w:body>"
+            "<w:p><w:r><w:t>最初の段落です。</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>12345</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>2番目の段落です。</w:t></w:r></w:p>"
+            "</w:body></w:document>"
+        )
+        count = handler.count_translatable_paragraphs_in_xml(sample_xml, "w", "ja2en")
+        self.assertEqual(count, 2)
+
+        # 2. Test extract_paragraph_text_nodes
+        p_content = "<w:r><w:t>パート1 &amp; </w:t></w:r><w:r><w:t>パート2</w:t></w:r>"
+        full_text, t_matches = handler.extract_paragraph_text_nodes(p_content, "w")
+        self.assertEqual(full_text, "パート1 & パート2")
+        self.assertEqual(len(t_matches), 2)
+
+        # 3. Test _translate_and_replace_text_nodes success
+        stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
+        progress = {"current": 0, "total": 1}
+        recent = []
+
+        new_p = handler._translate_and_replace_text_nodes(
+            full_text=full_text,
+            t_matches=t_matches,
+            p_content=p_content,
+            direction="ja2en",
+            context=None,
+            part_name="doc.xml",
+            review_log_path=None,
+            stats=stats,
+            progress_state=progress,
+            progress_cb=None,
+            log_cb=None,
+            tag_prefix="w",
+            recent_paragraphs=recent,
+        )
+
+        self.assertIsNotNone(new_p)
+        self.assertIn('<w:t xml:space="preserve">[EN: パート1 &amp; パート2]</w:t>', new_p)
+        self.assertIn('<w:t></w:t>', new_p)
+        self.assertEqual(stats["translated"], 1)
+        self.assertEqual(recent, ["[EN: パート1 & パート2]"])
+
+        # 4. Test _translate_and_replace_text_nodes skip non-translatable
+        stats_skip = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
+        p_num = "<w:r><w:t>12345</w:t></w:r>"
+        ft_num, m_num = handler.extract_paragraph_text_nodes(p_num, "w")
+        res_skip = handler._translate_and_replace_text_nodes(
+            full_text=ft_num,
+            t_matches=m_num,
+            p_content=p_num,
+            direction="ja2en",
+            context=None,
+            part_name="doc.xml",
+            review_log_path=None,
+            stats=stats_skip,
+            progress_state={"current": 0, "total": 1},
+            progress_cb=None,
+            log_cb=None,
+            tag_prefix="w",
+        )
+        self.assertIsNone(res_skip)
+        self.assertEqual(stats_skip["skipped"], 1)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

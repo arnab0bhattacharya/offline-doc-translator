@@ -23,17 +23,10 @@ class DOCXHandler(BaseFormatHandler):
     def _count_translatable_paragraphs(self, target_files: List[Tuple[str, str]], direction: str) -> int:
         """Counts total translatable paragraphs across all Word XML parts."""
         total = 0
-        p_pattern = re.compile(r"<w:p(?: [^>]+)?>(.*?)</w:p>", re.DOTALL)
-        t_pattern = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.DOTALL)
-
         for _, file_path in target_files:
             with open(file_path, "r", encoding="utf-8") as f:
                 xml_str = f.read()
-            for p_match in p_pattern.finditer(xml_str):
-                t_matches = t_pattern.findall(p_match.group(1))
-                full_text = unescape_xml("".join(t_matches)).strip()
-                if full_text and should_translate(full_text, direction):
-                    total += 1
+            total += self.count_translatable_paragraphs_in_xml(xml_str, tag_prefix="w", direction=direction)
         return total
 
     def _process_xml_content(
@@ -48,8 +41,6 @@ class DOCXHandler(BaseFormatHandler):
         log_cb: Optional[Callable[[str], None]]
     ) -> str:
         p_pattern = re.compile(r"(<w:p(?: [^>]+)?>)(.*?)(</w:p>)", re.DOTALL)
-        t_pattern = re.compile(r"(<w:t(?:\s[^>]*)?>)(.*?)(</w:t>)", re.DOTALL)
-
         recent_paragraphs: List[str] = []
 
         def p_repl(match):
@@ -57,73 +48,28 @@ class DOCXHandler(BaseFormatHandler):
             p_content = match.group(2)
             p_end = match.group(3)
 
-            t_matches = list(t_pattern.finditer(p_content))
-            if not t_matches:
-                return match.group(0)
-
-            full_text = unescape_xml("".join(m.group(2) for m in t_matches))
+            full_text, t_matches = self.extract_paragraph_text_nodes(p_content, tag_prefix="w")
             if not full_text.strip():
                 return match.group(0)
 
-            stats["total"] += 1
-
-            if not should_translate(full_text, direction):
-                stats["skipped"] += 1
-                recent_paragraphs.append(full_text.strip())
-                if len(recent_paragraphs) > 2:
-                    recent_paragraphs.pop(0)
-                return match.group(0)
-
-            progress_state["current"] += 1
-            cur_idx = progress_state["current"]
-            total_items = progress_state["total"]
-
-            if progress_cb:
-                progress_cb(
-                    cur_idx,
-                    total_items,
-                    f"[{cur_idx}/{total_items}] {part_name}: \"{full_text[:20]}..\""
-                )
-
             context_str = " | ".join(recent_paragraphs[-2:]) if recent_paragraphs else None
-            chunk_id = hash_text(full_text)[:8]
-
-            translated_text, was_translated, was_reverted = self.engine.translate_chunk(
-                text=full_text,
+            new_p_content = self._translate_and_replace_text_nodes(
+                full_text=full_text,
+                t_matches=t_matches,
+                p_content=p_content,
                 direction=direction,
                 context=context_str,
-                location_id=part_name,
-                chunk_id=chunk_id,
+                part_name=part_name,
                 review_log_path=review_log_path,
-                log_cb=log_cb
+                stats=stats,
+                progress_state=progress_state,
+                progress_cb=progress_cb,
+                log_cb=log_cb,
+                tag_prefix="w",
+                recent_paragraphs=recent_paragraphs,
             )
 
-            if was_reverted:
-                stats["reverted"] += 1
-                recent_paragraphs.append(full_text.strip())
-                if len(recent_paragraphs) > 2:
-                    recent_paragraphs.pop(0)
-                return match.group(0)
-
-            if was_translated:
-                stats["translated"] += 1
-                escaped_translation = escape_xml(translated_text)
-
-                recent_paragraphs.append(translated_text.strip())
-                if len(recent_paragraphs) > 2:
-                    recent_paragraphs.pop(0)
-
-                new_p_content = ""
-                last_idx = 0
-                for i, m in enumerate(t_matches):
-                    new_p_content += p_content[last_idx:m.start()]
-                    if i == 0:
-                        new_p_content += f'<w:t xml:space="preserve">{escaped_translation}</w:t>'
-                    else:
-                        new_p_content += '<w:t></w:t>'
-                    last_idx = m.end()
-
-                new_p_content += p_content[last_idx:]
+            if new_p_content is not None:
                 return p_start + new_p_content + p_end
 
             return match.group(0)

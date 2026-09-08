@@ -23,12 +23,9 @@ class PPTXHandler(BaseFormatHandler):
     def _extract_slide_title(self, xml_str: str) -> Optional[str]:
         """Heuristically extracts the first non-empty text paragraph (typically the title/heading)."""
         p_pattern = re.compile(r"<a:p(?: [^>]+)?>(.*?)</a:p>", re.DOTALL)
-        t_pattern = re.compile(r"<a:t(?:\s[^>]*)?>(.*?)</a:t>", re.DOTALL)
-        
         for p_match in p_pattern.finditer(xml_str):
-            p_content = p_match.group(1)
-            t_matches = t_pattern.findall(p_content)
-            full_text = unescape_xml("".join(t_matches)).strip()
+            full_text, _ = self.extract_paragraph_text_nodes(p_match.group(1), tag_prefix="a")
+            full_text = full_text.strip()
             if full_text and len(full_text) > 2:
                 return full_text
         return None
@@ -36,9 +33,6 @@ class PPTXHandler(BaseFormatHandler):
     def _count_translatable_paragraphs(self, slides_path: str, direction: str) -> int:
         """Counts total translatable paragraphs across all slides."""
         total = 0
-        p_pattern = re.compile(r"<a:p(?: [^>]+)?>(.*?)</a:p>", re.DOTALL)
-        t_pattern = re.compile(r"<a:t(?:\s[^>]*)?>(.*?)</a:t>", re.DOTALL)
-
         if not os.path.exists(slides_path):
             return 0
 
@@ -47,11 +41,7 @@ class PPTXHandler(BaseFormatHandler):
                 continue
             with open(os.path.join(slides_path, f), "r", encoding="utf-8") as file:
                 xml_str = file.read()
-            for p_match in p_pattern.finditer(xml_str):
-                t_matches = t_pattern.findall(p_match.group(1))
-                full_text = unescape_xml("".join(t_matches)).strip()
-                if full_text and should_translate(full_text, direction):
-                    total += 1
+            total += self.count_translatable_paragraphs_in_xml(xml_str, tag_prefix="a", direction=direction)
         return total
 
     def _process_slide_xml(
@@ -85,66 +75,28 @@ class PPTXHandler(BaseFormatHandler):
             p_content = match.group(2)
             p_end = match.group(3)
 
-            t_pattern = re.compile(r"(<a:t(?:\s[^>]*)?>)(.*?)(</a:t>)", re.DOTALL)
-            t_matches = list(t_pattern.finditer(p_content))
-
-            if not t_matches:
-                return match.group(0)
-
-            full_text = unescape_xml("".join(m.group(2) for m in t_matches))
+            full_text, t_matches = self.extract_paragraph_text_nodes(p_content, tag_prefix="a")
             if not full_text.strip():
                 return match.group(0)
 
-            stats["total"] += 1
-
-            if not should_translate(full_text, direction):
-                stats["skipped"] += 1
-                return match.group(0)
-
-            progress_state["current"] += 1
-            cur_idx = progress_state["current"]
-            total_items = progress_state["total"]
-
-            if progress_cb:
-                progress_cb(
-                    cur_idx,
-                    total_items,
-                    f"[{cur_idx}/{total_items}] {slide_name}: \"{full_text[:20]}..\""
-                )
-
             # Use slide title as context if it differs from current paragraph
             context = f"Slide Header: {slide_title}" if slide_title and slide_title != full_text else None
-            chunk_id = hash_text(full_text)[:8]
-
-            translated_text, was_translated, was_reverted = self.engine.translate_chunk(
-                text=full_text,
+            new_p_content = self._translate_and_replace_text_nodes(
+                full_text=full_text,
+                t_matches=t_matches,
+                p_content=p_content,
                 direction=direction,
                 context=context,
-                location_id=f"{slide_name}",
-                chunk_id=chunk_id,
+                part_name=slide_name,
                 review_log_path=review_log_path,
-                log_cb=log_cb
+                stats=stats,
+                progress_state=progress_state,
+                progress_cb=progress_cb,
+                log_cb=log_cb,
+                tag_prefix="a",
             )
 
-            if was_reverted:
-                stats["reverted"] += 1
-                return match.group(0)
-
-            if was_translated:
-                stats["translated"] += 1
-                escaped_translation = escape_xml(translated_text)
-
-                new_p_content = ""
-                last_idx = 0
-                for i, m in enumerate(t_matches):
-                    new_p_content += p_content[last_idx:m.start()]
-                    if i == 0:
-                        new_p_content += f'<a:t xml:space="preserve">{escaped_translation}</a:t>'
-                    else:
-                        new_p_content += '<a:t></a:t>'
-                    last_idx = m.end()
-
-                new_p_content += p_content[last_idx:]
+            if new_p_content is not None:
                 return p_start + new_p_content + p_end
 
             return match.group(0)

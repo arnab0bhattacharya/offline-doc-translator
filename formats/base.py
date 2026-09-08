@@ -5,11 +5,14 @@ Abstract base class defining the contract for all document format handlers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, Dict, Any, TYPE_CHECKING
+from typing import Callable, Optional, Dict, Any, List, Tuple, Union, TYPE_CHECKING
 import os
+import re
 import shutil
 import zipfile
 import tempfile
+
+from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 
 if TYPE_CHECKING:
     from engine.core import TranslationEngine
@@ -116,3 +119,140 @@ class BaseFormatHandler(ABC):
         finally:
             if os.path.exists(temp_archive):
                 os.remove(temp_archive)
+
+    # ── Shared OOXML Text-Unit Processing ─────────────────────────
+
+    @staticmethod
+    def count_translatable_paragraphs_in_xml(
+        xml_str: str,
+        tag_prefix: str,
+        direction: str,
+    ) -> int:
+        """
+        Counts total translatable paragraphs in an OOXML XML string.
+        tag_prefix is 'w' for Word (.docx) or 'a' for PowerPoint (.pptx).
+        """
+        total = 0
+        p_pattern = re.compile(rf"<{tag_prefix}:p(?: [^>]+)?>(.*?)</{tag_prefix}:p>", re.DOTALL)
+        t_pattern = re.compile(rf"<{tag_prefix}:t(?:\s[^>]*)?>(.*?)</{tag_prefix}:t>", re.DOTALL)
+
+        for p_match in p_pattern.finditer(xml_str):
+            t_matches = t_pattern.findall(p_match.group(1))
+            full_text = unescape_xml("".join(t_matches)).strip()
+            if full_text and should_translate(full_text, direction):
+                total += 1
+        return total
+
+    @staticmethod
+    def extract_paragraph_text_nodes(
+        p_content: str,
+        tag_prefix: str,
+    ) -> Tuple[str, List[Any]]:
+        """
+        Extracts unescaped aggregated text and regex match objects for <prefix:t> nodes.
+        tag_prefix is 'w' for Word (.docx) or 'a' for PowerPoint (.pptx).
+        """
+        t_pattern = re.compile(rf"(<{tag_prefix}:t(?:\s[^>]*)?>)(.*?)(</{tag_prefix}:t>)", re.DOTALL)
+        t_matches = list(t_pattern.finditer(p_content))
+        if not t_matches:
+            return "", []
+        full_text = unescape_xml("".join(m.group(2) for m in t_matches))
+        return full_text, t_matches
+
+    def _translate_and_replace_text_nodes(
+        self,
+        full_text: str,
+        t_matches: List[Any],
+        p_content: str,
+        direction: str,
+        context: Optional[Union[str, Callable[[str], Optional[str]]]],
+        part_name: str,
+        review_log_path: Optional[str],
+        stats: Dict[str, int],
+        progress_state: Dict[str, Any],
+        progress_cb: Optional[Callable[[int, int, str], None]],
+        log_cb: Optional[Callable[[str], None]],
+        tag_prefix: str,
+        recent_paragraphs: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        """
+        Shared logic for translating and replacing text units within an OOXML paragraph:
+        1. Validates text and checks should_translate.
+        2. Dispatches progress callback.
+        3. Calls self.engine.translate_chunk with context and error handling.
+        4. On translation: replaces first <tag_prefix:t> node with translated text
+           (marked xml:space="preserve") and empties subsequent nodes.
+        5. Updates stats and optional sliding context list (recent_paragraphs).
+
+        Returns:
+            Modified p_content string if translated, or None if skipped/reverted/unmodified.
+        """
+        if not t_matches or not full_text or not full_text.strip():
+            return None
+
+        stats["total"] += 1
+
+        if not should_translate(full_text, direction):
+            stats["skipped"] += 1
+            if recent_paragraphs is not None:
+                recent_paragraphs.append(full_text.strip())
+                if len(recent_paragraphs) > 2:
+                    recent_paragraphs.pop(0)
+            return None
+
+        progress_state["current"] += 1
+        cur_idx = progress_state["current"]
+        total_items = progress_state["total"]
+
+        if progress_cb:
+            progress_cb(
+                cur_idx,
+                total_items,
+                f"[{cur_idx}/{total_items}] {part_name}: \"{full_text[:20]}..\""
+            )
+
+        context_str = context(full_text) if callable(context) else context
+        chunk_id = hash_text(full_text)[:8]
+
+        translated_text, was_translated, was_reverted = self.engine.translate_chunk(
+            text=full_text,
+            direction=direction,
+            context=context_str,
+            location_id=part_name,
+            chunk_id=chunk_id,
+            review_log_path=review_log_path,
+            log_cb=log_cb,
+        )
+
+        if was_reverted:
+            stats["reverted"] += 1
+            if recent_paragraphs is not None:
+                recent_paragraphs.append(full_text.strip())
+                if len(recent_paragraphs) > 2:
+                    recent_paragraphs.pop(0)
+            return None
+
+        if was_translated:
+            stats["translated"] += 1
+            escaped_translation = escape_xml(translated_text)
+
+            if recent_paragraphs is not None:
+                recent_paragraphs.append(translated_text.strip())
+                if len(recent_paragraphs) > 2:
+                    recent_paragraphs.pop(0)
+
+            new_p_content = ""
+            last_idx = 0
+            for i, m in enumerate(t_matches):
+                new_p_content += p_content[last_idx:m.start()]
+                if i == 0:
+                    new_p_content += f'<{tag_prefix}:t xml:space="preserve">{escaped_translation}</{tag_prefix}:t>'
+                else:
+                    new_p_content += f'<{tag_prefix}:t></{tag_prefix}:t>'
+                last_idx = m.end()
+
+            new_p_content += p_content[last_idx:]
+            return new_p_content
+
+        return None
+

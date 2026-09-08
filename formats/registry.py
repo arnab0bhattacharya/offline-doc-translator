@@ -4,9 +4,8 @@ formats/registry.py
 Central format handler registry. Adding a new format means adding one line here.
 """
 from typing import Dict, Type, Set, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from engine.security_policy import DocumentSecurityPolicy
+from .base import BaseFormatHandler
+from engine.security_policy import DocumentSecurityPolicy
 
 HANDLER_REGISTRY: Dict[str, Type[BaseFormatHandler]] = {}
 SUPPORTED_EXTENSIONS: Set[str] = {".pptx", ".xlsx", ".docx", ".pdf"}
@@ -30,7 +29,7 @@ def _ensure_registry_loaded() -> None:
 def get_handler(
     ext: str,
     engine,
-    policy: Optional["DocumentSecurityPolicy"] = None,
+    policy: Optional[DocumentSecurityPolicy] = None,
 ) -> BaseFormatHandler:
     """Returns the handler instance for the given file extension."""
     _ensure_registry_loaded()

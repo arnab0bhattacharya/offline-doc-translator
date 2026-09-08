@@ -33,7 +33,13 @@ from .core import (
     TranslationEngine,
     TranslationResult,
 )
-from .run_job import execute_translation
+
+
+def __getattr__(name: str):
+    if name == "execute_translation":
+        from .run_job import execute_translation
+        return execute_translation
+    raise AttributeError(f"module 'engine' has no attribute '{name}'")
 
 __all__ = [
     "ErrorCode",

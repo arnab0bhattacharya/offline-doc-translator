@@ -556,6 +556,18 @@ class TestDocumentSecurityPolicy(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, ErrorCode.E09)
 
+    def test_registry_type_hints_evaluable(self):
+        """Ensures formats.registry type annotations resolve at runtime without NameError."""
+        import typing
+        import formats.registry as reg
+        hints_func = typing.get_type_hints(reg.get_handler)
+        self.assertEqual(hints_func["return"], BaseFormatHandler)
+        self.assertEqual(hints_func["policy"], typing.Optional[DocumentSecurityPolicy])
+
+        hints_mod = typing.get_type_hints(reg)
+        self.assertIn("HANDLER_REGISTRY", hints_mod)
+        self.assertIn("SUPPORTED_EXTENSIONS", hints_mod)
+
 
 if __name__ == "__main__":
     unittest.main()

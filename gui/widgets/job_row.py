@@ -88,6 +88,7 @@ class JobRow(ctk.CTkFrame):
 
     def _handle_cancel(self):
         if self.on_cancel:
+            self.cancel_button.configure(state="disabled")
             self.on_cancel(self.job_id)
 
     def update_job(self, job: TranslationJob) -> None:
@@ -98,12 +99,17 @@ class JobRow(ctk.CTkFrame):
         if job.status == JobStatus.QUEUED:
             self.st_label.configure(text="⏳ Queued", text_color=THEME["text_secondary"], cursor="")
             self.st_label.unbind("<Button-1>")
+            self.cancel_button.configure(state="normal")
         elif job.status == JobStatus.RUNNING:
             msg = job.progress_message
             if len(msg) > 20:
                 msg = msg[:18] + "..."
             self.st_label.configure(text=f"🔄 {job.progress:.0f}% {msg}", text_color=THEME["primary"], cursor="")
             self.st_label.unbind("<Button-1>")
+            if getattr(job, "cancel_event", None) and job.cancel_event.is_set():
+                self.cancel_button.configure(state="disabled")
+            else:
+                self.cancel_button.configure(state="normal")
         elif job.status == JobStatus.COMPLETED:
             elapsed = ""
             if job.started_at and job.completed_at:

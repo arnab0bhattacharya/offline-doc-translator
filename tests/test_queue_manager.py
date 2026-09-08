@@ -83,7 +83,62 @@ def test_cancel_queued_job(queue_mgr):
         success = queue_mgr.cancel_job(job_id)
         assert success is True
         assert job.status == JobStatus.CANCELLED
-        
+
+
+def test_cancel_running_job(queue_mgr):
+    started_evt = time.time()
+    with patch('engine.queue_manager.execute_translation') as mock_exec:
+        def fake_exec(*args, cancel_event=None, **kwargs):
+            # Wait until cancelled or timed out
+            if cancel_event:
+                cancelled = cancel_event.wait(timeout=2.0)
+                if cancelled:
+                    raise TranslatorError(ErrorCode.E09, detail="Cancelled by user")
+            return {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
+
+        mock_exec.side_effect = fake_exec
+
+        job_id = queue_mgr.add_job("running.docx", "out_running.docx", "ja2en", "fast_nmt", "test", {})
+        job = queue_mgr.get_job(job_id)
+
+        # Wait until the job enters RUNNING
+        timeout = time.time() + 2.0
+        while job.status != JobStatus.RUNNING and time.time() < timeout:
+            time.sleep(0.05)
+        assert job.status == JobStatus.RUNNING
+
+        # Cancel while running
+        success = queue_mgr.cancel_job(job_id)
+        assert success is True
+        assert job.cancel_event.is_set()
+
+        # Wait for worker to transition job to CANCELLED
+        timeout = time.time() + 2.0
+        while job.status != JobStatus.CANCELLED and time.time() < timeout:
+            time.sleep(0.05)
+
+        assert job.status == JobStatus.CANCELLED
+        assert job.progress_message == "Cancelled"
+        assert job.error is not None
+        assert job.error.code == ErrorCode.E09
+
+
+def test_cancel_running_job_cooperative_e09(queue_mgr):
+    with patch('engine.queue_manager.execute_translation') as mock_exec:
+        mock_exec.side_effect = TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
+        job_id = queue_mgr.add_job("coop.docx", "out_coop.docx", "ja2en", "fast_nmt", "test", {})
+        job = queue_mgr.get_job(job_id)
+
+        timeout = time.time() + 2.0
+        while job.status != JobStatus.CANCELLED and time.time() < timeout:
+            time.sleep(0.05)
+
+        assert job.status == JobStatus.CANCELLED
+        assert job.progress_message == "Cancelled"
+        assert job.error_message == "Translation Cancelled"
+
+
 def test_sequential_processing(queue_mgr):
     with patch('engine.queue_manager.TranslationQueue._process_job') as mock_process:
         processed_order = []

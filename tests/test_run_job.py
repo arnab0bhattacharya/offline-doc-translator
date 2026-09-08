@@ -142,6 +142,26 @@ class TestRunJob(unittest.TestCase):
         # Before translate runs, the old review log should have been removed
         self.assertFalse(os.path.exists(review_log))
 
+    def test_execute_translation_cancelled_before_run(self):
+        import threading
+        evt = threading.Event()
+        evt.set()
+
+        in_path = os.path.join(self.test_dir, "doc.docx")
+        out_path = os.path.join(self.test_dir, "doc_en.docx")
+
+        with self.assertRaises(TranslatorError) as ctx:
+            execute_translation(
+                input_path=in_path,
+                output_path=out_path,
+                direction="ja2en",
+                mode=TranslationMode.FAST_NMT,
+                model_name="test",
+                glossary={},
+                cancel_event=evt,
+            )
+        self.assertEqual(ctx.exception.code, ErrorCode.E09)
+
 
 if __name__ == "__main__":
     unittest.main()

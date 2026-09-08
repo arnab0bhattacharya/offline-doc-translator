@@ -4,11 +4,11 @@ import uuid
 import threading
 import queue
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List, Union
 
 from engine.core import TranslationMode
-from engine.errors import TranslatorError
+from engine.errors import ErrorCode, TranslatorError
 from engine.run_job import execute_translation
 
 
@@ -39,6 +39,7 @@ class TranslationJob:
     completed_at: Optional[float] = None
     review_log_path: str = ""
     include_source_text: bool = False
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 class TranslationQueue:
@@ -106,12 +107,18 @@ class TranslationQueue:
         return job_id
 
     def cancel_job(self, job_id: str) -> bool:
-        """Cancel a queued job. Cannot cancel a running job (just removes from queue)."""
+        """Cancel a queued or running job."""
         with self._lock:
             for job in self._jobs:
                 if job.id == job_id:
                     if job.status == JobStatus.QUEUED:
                         job.status = JobStatus.CANCELLED
+                        job.progress_message = "Cancelled"
+                        self._trigger_update(job)
+                        return True
+                    elif job.status == JobStatus.RUNNING:
+                        job.cancel_event.set()
+                        job.progress_message = "Cancelling..."
                         self._trigger_update(job)
                         return True
                     return False
@@ -182,19 +189,36 @@ class TranslationQueue:
             
             try:
                 self._process_job(job)
-                job.status = JobStatus.COMPLETED
-                job.progress = 100.0
-                job.progress_message = "Completed"
+                if job.cancel_event.is_set():
+                    job.status = JobStatus.CANCELLED
+                    job.progress_message = "Cancelled"
+                    job.error_message = "Cancelled by user"
+                else:
+                    job.status = JobStatus.COMPLETED
+                    job.progress = 100.0
+                    job.progress_message = "Completed"
             except TranslatorError as te:
-                job.status = JobStatus.FAILED
-                job.error = te
-                job.error_message = te.title
-                job.progress_message = f"Failed: {te.title}"
+                if te.code == ErrorCode.E09 or job.cancel_event.is_set():
+                    job.status = JobStatus.CANCELLED
+                    job.error = te
+                    job.error_message = te.title
+                    job.progress_message = "Cancelled"
+                else:
+                    job.status = JobStatus.FAILED
+                    job.error = te
+                    job.error_message = te.title
+                    job.progress_message = f"Failed: {te.title}"
             except Exception as e:
-                job.status = JobStatus.FAILED
-                job.error = None
-                job.error_message = str(e)
-                job.progress_message = f"Failed: {str(e)}"
+                if job.cancel_event.is_set():
+                    job.status = JobStatus.CANCELLED
+                    job.error = TranslatorError(ErrorCode.E09, detail=str(e))
+                    job.error_message = "Cancelled by user"
+                    job.progress_message = "Cancelled"
+                else:
+                    job.status = JobStatus.FAILED
+                    job.error = None
+                    job.error_message = str(e)
+                    job.progress_message = f"Failed: {str(e)}"
             finally:
                 job.completed_at = time.time()
                 self._trigger_update(job)
@@ -220,5 +244,6 @@ class TranslationQueue:
             progress_cb=progress_cb,
             log_cb=log_cb,
             include_source_text=job.include_source_text,
+            cancel_event=job.cancel_event,
         )
 

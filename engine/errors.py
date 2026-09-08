@@ -18,6 +18,7 @@ class ErrorCode(str, Enum):
     E06 = "E06"  # Translation finished with items needing manual review
     E07 = "E07"  # Insufficient disk space for workspace/cache
     E08 = "E08"  # Required local NMT package is unavailable
+    E09 = "E09"  # Translation was cancelled by user
 
 
 ERROR_MESSAGES = {
@@ -60,6 +61,11 @@ ERROR_MESSAGES = {
         "title": "Offline Translation Model Not Ready",
         "message": "The required local Japanese-English NMT package is not installed or cannot be used.",
         "action": "Install the required Argos Translate language package, then retry Fast NMT mode."
+    },
+    ErrorCode.E09: {
+        "title": "Translation Cancelled",
+        "message": "The translation was cancelled by user request.",
+        "action": "You can re-add the document to the queue if you wish to translate it later."
     },
 }
 

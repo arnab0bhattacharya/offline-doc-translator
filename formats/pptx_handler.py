@@ -11,10 +11,12 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from typing import Callable, Optional, Dict, Any, List
 
 from formats.base import BaseFormatHandler
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
+from engine.errors import ErrorCode, TranslatorError
 
 
 class PPTXHandler(BaseFormatHandler):
@@ -56,7 +58,8 @@ class PPTXHandler(BaseFormatHandler):
         slide_title: Optional[str],
         progress_state: Dict[str, Any],
         progress_cb: Optional[Callable[[int, int, str], None]],
-        log_cb: Optional[Callable[[str], None]]
+        log_cb: Optional[Callable[[str], None]],
+        cancel_event: Optional[threading.Event] = None,
     ) -> str:
         # 1. Protect <a:fld> blocks
         fld_pattern = re.compile(r"<a:fld.*?</a:fld>", re.DOTALL)
@@ -73,6 +76,9 @@ class PPTXHandler(BaseFormatHandler):
         p_pattern = re.compile(r"(<a:p(?: [^>]+)?>)(.*?)(</a:p>)", re.DOTALL)
 
         def p_repl(match):
+            if cancel_event and cancel_event.is_set():
+                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
             p_start = match.group(1)
             p_content = match.group(2)
             p_end = match.group(3)
@@ -96,6 +102,7 @@ class PPTXHandler(BaseFormatHandler):
                 progress_cb=progress_cb,
                 log_cb=log_cb,
                 tag_prefix="a",
+                cancel_event=cancel_event,
             )
 
             if new_p_content is not None:
@@ -118,9 +125,13 @@ class PPTXHandler(BaseFormatHandler):
         direction: str,
         review_log_path: Optional[str] = None,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None
+        log_cb: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         self.validate_input_file(input_path)
+        if cancel_event and cancel_event.is_set():
+            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
         stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
         work_dir = tempfile.mkdtemp(prefix="trans_pptx_")
 
@@ -128,6 +139,10 @@ class PPTXHandler(BaseFormatHandler):
             if log_cb:
                 log_cb(f"[*] Extracting PowerPoint presentation: {os.path.basename(input_path)}...")
             self.extract_zip(input_path, work_dir, policy=self.policy)
+
+            if cancel_event and cancel_event.is_set():
+                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
             slides_path = os.path.join(work_dir, "ppt", "slides")
 
             if not os.path.exists(slides_path):
@@ -149,6 +164,8 @@ class PPTXHandler(BaseFormatHandler):
             }
 
             for idx, filename in enumerate(slide_files):
+                if cancel_event and cancel_event.is_set():
+                    raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
                 file_path = os.path.join(slides_path, filename)
                 self.validate_xml_part_size(file_path)
                 with open(file_path, "r", encoding="utf-8") as f:
@@ -164,13 +181,17 @@ class PPTXHandler(BaseFormatHandler):
                     slide_title=slide_title,
                     progress_state=progress_state,
                     progress_cb=progress_cb,
-                    log_cb=log_cb
+                    log_cb=log_cb,
+                    cancel_event=cancel_event,
                 )
 
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(processed_xml)
 
                 self.engine.save_cache_atomically(log_cb=log_cb)
+
+            if cancel_event and cancel_event.is_set():
+                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
             if progress_cb:
                 progress_cb(progress_state["total"], progress_state["total"], "Packing translated PowerPoint file...")

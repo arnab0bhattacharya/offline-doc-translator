@@ -12,10 +12,12 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
 from formats.base import BaseFormatHandler
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
+from engine.errors import ErrorCode, TranslatorError
 
 
 class XLSXHandler(BaseFormatHandler):
@@ -94,12 +96,16 @@ class XLSXHandler(BaseFormatHandler):
         stats: Dict[str, int],
         progress_state: Dict[str, Any],
         progress_cb: Optional[Callable[[int, int, str], None]],
-        log_cb: Optional[Callable[[str], None]]
+        log_cb: Optional[Callable[[str], None]],
+        cancel_event: Optional[threading.Event] = None,
     ) -> str:
         row_pattern = re.compile(r"(<row(?:\s[^>]*)?>)(.*?)(</row>)", re.DOTALL)
         cell_pattern = re.compile(r"<c\s+([^>]*?)(?:>(.*?)</c>|/>)", re.DOTALL)
 
         def row_repl(row_match):
+            if cancel_event and cancel_event.is_set():
+                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
             row_start = row_match.group(1)
             row_content = row_match.group(2)
             row_end = row_match.group(3)
@@ -159,6 +165,9 @@ class XLSXHandler(BaseFormatHandler):
             last_idx = 0
 
             for cell in cells_data:
+                if cancel_event and cancel_event.is_set():
+                    raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
                 new_row_content += row_content[last_idx:cell["start"]]
 
                 if cell["is_text"] and cell["text"].strip():
@@ -166,6 +175,9 @@ class XLSXHandler(BaseFormatHandler):
                     stats["total"] += 1
 
                     if should_translate(raw_text, direction):
+                        if cancel_event and cancel_event.is_set():
+                            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
                         progress_state["current"] += 1
                         cur_idx = progress_state["current"]
                         total_items = progress_state["total"]
@@ -189,6 +201,9 @@ class XLSXHandler(BaseFormatHandler):
                             review_log_path=review_log_path,
                             log_cb=log_cb
                         )
+
+                        if cancel_event and cancel_event.is_set():
+                            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
                         if was_translated:
                             stats["translated"] += 1
@@ -221,9 +236,13 @@ class XLSXHandler(BaseFormatHandler):
         direction: str,
         review_log_path: Optional[str] = None,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None
+        log_cb: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         self.validate_input_file(input_path)
+        if cancel_event and cancel_event.is_set():
+            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
         stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
         work_dir = tempfile.mkdtemp(prefix="trans_xlsx_")
 
@@ -231,6 +250,9 @@ class XLSXHandler(BaseFormatHandler):
             if log_cb:
                 log_cb(f"[*] Extracting Excel archive: {os.path.basename(input_path)}...")
             self.extract_zip(input_path, work_dir, policy=self.policy)
+
+            if cancel_event and cancel_event.is_set():
+                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
             shared_strings_file = os.path.join(work_dir, "xl", "sharedStrings.xml")
             shared_strings = self._parse_shared_strings(shared_strings_file)
@@ -262,6 +284,8 @@ class XLSXHandler(BaseFormatHandler):
 
             # 2. Process worksheets with live cell updates
             for filename in sheet_files:
+                if cancel_event and cancel_event.is_set():
+                    raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
                 sheet_path = os.path.join(sheets_dir, filename)
                 sheet_label = filename.replace(".xml", "")
 
@@ -278,13 +302,17 @@ class XLSXHandler(BaseFormatHandler):
                     stats=stats,
                     progress_state=progress_state,
                     progress_cb=progress_cb,
-                    log_cb=log_cb
+                    log_cb=log_cb,
+                    cancel_event=cancel_event,
                 )
 
                 with open(sheet_path, "w", encoding="utf-8") as f:
                     f.write(processed_xml)
 
                 self.engine.save_cache_atomically(log_cb=log_cb)
+
+            if cancel_event and cancel_event.is_set():
+                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
             if progress_cb:
                 progress_cb(progress_state["total"], progress_state["total"], "Packing translated Excel file...")

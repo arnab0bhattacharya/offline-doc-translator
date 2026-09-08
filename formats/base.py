@@ -11,6 +11,7 @@ import re
 import shutil
 import zipfile
 import tempfile
+import threading
 
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
@@ -43,7 +44,9 @@ class BaseFormatHandler(ABC):
         output_path: str,
         direction: str,
         review_log_path: Optional[str] = None,
-        progress_cb: Optional[Callable[[int, int, str], None]] = None
+        progress_cb: Optional[Callable[[int, int, str], None]] = None,
+        log_cb: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """
         Translates the document from input_path to output_path.
@@ -54,6 +57,8 @@ class BaseFormatHandler(ABC):
             direction: 'ja2en' or 'en2ja'.
             review_log_path: Path for audit log of skipped/failed items.
             progress_cb: Optional callback func(current_step, total_steps, message).
+            log_cb: Optional callback func(log_message).
+            cancel_event: Optional threading.Event to signal cooperative cancellation.
             
         Returns:
             Dict with statistics: {"total": int, "translated": int, "reverted": int, "skipped": int}
@@ -216,6 +221,7 @@ class BaseFormatHandler(ABC):
         log_cb: Optional[Callable[[str], None]],
         tag_prefix: str,
         recent_paragraphs: Optional[List[str]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Optional[str]:
         """
         Shared logic for translating and replacing text units within an OOXML paragraph:
@@ -229,6 +235,9 @@ class BaseFormatHandler(ABC):
         Returns:
             Modified p_content string if translated, or None if skipped/reverted/unmodified.
         """
+        if cancel_event and cancel_event.is_set():
+            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
         if not t_matches or not full_text or not full_text.strip():
             return None
 
@@ -250,6 +259,9 @@ class BaseFormatHandler(ABC):
                 if len(recent_paragraphs) > 2:
                     recent_paragraphs.pop(0)
             return None
+
+        if cancel_event and cancel_event.is_set():
+            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
         progress_state["current"] += 1
         cur_idx = progress_state["current"]
@@ -274,6 +286,9 @@ class BaseFormatHandler(ABC):
             review_log_path=review_log_path,
             log_cb=log_cb,
         )
+
+        if cancel_event and cancel_event.is_set():
+            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
         if was_reverted:
             stats["reverted"] += 1

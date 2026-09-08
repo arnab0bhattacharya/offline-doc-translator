@@ -546,8 +546,11 @@ class DocumentsView(ctk.CTkFrame):
                         st_lbl.bind("<Button-1>", lambda e, msg=em: messagebox.showerror("Translation Error", msg))
                 elif job.status == JobStatus.CANCELLED:
                     st_lbl.configure(text="⛔ Cancelled", text_color=THEME["text_secondary"], cursor="")
-            if "cancel_btn" in w and job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
-                w["cancel_btn"].configure(state="disabled")
+            if "cancel_btn" in w:
+                if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+                    w["cancel_btn"].configure(state="disabled")
+                elif job.status == JobStatus.RUNNING and getattr(job, "cancel_event", None) and job.cancel_event.is_set():
+                    w["cancel_btn"].configure(state="disabled")
 
         if job.status == JobStatus.COMPLETED:
             self.open_file_btn.configure(state="normal")

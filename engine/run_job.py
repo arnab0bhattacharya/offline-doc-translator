@@ -5,8 +5,10 @@ Shared translation job execution pipeline.
 Used by both CLI (main.py) and GUI (queue_manager.py).
 """
 import os
+import threading
 from typing import Dict, Optional, Callable, Any, Union
 from .core import TranslationEngine, TranslationMode
+from .errors import ErrorCode, TranslatorError
 from .preflight import run_preflight, run_nmt_preflight
 from formats.registry import get_handler
 
@@ -22,6 +24,7 @@ def execute_translation(
     log_cb: Optional[Callable[[str], None]] = None,
     include_source_text: bool = False,
     policy: Optional[Any] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     """
     Runs the full translation pipeline: preflight -> engine -> handler -> translate.
@@ -29,6 +32,9 @@ def execute_translation(
     """
     if not isinstance(mode, TranslationMode):
         mode = TranslationMode(mode)
+
+    if cancel_event and cancel_event.is_set():
+        raise TranslatorError(ErrorCode.E09, detail="Translation cancelled before execution.")
 
     llm_available = (mode == TranslationMode.PURE_LLM)
     review_log_path = f"{output_path}.needs_review.log"
@@ -45,6 +51,9 @@ def execute_translation(
     )
     if mode == TranslationMode.FAST_NMT:
         run_nmt_preflight(direction)
+
+    if cancel_event and cancel_event.is_set():
+        raise TranslatorError(ErrorCode.E09, detail="Translation cancelled after preflight.")
 
     # 2. Clear old review log if it exists
     if os.path.exists(review_log_path):
@@ -69,6 +78,8 @@ def execute_translation(
     )
     engine.load_cache(direction)
 
+    if cancel_event and cancel_event.is_set():
+        raise TranslatorError(ErrorCode.E09, detail="Translation cancelled before handler dispatch.")
 
     # 4. Handler dispatch
     ext = os.path.splitext(input_path)[1].lower()
@@ -87,6 +98,7 @@ def execute_translation(
         review_log_path=review_log_path,
         progress_cb=progress_cb,
         log_cb=log_cb,
+        cancel_event=cancel_event,
     )
 
     return stats

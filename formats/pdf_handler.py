@@ -12,6 +12,7 @@ Executes a 3-phase pipeline with live block-by-block progress and telemetry:
 import os
 import shutil
 import tempfile
+import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
 from formats.base import BaseFormatHandler
@@ -46,9 +47,12 @@ class PDFHandler(BaseFormatHandler):
         direction: str,
         review_log_path: Optional[str] = None,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None
+        log_cb: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         self.validate_input_file(input_path)
+        if cancel_event and cancel_event.is_set():
+            raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
         stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
 
         try:
@@ -121,6 +125,9 @@ class PDFHandler(BaseFormatHandler):
 
             # 2. Process page by page
             for page_idx in range(total_pages):
+                if cancel_event and cancel_event.is_set():
+                    raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
                 page = doc[page_idx]
                 page_num = page_idx + 1
 
@@ -131,6 +138,9 @@ class PDFHandler(BaseFormatHandler):
                 translated_blocks = []
 
                 for b_idx, block in enumerate(text_blocks):
+                    if cancel_event and cancel_event.is_set():
+                        raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
                     x0, y0, x1, y1, raw_text, block_no, _ = block
                     clean_text = raw_text.strip()
 
@@ -142,6 +152,9 @@ class PDFHandler(BaseFormatHandler):
                     if not should_translate(clean_text, direction):
                         stats["skipped"] += 1
                         continue
+
+                    if cancel_event and cancel_event.is_set():
+                        raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
                     progress_state["current"] += 1
                     cur_idx = progress_state["current"]
@@ -166,6 +179,9 @@ class PDFHandler(BaseFormatHandler):
                         log_cb=log_cb
                     )
 
+                    if cancel_event and cancel_event.is_set():
+                        raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
                     if was_reverted:
                         stats["reverted"] += 1
                         continue
@@ -178,6 +194,9 @@ class PDFHandler(BaseFormatHandler):
                             "original": clean_text,
                             "block_no": block_no
                         })
+
+                if cancel_event and cancel_event.is_set():
+                    raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
                 # Phase 3: Redact & Re-insert
                 for item in translated_blocks:
@@ -238,6 +257,9 @@ class PDFHandler(BaseFormatHandler):
                     )
 
                 self.engine.save_cache_atomically(log_cb=log_cb)
+
+            if cancel_event and cancel_event.is_set():
+                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
             if progress_cb:
                 progress_cb(progress_state["total"], progress_state["total"], "Saving translated PDF document...")

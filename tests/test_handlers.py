@@ -517,6 +517,45 @@ class TestDocumentSecurityPolicy(unittest.TestCase):
         with self.assertRaises(zipfile.BadZipFile):
             BaseFormatHandler.extract_zip(zip_path, os.path.join(self.test_dir, "extract"), policy=strict_policy)
 
+    def test_docx_cancellation(self):
+        import threading
+        docx_path = os.path.join(self.test_dir, "cancel_sample.docx")
+        out_docx_path = os.path.join(self.test_dir, "cancel_translated.docx")
+        with zipfile.ZipFile(docx_path, "w") as docx:
+            docx.writestr("word/document.xml", "<w:document><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body></w:document>")
+
+        handler = DOCXHandler(self.mock_engine)
+        evt = threading.Event()
+        evt.set()
+
+        with self.assertRaises(TranslatorError) as ctx:
+            handler.translate(docx_path, out_docx_path, "ja2en", cancel_event=evt)
+        self.assertEqual(ctx.exception.code, ErrorCode.E09)
+
+    def test_text_nodes_cancellation(self):
+        import threading
+        handler = DOCXHandler(self.mock_engine)
+        evt = threading.Event()
+        evt.set()
+
+        with self.assertRaises(TranslatorError) as ctx:
+            handler._translate_and_replace_text_nodes(
+                full_text="テストテキスト",
+                t_matches=["dummy"],
+                p_content="dummy",
+                direction="ja2en",
+                context=None,
+                part_name="doc.xml",
+                review_log_path=None,
+                stats={"total": 0, "translated": 0, "reverted": 0, "skipped": 0},
+                progress_state={"current": 0, "total": 1},
+                progress_cb=None,
+                log_cb=None,
+                tag_prefix="w",
+                cancel_event=evt,
+            )
+        self.assertEqual(ctx.exception.code, ErrorCode.E09)
+
 
 if __name__ == "__main__":
     unittest.main()

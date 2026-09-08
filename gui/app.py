@@ -375,8 +375,11 @@ class TranslatorApp:
                 st_label.configure(text="⛔ Cancelled", text_color=THEME["text_secondary"], cursor="")
                 st_label.unbind("<Button-1>")
 
-        if "cancel_btn" in w and job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
-            w["cancel_btn"].configure(state="disabled")
+        if "cancel_btn" in w:
+            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+                w["cancel_btn"].configure(state="disabled")
+            elif job.status == JobStatus.RUNNING and getattr(job, "cancel_event", None) and job.cancel_event.is_set():
+                w["cancel_btn"].configure(state="disabled")
 
     def _log(self, message: str):
         if hasattr(self, "docs_view") and hasattr(self.docs_view, "log"):

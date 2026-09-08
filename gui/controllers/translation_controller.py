@@ -97,7 +97,7 @@ class TranslationController:
         return dispatched
 
     def cancel_job(self, job_id: str) -> bool:
-        """Cancels a queued job."""
+        """Cancels a queued or running job."""
         return self.queue.cancel_job(job_id)
 
     def clear_completed(self) -> None:

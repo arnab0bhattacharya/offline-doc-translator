@@ -16,6 +16,7 @@ from .preflight import (
 from .backend_nmt import NMTBackend
 from .backend_llm import LLMBackend
 from .backend_base import TranslationBackend
+from .cache import TranslationCache, JSONFileCache, NullCache
 from .core import (
     DIRECTIONS,
     CACHE_TTL_DAYS,
@@ -57,6 +58,9 @@ __all__ = [
     "NMTBackend",
     "LLMBackend",
     "TranslationBackend",
+    "TranslationCache",
+    "JSONFileCache",
+    "NullCache",
     "DIRECTIONS",
     "CACHE_TTL_DAYS",
     "TranslationMode",

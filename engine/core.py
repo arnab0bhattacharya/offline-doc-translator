@@ -24,11 +24,11 @@ from typing import Dict, Tuple, Optional, Any, List, Callable
 
 from .errors import ErrorCode, TranslatorError
 from .backend_base import TranslationBackend
+from .cache import TranslationCache, JSONFileCache, NullCache, CACHE_TTL_DAYS
 
 # Supported translation directions
 DIRECTIONS = ("ja2en", "en2ja")
 PLACEHOLDER_PATTERN = re.compile(r"\[\[[A-Z][A-Z_0-9]*\]\]")
-CACHE_TTL_DAYS = 30
 
 
 @dataclass
@@ -289,6 +289,7 @@ class TranslationEngine:
         include_source_text: bool = False,
         cache_ttl_days: int = CACHE_TTL_DAYS,
         backend: Optional[TranslationBackend] = None,
+        cache: Optional[TranslationCache] = None,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -301,14 +302,35 @@ class TranslationEngine:
         self.include_source_text = include_source_text
         self.cache_ttl_days = cache_ttl_days
 
-        self.cache: Dict[str, Any] = {}
         self.failed_this_run: set = set()
         self.logged_failed_keys: set = set()
+
+        if cache is not None:
+            self._cache_mgr = cache
+        else:
+            self._cache_mgr = JSONFileCache(cache_file=cache_file, ttl_days=cache_ttl_days)
 
         # Lazy-loaded backend instances
         self._nmt_backend = None
         self._llm_backend = None
         self._custom_backend = backend
+
+    @property
+    def cache_mgr(self) -> TranslationCache:
+        """Returns the underlying TranslationCache instance."""
+        return self._cache_mgr
+
+    @property
+    def cache(self) -> Dict[str, Any]:
+        """Provides access to raw cache dict for backward compatibility."""
+        if hasattr(self._cache_mgr, "data"):
+            return self._cache_mgr.data
+        return {}
+
+    @cache.setter
+    def cache(self, value: Dict[str, Any]) -> None:
+        if hasattr(self._cache_mgr, "data"):
+            self._cache_mgr.data = value
 
     @property
     def nmt_backend(self):
@@ -347,26 +369,8 @@ class TranslationEngine:
             self._llm_backend = backend
 
     def load_cache(self, direction: str) -> None:
-        """Loads cache namespaced by mode -> direction -> configuration fingerprint -> hash, pruning entries older than CACHE_TTL_DAYS."""
-        if os.path.exists(self.cache_file):
-            try:
-                with open(self.cache_file, "r", encoding="utf-8") as f:
-                    self.cache = json.load(f)
-            except Exception:
-                self.cache = {}
-        else:
-            self.cache = {}
-
-        # Prune stale entries
-        meta = self.cache.get("_meta", {})
-        last_prune = meta.get("last_prune", 0)
-        now = time.time()
-        if now - last_prune > 86400:  # prune at most once per day
-            pruned = self._prune_cache(now)
-            self.cache.setdefault("_meta", {})["last_prune"] = now
-            if pruned > 0:
-                self.save_cache_atomically()
-
+        """Loads cache namespaced by mode -> direction -> configuration fingerprint -> hash."""
+        self._cache_mgr.load(direction)
         self._get_direction_cache(direction)
 
     def _record_cache_access(
@@ -379,71 +383,21 @@ class TranslationEngine:
         """Records last accessed timestamp for a cache entry."""
         mode_str = self.mode.value if isinstance(self.mode, TranslationMode) else str(self.mode)
         fp = self._cache_fingerprint(context)
-        compound_key = f"{mode_str}|{direction}|{fp}|{key}"
-        timestamps = self.cache.setdefault("_timestamps", {})
-        timestamps[compound_key] = timestamp if timestamp is not None else time.time()
+        self._cache_mgr.record_access(
+            key=key,
+            direction=direction,
+            fingerprint=fp,
+            mode=mode_str,
+            timestamp=timestamp
+        )
 
     def _prune_cache(self, now: Optional[float] = None) -> int:
         """Removes cache entries older than cache_ttl_days. Returns number of pruned entries."""
-        if now is None:
-            now = time.time()
-        cutoff = now - (self.cache_ttl_days * 86400)
-        timestamps = self.cache.setdefault("_timestamps", {})
-
-        # Populate timestamps for untracked entries
-        for mode_key in list(self.cache.keys()):
-            if mode_key.startswith("_"):
-                continue
-            mode_dict = self.cache.get(mode_key)
-            if not isinstance(mode_dict, dict):
-                continue
-            for dir_key, dir_dict in mode_dict.items():
-                if not isinstance(dir_dict, dict):
-                    continue
-                for fp_key, fp_dict in dir_dict.items():
-                    if not isinstance(fp_dict, dict):
-                        continue
-                    for k in list(fp_dict.keys()):
-                        ck = f"{mode_key}|{dir_key}|{fp_key}|{k}"
-                        if ck not in timestamps:
-                            timestamps[ck] = now
-
-        stale_keys = [k for k, ts in timestamps.items() if ts < cutoff]
-        pruned_count = 0
-        for ck in stale_keys:
-            timestamps.pop(ck, None)
-            parts = ck.split("|", 3)
-            if len(parts) == 4:
-                m, d, fp, k = parts
-                bucket = self.cache.get(m, {}).get(d, {}).get(fp, {})
-                if isinstance(bucket, dict) and k in bucket:
-                    bucket.pop(k, None)
-                    pruned_count += 1
-
-        # Clean up empty branches
-        for mode_key in list(self.cache.keys()):
-            if mode_key.startswith("_"):
-                continue
-            mode_dict = self.cache.get(mode_key)
-            if isinstance(mode_dict, dict):
-                for dir_key in list(mode_dict.keys()):
-                    dir_dict = mode_dict.get(dir_key)
-                    if isinstance(dir_dict, dict):
-                        for fp_key in list(dir_dict.keys()):
-                            fp_dict = dir_dict.get(fp_key)
-                            if isinstance(fp_dict, dict) and not fp_dict:
-                                dir_dict.pop(fp_key, None)
-                        if not dir_dict:
-                            mode_dict.pop(dir_key, None)
-                if not mode_dict:
-                    self.cache.pop(mode_key, None)
-
-        return pruned_count
+        return self._cache_mgr.prune(now)
 
     def clear_cache(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
         """Wipes the entire cache and saves an empty cache file."""
-        self.cache = {}
-        self.save_cache_atomically(log_cb=log_cb)
+        self._cache_mgr.clear(log_cb=log_cb)
 
     def _cache_fingerprint(self, context: Optional[str] = None) -> str:
         """Prevents reuse across models, glossaries, and context-sensitive translations."""
@@ -460,29 +414,14 @@ class TranslationEngine:
     def _get_direction_cache(self, direction: str, context: Optional[str] = None) -> Dict[str, str]:
         """Returns the cache bucket for one fully specified translation configuration."""
         mode_str = self.mode.value if isinstance(self.mode, TranslationMode) else str(self.mode)
-        mode_cache = self.cache.setdefault(mode_str, {})
-        direction_cache = mode_cache.setdefault(direction, {})
-        return direction_cache.setdefault(self._cache_fingerprint(context), {})
+        fp = self._cache_fingerprint(context)
+        if hasattr(self._cache_mgr, "get_bucket"):
+            return self._cache_mgr.get_bucket(direction=direction, fingerprint=fp, mode=mode_str)
+        return {}
 
     def save_cache_atomically(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
         """Saves cache via .tmp file replacement to prevent corruption on crash."""
-        cache_dir = os.path.dirname(os.path.abspath(self.cache_file))
-        temp_file = None
-        try:
-            os.makedirs(cache_dir, exist_ok=True)
-            fd, temp_file = tempfile.mkstemp(prefix=".translation_cache_", suffix=".tmp", dir=cache_dir)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
-            os.replace(temp_file, self.cache_file)
-        except Exception as e:
-            if log_cb:
-                log_cb(f"[!] Warning: Failed to save translation cache: {e}")
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except OSError:
-                    pass
+        self._cache_mgr.save(log_cb=log_cb)
 
 
     def check_and_clear_memory(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
@@ -580,11 +519,16 @@ class TranslationEngine:
         placeholder_map = {**number_map, **glossary_map}
         key = hash_text(masked_text)
 
+        mode_str = self.mode.value if isinstance(self.mode, TranslationMode) else str(self.mode)
+        fp = self._cache_fingerprint(context)
         dir_cache = self._get_direction_cache(direction, context)
 
         # 1. Check persistent cache
-        if key in dir_cache:
+        cached_trans = self._cache_mgr.get(key=key, direction=direction, fingerprint=fp, mode=mode_str)
+        if cached_trans is None and key in dir_cache:
             cached_trans = dir_cache[key]
+
+        if cached_trans is not None:
             if verify_placeholders(cached_trans, placeholder_map, masked_text):
                 self._record_cache_access(direction, context, key)
                 final_cached = unmask_protected_text(cached_trans, number_map, glossary_map)
@@ -599,7 +543,9 @@ class TranslationEngine:
                     elapsed=0.0,
                     source_backend="cache",
                 )
-            del dir_cache[key]
+            self._cache_mgr.delete(key=key, direction=direction, fingerprint=fp, mode=mode_str)
+            if key in dir_cache:
+                del dir_cache[key]
 
         # 2. Check runtime failure tracker
         if key in self.failed_this_run:
@@ -688,6 +634,7 @@ class TranslationEngine:
         # 5. Output validation & placeholder verification
         if translated_masked:
             if verify_placeholders(translated_masked, placeholder_map, masked_text):
+                self._cache_mgr.put(key=key, direction=direction, fingerprint=fp, value=translated_masked, mode=mode_str)
                 dir_cache[key] = translated_masked
                 self._record_cache_access(direction, context, key)
                 final_trans = unmask_protected_text(translated_masked, number_map, glossary_map)

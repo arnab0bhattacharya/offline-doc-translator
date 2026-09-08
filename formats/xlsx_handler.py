@@ -16,6 +16,7 @@ import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
 from formats.base import BaseFormatHandler, XML_TAG_ATTRS
+from formats.xml_utils import parse_xml_safely, create_inline_str_cell_dom
 from engine.core import (
     escape_xml,
     unescape_xml,
@@ -30,7 +31,7 @@ class XLSXHandler(BaseFormatHandler):
     """Handles translation of Excel workbooks (.xlsx)."""
 
     def _parse_shared_strings(self, shared_strings_path: str) -> List[str]:
-        """Loads all strings from xl/sharedStrings.xml into a 0-indexed list."""
+        """Loads all strings from xl/sharedStrings.xml into a 0-indexed list using lxml DOM."""
         if not os.path.exists(shared_strings_path):
             return []
 
@@ -38,16 +39,25 @@ class XLSXHandler(BaseFormatHandler):
         with open(shared_strings_path, "r", encoding="utf-8") as f:
             xml_data = f.read()
 
-        si_pattern = re.compile(rf"<si\b{XML_TAG_ATTRS}>(.*?)</si>", re.DOTALL)
-        t_pattern = re.compile(rf"<t\b{XML_TAG_ATTRS}>(.*?)</t>", re.DOTALL)
-
-        strings = []
-        for si_match in si_pattern.finditer(xml_data):
-            si_content = si_match.group(1)
-            t_pieces = t_pattern.findall(si_content)
-            strings.append(unescape_xml("".join(t_pieces)))
-
-        return strings
+        # Primary path: lxml secure DOM parsing (handles plain <t> and rich text <r><t>)
+        try:
+            root, _ = parse_xml_safely(xml_data)
+            strings = []
+            for si in root.xpath(".//*[local-name()='si']"):
+                t_nodes = si.xpath(".//*[local-name()='t']")
+                full_text = "".join(t.text or "" for t in t_nodes)
+                strings.append(full_text)
+            return strings
+        except Exception:
+            # Fallback path: regex parsing
+            si_pattern = re.compile(rf"<si\b{XML_TAG_ATTRS}>(.*?)</si>", re.DOTALL)
+            t_pattern = re.compile(rf"<t\b{XML_TAG_ATTRS}>(.*?)</t>", re.DOTALL)
+            strings = []
+            for si_match in si_pattern.finditer(xml_data):
+                si_content = si_match.group(1)
+                t_pieces = t_pattern.findall(si_content)
+                strings.append(unescape_xml("".join(t_pieces)))
+            return strings
 
     def _count_translatable_cells(
         self,
@@ -215,11 +225,10 @@ class XLSXHandler(BaseFormatHandler):
 
                         if result.was_translated:
                             stats["translated"] += 1
-                            escaped_text = escape_xml(result.text)
-                            new_cell_xml = (
-                                f'<c r="{cell["ref"]}" t="inlineStr"{cell["style_attr"]}>'
-                                f'<is><t xml:space="preserve">{escaped_text}</t></is>'
-                                f'</c>'
+                            new_cell_xml = create_inline_str_cell_dom(
+                                ref=cell["ref"],
+                                style_attr=cell["style_attr"],
+                                translated_text=result.text,
                             )
                             new_row_content += new_cell_xml
                             last_idx = cell["end"]
@@ -300,6 +309,14 @@ class XLSXHandler(BaseFormatHandler):
                 self.validate_xml_part_size(sheet_path)
                 with open(sheet_path, "r", encoding="utf-8") as f:
                     xml_data = f.read()
+
+                # Security: check for XXE / prohibited entity or DTD declarations
+                try:
+                    parse_xml_safely(xml_data)
+                except TranslatorError:
+                    raise
+                except Exception:
+                    pass
 
                 processed_xml = self._process_sheet_xml(
                     sheet_xml=xml_data,

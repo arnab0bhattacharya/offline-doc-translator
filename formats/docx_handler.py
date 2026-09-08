@@ -15,6 +15,7 @@ import threading
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
 from formats.base import BaseFormatHandler, XML_TAG_ATTRS
+from formats.xml_utils import parse_xml_safely
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
 
@@ -143,6 +144,14 @@ class DOCXHandler(BaseFormatHandler):
                 self.validate_xml_part_size(file_path)
                 with open(file_path, "r", encoding="utf-8") as f:
                     xml_data = f.read()
+
+                # Security: check for XXE / prohibited entity or DTD declarations
+                try:
+                    parse_xml_safely(xml_data)
+                except TranslatorError:
+                    raise
+                except Exception:
+                    pass
 
                 processed_xml = self._process_xml_content(
                     xml_str=xml_data,

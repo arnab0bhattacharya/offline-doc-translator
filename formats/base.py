@@ -22,6 +22,7 @@ from engine.core import (
 )
 from engine.errors import ErrorCode, TranslatorError
 from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
+from formats.xml_utils import mutate_paragraph_text_nodes_lxml
 
 if TYPE_CHECKING:
     from engine.core import TranslationEngine
@@ -311,13 +312,23 @@ class BaseFormatHandler(ABC):
 
         if result.was_translated:
             stats["translated"] += 1
-            escaped_translation = escape_xml(result.text)
 
             if recent_paragraphs is not None:
                 recent_paragraphs.append(result.text.strip())
                 if len(recent_paragraphs) > 2:
                     recent_paragraphs.pop(0)
 
+            # 1. Primary path: lxml DOM mutation
+            dom_mutated = mutate_paragraph_text_nodes_lxml(
+                p_content=p_content,
+                tag_prefix=tag_prefix,
+                translated_text=result.text,
+            )
+            if dom_mutated is not None:
+                return dom_mutated
+
+            # 2. Fallback path: regex replacement
+            escaped_translation = escape_xml(result.text)
             new_p_content = ""
             last_idx = 0
             for i, m in enumerate(t_matches):

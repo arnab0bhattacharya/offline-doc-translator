@@ -39,7 +39,9 @@ class PPTXHandler(BaseFormatHandler):
         for f in os.listdir(slides_path):
             if not (f.startswith("slide") and f.endswith(".xml")):
                 continue
-            with open(os.path.join(slides_path, f), "r", encoding="utf-8") as file:
+            slide_file = os.path.join(slides_path, f)
+            self.validate_xml_part_size(slide_file)
+            with open(slide_file, "r", encoding="utf-8") as file:
                 xml_str = file.read()
             total += self.count_translatable_paragraphs_in_xml(xml_str, tag_prefix="a", direction=direction)
         return total
@@ -118,13 +120,14 @@ class PPTXHandler(BaseFormatHandler):
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
         log_cb: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
+        self.validate_input_file(input_path)
         stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
         work_dir = tempfile.mkdtemp(prefix="trans_pptx_")
 
         try:
             if log_cb:
                 log_cb(f"[*] Extracting PowerPoint presentation: {os.path.basename(input_path)}...")
-            self.extract_zip(input_path, work_dir)
+            self.extract_zip(input_path, work_dir, policy=self.policy)
             slides_path = os.path.join(work_dir, "ppt", "slides")
 
             if not os.path.exists(slides_path):
@@ -147,6 +150,7 @@ class PPTXHandler(BaseFormatHandler):
 
             for idx, filename in enumerate(slide_files):
                 file_path = os.path.join(slides_path, filename)
+                self.validate_xml_part_size(file_path)
                 with open(file_path, "r", encoding="utf-8") as f:
                     xml_data = f.read()
 

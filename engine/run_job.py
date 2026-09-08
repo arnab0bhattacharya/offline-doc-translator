@@ -21,6 +21,7 @@ def execute_translation(
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
     log_cb: Optional[Callable[[str], None]] = None,
     include_source_text: bool = False,
+    policy: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Runs the full translation pipeline: preflight -> engine -> handler -> translate.
@@ -71,7 +72,10 @@ def execute_translation(
 
     # 4. Handler dispatch
     ext = os.path.splitext(input_path)[1].lower()
-    handler = get_handler(ext, engine)
+    if policy is not None:
+        handler = get_handler(ext, engine, policy=policy)
+    else:
+        handler = get_handler(ext, engine)
 
     # 5. Translate
     if log_cb:

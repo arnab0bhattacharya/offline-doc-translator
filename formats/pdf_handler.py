@@ -48,6 +48,7 @@ class PDFHandler(BaseFormatHandler):
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
         log_cb: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
+        self.validate_input_file(input_path)
         stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
 
         try:
@@ -74,6 +75,16 @@ class PDFHandler(BaseFormatHandler):
         if total_pages == 0:
             doc.close()
             return stats
+
+        if total_pages > self.policy.max_pdf_pages:
+            doc.close()
+            raise TranslatorError(
+                ErrorCode.E04,
+                detail=(
+                    f"PDF '{os.path.basename(input_path)}' ({total_pages} pages) "
+                    f"exceeds maximum page limit ({self.policy.max_pdf_pages} pages)."
+                )
+            )
 
         cjk_font = "japan" if direction == "en2ja" else "helv"
 

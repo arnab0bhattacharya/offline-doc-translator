@@ -24,6 +24,7 @@ class DOCXHandler(BaseFormatHandler):
         """Counts total translatable paragraphs across all Word XML parts."""
         total = 0
         for _, file_path in target_files:
+            self.validate_xml_part_size(file_path)
             with open(file_path, "r", encoding="utf-8") as f:
                 xml_str = f.read()
             total += self.count_translatable_paragraphs_in_xml(xml_str, tag_prefix="w", direction=direction)
@@ -85,13 +86,14 @@ class DOCXHandler(BaseFormatHandler):
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
         log_cb: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
+        self.validate_input_file(input_path)
         stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
         work_dir = tempfile.mkdtemp(prefix="trans_docx_")
 
         try:
             if log_cb:
                 log_cb(f"[*] Extracting Word document: {os.path.basename(input_path)}...")
-            self.extract_zip(input_path, work_dir)
+            self.extract_zip(input_path, work_dir, policy=self.policy)
 
             word_dir = os.path.join(work_dir, "word")
             if not os.path.exists(word_dir):
@@ -122,6 +124,7 @@ class DOCXHandler(BaseFormatHandler):
             }
 
             for label, file_path in target_files:
+                self.validate_xml_part_size(file_path)
                 with open(file_path, "r", encoding="utf-8") as f:
                     xml_data = f.read()
 

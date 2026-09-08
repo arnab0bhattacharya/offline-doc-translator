@@ -26,6 +26,7 @@ class XLSXHandler(BaseFormatHandler):
         if not os.path.exists(shared_strings_path):
             return []
 
+        self.validate_xml_part_size(shared_strings_path)
         with open(shared_strings_path, "r", encoding="utf-8") as f:
             xml_data = f.read()
 
@@ -54,6 +55,7 @@ class XLSXHandler(BaseFormatHandler):
             if not (filename.startswith("sheet") and filename.endswith(".xml")):
                 continue
             sheet_path = os.path.join(sheets_dir, filename)
+            self.validate_xml_part_size(sheet_path)
             with open(sheet_path, "r", encoding="utf-8") as f:
                 xml_data = f.read()
 
@@ -221,13 +223,14 @@ class XLSXHandler(BaseFormatHandler):
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
         log_cb: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
+        self.validate_input_file(input_path)
         stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
         work_dir = tempfile.mkdtemp(prefix="trans_xlsx_")
 
         try:
             if log_cb:
                 log_cb(f"[*] Extracting Excel archive: {os.path.basename(input_path)}...")
-            self.extract_zip(input_path, work_dir)
+            self.extract_zip(input_path, work_dir, policy=self.policy)
 
             shared_strings_file = os.path.join(work_dir, "xl", "sharedStrings.xml")
             shared_strings = self._parse_shared_strings(shared_strings_file)
@@ -262,6 +265,7 @@ class XLSXHandler(BaseFormatHandler):
                 sheet_path = os.path.join(sheets_dir, filename)
                 sheet_label = filename.replace(".xml", "")
 
+                self.validate_xml_part_size(sheet_path)
                 with open(sheet_path, "r", encoding="utf-8") as f:
                     xml_data = f.read()
 

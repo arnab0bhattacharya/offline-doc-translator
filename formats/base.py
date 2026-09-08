@@ -13,21 +13,28 @@ import zipfile
 import tempfile
 
 from engine.core import escape_xml, unescape_xml, hash_text, should_translate
+from engine.errors import ErrorCode, TranslatorError
+from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
 
 if TYPE_CHECKING:
     from engine.core import TranslationEngine
 
-# Module-level constants for zip bomb protection
-MAX_EXTRACTED_BYTES = 1_000 * 1024 * 1024   # 1 GB
-MAX_ARCHIVE_ENTRIES = 20_000
-MAX_SINGLE_ENTRY_BYTES = 100 * 1024 * 1024  # 100 MB
+# Module-level constants for zip bomb protection (derived from DEFAULT_POLICY)
+MAX_EXTRACTED_BYTES = DEFAULT_POLICY.max_extracted_bytes
+MAX_ARCHIVE_ENTRIES = DEFAULT_POLICY.max_archive_entries
+MAX_SINGLE_ENTRY_BYTES = DEFAULT_POLICY.max_single_entry_bytes
 
 
 class BaseFormatHandler(ABC):
     """Base class for document format translation handlers."""
 
-    def __init__(self, engine: "TranslationEngine"):
+    def __init__(
+        self,
+        engine: "TranslationEngine",
+        policy: Optional[DocumentSecurityPolicy] = None,
+    ):
         self.engine = engine
+        self.policy = policy or DEFAULT_POLICY
 
     @abstractmethod
     def translate(
@@ -53,9 +60,44 @@ class BaseFormatHandler(ABC):
         """
         pass
 
+    def validate_input_file(self, input_path: str) -> None:
+        """Validates that input file exists and does not exceed policy maximum input size."""
+        if not os.path.exists(input_path):
+            raise TranslatorError(
+                ErrorCode.E04,
+                detail=f"Input file not found: '{input_path}'."
+            )
+        file_size = os.path.getsize(input_path)
+        if file_size > self.policy.max_input_bytes:
+            raise TranslatorError(
+                ErrorCode.E04,
+                detail=(
+                    f"Input file '{os.path.basename(input_path)}' ({file_size / 1024 / 1024:.1f} MB) "
+                    f"exceeds maximum allowed size ({self.policy.max_input_bytes / 1024 / 1024:.0f} MB)."
+                )
+            )
+
+    def validate_xml_part_size(self, file_path: str) -> None:
+        """Validates that an uncompressed XML part does not exceed policy limit."""
+        if os.path.exists(file_path):
+            part_size = os.path.getsize(file_path)
+            if part_size > self.policy.max_xml_part_bytes:
+                raise TranslatorError(
+                    ErrorCode.E04,
+                    detail=(
+                        f"XML part '{os.path.basename(file_path)}' ({part_size / 1024 / 1024:.1f} MB) "
+                        f"exceeds maximum allowed size ({self.policy.max_xml_part_bytes / 1024 / 1024:.0f} MB)."
+                    )
+                )
+
     @staticmethod
-    def extract_zip(archive_path: str, target_dir: str) -> None:
+    def extract_zip(
+        archive_path: str,
+        target_dir: str,
+        policy: Optional[DocumentSecurityPolicy] = None,
+    ) -> None:
         """Extracts an OOXML archive with decompression-bomb protection."""
+        pol = policy or DEFAULT_POLICY
         if os.path.exists(target_dir):
             shutil.rmtree(target_dir, ignore_errors=True)
         os.makedirs(target_dir, exist_ok=True)
@@ -65,26 +107,26 @@ class BaseFormatHandler(ABC):
 
             # Security: check entry count
             members = z.infolist()
-            if len(members) > MAX_ARCHIVE_ENTRIES:
+            if len(members) > pol.max_archive_entries:
                 raise zipfile.BadZipFile(
-                    f"Archive has {len(members)} entries (max {MAX_ARCHIVE_ENTRIES}). "
+                    f"Archive has {len(members)} entries (max {pol.max_archive_entries}). "
                     f"Refusing to extract — possible zip bomb."
                 )
 
             # Security: check total and per-entry uncompressed sizes
             total_uncompressed = 0
             for member in members:
-                if member.file_size > MAX_SINGLE_ENTRY_BYTES:
+                if member.file_size > pol.max_single_entry_bytes:
                     raise zipfile.BadZipFile(
                         f"Archive member '{member.filename}' is {member.file_size / 1024 / 1024:.0f} MB "
-                        f"(max {MAX_SINGLE_ENTRY_BYTES / 1024 / 1024:.0f} MB)."
+                        f"(max {pol.max_single_entry_bytes / 1024 / 1024:.0f} MB)."
                     )
                 total_uncompressed += member.file_size
 
-            if total_uncompressed > MAX_EXTRACTED_BYTES:
+            if total_uncompressed > pol.max_extracted_bytes:
                 raise zipfile.BadZipFile(
                     f"Archive total uncompressed size is {total_uncompressed / 1024 / 1024:.0f} MB "
-                    f"(max {MAX_EXTRACTED_BYTES / 1024 / 1024:.0f} MB). "
+                    f"(max {pol.max_extracted_bytes / 1024 / 1024:.0f} MB). "
                     f"Refusing to extract — possible zip bomb."
                 )
 
@@ -189,6 +231,15 @@ class BaseFormatHandler(ABC):
         """
         if not t_matches or not full_text or not full_text.strip():
             return None
+
+        if len(full_text) > self.policy.max_text_chunk_chars:
+            raise TranslatorError(
+                ErrorCode.E04,
+                detail=(
+                    f"Text chunk length ({len(full_text)} chars) exceeds maximum allowed limit "
+                    f"({self.policy.max_text_chunk_chars} chars)."
+                )
+            )
 
         stats["total"] += 1
 

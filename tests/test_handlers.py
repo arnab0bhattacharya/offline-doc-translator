@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from unittest.mock import patch
 from engine.core import TranslationEngine, hash_text
 from engine.errors import ErrorCode, TranslatorError
+from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
 from formats.base import (
     BaseFormatHandler,
     MAX_EXTRACTED_BYTES,
@@ -429,6 +430,92 @@ class TestPDFHandler(unittest.TestCase):
         )
         self.assertIsNone(res_skip)
         self.assertEqual(stats_skip["skipped"], 1)
+
+
+class TestDocumentSecurityPolicy(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="test_sec_policy_")
+        self.mock_engine = MockTranslationEngine()
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_max_input_bytes_rejection(self):
+        strict_policy = DocumentSecurityPolicy(max_input_bytes=100)
+        handler = DOCXHandler(self.mock_engine, policy=strict_policy)
+        oversized_file = os.path.join(self.test_dir, "large.docx")
+        with open(oversized_file, "wb") as f:
+            f.write(b"0" * 200)
+
+        with self.assertRaises(TranslatorError) as ctx:
+            handler.translate(oversized_file, os.path.join(self.test_dir, "out.docx"), "ja2en")
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("exceeds maximum allowed size", ctx.exception.detail)
+
+    def test_max_xml_part_bytes_rejection(self):
+        strict_policy = DocumentSecurityPolicy(max_xml_part_bytes=50)
+        handler = DOCXHandler(self.mock_engine, policy=strict_policy)
+        large_xml_part = os.path.join(self.test_dir, "huge_part.xml")
+        with open(large_xml_part, "wb") as f:
+            f.write(b"<xml>" + b"a" * 100 + b"</xml>")
+
+        with self.assertRaises(TranslatorError) as ctx:
+            handler.validate_xml_part_size(large_xml_part)
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("exceeds maximum allowed size", ctx.exception.detail)
+
+    def test_max_pdf_pages_rejection(self):
+        if fitz is None:
+            self.skipTest("fitz (PyMuPDF) not installed")
+
+        strict_policy = DocumentSecurityPolicy(max_pdf_pages=2)
+        handler = PDFHandler(self.mock_engine, policy=strict_policy)
+
+        doc = fitz.open()
+        for i in range(3):
+            page = doc.new_page()
+            page.insert_text((72, 72), f"Page {i}", fontsize=12)
+        pdf_path = os.path.join(self.test_dir, "3pages.pdf")
+        doc.save(pdf_path)
+        doc.close()
+
+        with self.assertRaises(TranslatorError) as ctx:
+            handler.translate(pdf_path, os.path.join(self.test_dir, "out.pdf"), "en2ja")
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("exceeds maximum page limit", ctx.exception.detail)
+
+    def test_max_text_chunk_chars_rejection(self):
+        strict_policy = DocumentSecurityPolicy(max_text_chunk_chars=50)
+        handler = DOCXHandler(self.mock_engine, policy=strict_policy)
+
+        long_text = "これは非常に長いテキストです。" * 10
+        with self.assertRaises(TranslatorError) as ctx:
+            handler._translate_and_replace_text_nodes(
+                full_text=long_text,
+                t_matches=["dummy"],
+                p_content="dummy",
+                direction="ja2en",
+                context=None,
+                part_name="doc.xml",
+                review_log_path=None,
+                stats={"total": 0, "translated": 0, "reverted": 0, "skipped": 0},
+                progress_state={"current": 0, "total": 1},
+                progress_cb=None,
+                log_cb=None,
+                tag_prefix="w",
+            )
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("exceeds maximum allowed limit", ctx.exception.detail)
+
+    def test_extract_zip_with_custom_policy(self):
+        strict_policy = DocumentSecurityPolicy(max_archive_entries=1)
+        zip_path = os.path.join(self.test_dir, "multi.zip")
+        with zipfile.ZipFile(zip_path, "w") as z:
+            z.writestr("f1.txt", "hello")
+            z.writestr("f2.txt", "world")
+
+        with self.assertRaises(zipfile.BadZipFile):
+            BaseFormatHandler.extract_zip(zip_path, os.path.join(self.test_dir, "extract"), policy=strict_policy)
 
 
 if __name__ == "__main__":

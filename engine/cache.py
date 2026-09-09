@@ -193,9 +193,16 @@ class JSONFileCache(TranslationCache):
     }
     """
 
-    def __init__(self, cache_file: str = "translation_cache.json", ttl_days: int = CACHE_TTL_DAYS):
+    def __init__(
+        self,
+        cache_file: str = "translation_cache.json",
+        ttl_days: int = CACHE_TTL_DAYS,
+        legacy_candidates: Optional[List[str]] = None,
+    ):
         self.cache_file = cache_file
         self.ttl_days = ttl_days
+        self.legacy_candidates = list(legacy_candidates) if legacy_candidates else []
+        self._migrated_from_legacy: Optional[str] = None
         self._data: Dict[str, Any] = {}
         self._loaded: bool = False
 
@@ -209,7 +216,7 @@ class JSONFileCache(TranslationCache):
         self._data = new_data
         self._loaded = True
 
-    def load(self, direction: Optional[str] = None) -> None:
+    def load(self, direction: Optional[str] = None, legacy_candidates: Optional[List[str]] = None) -> None:
         """Loads cache file from disk, automatically triggering once-per-day TTL prune."""
         if os.path.exists(self.cache_file):
             try:
@@ -218,7 +225,28 @@ class JSONFileCache(TranslationCache):
             except Exception:
                 self._data = {}
         else:
-            self._data = {}
+            candidates: List[str] = []
+            if legacy_candidates:
+                candidates.extend(legacy_candidates)
+            candidates.extend(self.legacy_candidates)
+            migrated = False
+            for legacy_path in candidates:
+                if (
+                    legacy_path
+                    and os.path.exists(legacy_path)
+                    and os.path.isfile(legacy_path)
+                    and os.path.abspath(legacy_path) != os.path.abspath(self.cache_file)
+                ):
+                    try:
+                        with open(legacy_path, "r", encoding="utf-8") as f:
+                            self._data = json.load(f)
+                        self._migrated_from_legacy = legacy_path
+                        migrated = True
+                        break
+                    except Exception:
+                        pass
+            if not migrated:
+                self._data = {}
         self._loaded = True
 
         # Prune stale entries at most once per day
@@ -333,6 +361,19 @@ class JSONFileCache(TranslationCache):
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self._data, f, ensure_ascii=False, indent=2)
             os.replace(temp_file, self.cache_file)
+            temp_file = None
+
+            # If this save was preceded by a legacy cache migration, safely backup the legacy file
+            if self._migrated_from_legacy and os.path.exists(self._migrated_from_legacy):
+                if os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
+                    try:
+                        backup_path = f"{self._migrated_from_legacy}.bak.{int(time.time())}"
+                        os.replace(self._migrated_from_legacy, backup_path)
+                        if log_cb:
+                            log_cb(f"Migrated legacy cache to target cache and backed up original to {os.path.basename(backup_path)}")
+                        self._migrated_from_legacy = None
+                    except Exception as bak_err:
+                        logging.warning("Could not backup legacy cache file '%s': %s", self._migrated_from_legacy, bak_err)
         except Exception as e:
             if log_cb:
                 log_cb(f"[!] Warning: Failed to save translation cache: {e}")
@@ -400,8 +441,9 @@ class EncryptedFileCache(JSONFileCache):
         key: Optional[Union[str, bytes]] = None,
         ttl_days: int = CACHE_TTL_DAYS,
         fallback_to_plain: bool = False,
+        legacy_candidates: Optional[List[str]] = None,
     ):
-        super().__init__(cache_file=cache_file, ttl_days=ttl_days)
+        super().__init__(cache_file=cache_file, ttl_days=ttl_days, legacy_candidates=legacy_candidates)
         self.key = key
         self.fallback_to_plain = fallback_to_plain
         self.fernet: Optional[Any] = None
@@ -423,7 +465,7 @@ class EncryptedFileCache(JSONFileCache):
                 raise RuntimeError("The 'cryptography' library is required for EncryptedFileCache but is not installed.")
             logging.warning("[!] 'cryptography' library is not available; EncryptedFileCache operating in plaintext fallback mode.")
 
-    def load(self, direction: Optional[str] = None) -> None:
+    def load(self, direction: Optional[str] = None, legacy_candidates: Optional[List[str]] = None) -> None:
         """Loads and decrypts cache file from disk, automatically triggering once-per-day TTL prune."""
         if os.path.exists(self.cache_file):
             try:
@@ -455,23 +497,53 @@ class EncryptedFileCache(JSONFileCache):
                 logging.warning("[!] Warning: Failed to load cache file '%s': %s", self.cache_file, e)
                 self._data = {}
         else:
-            # Check for legacy plaintext cache files for migration
-            legacy_candidates = []
+            # Check for legacy plaintext or document-adjacent cache files for migration
+            all_candidates: List[str] = []
+            if legacy_candidates:
+                all_candidates.extend(legacy_candidates)
+            all_candidates.extend(self.legacy_candidates)
+
             base, ext = os.path.splitext(self.cache_file)
             if ext != ".json":
-                legacy_candidates.append(base + ".json")
+                all_candidates.append(base + ".json")
             cache_dir = os.path.dirname(os.path.abspath(self.cache_file))
-            legacy_candidates.append(os.path.join(cache_dir, ".translation_cache.json"))
-            legacy_candidates.append(os.path.join(cache_dir, "translation_cache.json"))
+            all_candidates.append(os.path.join(cache_dir, ".translation_cache.json"))
+            all_candidates.append(os.path.join(cache_dir, "translation_cache.json"))
+            all_candidates.append(os.path.join(cache_dir, ".translation_cache.enc"))
+            all_candidates.append(os.path.join(cache_dir, "translation_cache.enc"))
+
+            seen = set()
+            unique_candidates: List[str] = []
+            for c in all_candidates:
+                if not c:
+                    continue
+                norm = os.path.abspath(c)
+                if norm != os.path.abspath(self.cache_file) and norm not in seen:
+                    seen.add(norm)
+                    unique_candidates.append(norm)
 
             migrated = False
-            for legacy_path in legacy_candidates:
+            for legacy_path in unique_candidates:
                 if os.path.exists(legacy_path) and os.path.isfile(legacy_path):
                     try:
-                        with open(legacy_path, "r", encoding="utf-8") as f:
-                            self._data = json.load(f)
+                        with open(legacy_path, "rb") as f:
+                            raw_bytes = f.read()
+                        if not raw_bytes:
+                            continue
+                        stripped = raw_bytes.lstrip()
+                        if stripped.startswith(b"{") or stripped.startswith(b"["):
+                            self._data = json.loads(raw_bytes.decode("utf-8"))
+                        elif self.fernet is not None:
+                            try:
+                                decrypted = self.fernet.decrypt(raw_bytes)
+                                self._data = json.loads(decrypted.decode("utf-8"))
+                            except Exception:
+                                continue
+                        else:
+                            continue
+
                         self._migrated_from_legacy = legacy_path
-                        logging.info("Discovered legacy plaintext cache '%s'; queued for migration to encrypted format.", legacy_path)
+                        logging.info("Discovered legacy cache '%s'; queued for migration to encrypted format.", legacy_path)
                         migrated = True
                         break
                     except Exception as e:

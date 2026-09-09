@@ -296,6 +296,7 @@ class TranslationEngine:
         cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
         encrypted_cache: Optional[bool] = None,
         cache_key: Optional[Union[str, bytes]] = None,
+        legacy_cache_candidates: Optional[List[str]] = None,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -336,7 +337,11 @@ class TranslationEngine:
         elif self.cache_policy == CachePolicy.MEMORY_ONLY:
             self._cache_mgr = NullCache()
         elif self.cache_policy == CachePolicy.PLAINTEXT_PERSISTENT:
-            self._cache_mgr = JSONFileCache(cache_file=self.cache_file, ttl_days=cache_ttl_days)
+            self._cache_mgr = JSONFileCache(
+                cache_file=self.cache_file,
+                ttl_days=cache_ttl_days,
+                legacy_candidates=legacy_cache_candidates,
+            )
         else:  # CachePolicy.ENCRYPTED_PERSISTENT
             try:
                 self._cache_mgr = EncryptedFileCache(
@@ -344,6 +349,7 @@ class TranslationEngine:
                     key=cache_key,
                     ttl_days=cache_ttl_days,
                     fallback_to_plain=False,
+                    legacy_candidates=legacy_cache_candidates,
                 )
             except Exception as err:
                 warning_msg = (

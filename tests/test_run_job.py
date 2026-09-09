@@ -11,6 +11,7 @@ from unittest.mock import patch, MagicMock
 
 from engine.core import TranslationMode
 from engine.cache import CachePolicy
+from engine.cache_locations import get_job_cache_path
 from engine.errors import TranslatorError, ErrorCode
 from engine.run_job import execute_translation
 
@@ -62,8 +63,14 @@ class TestRunJob(unittest.TestCase):
             model_name="gemma4:e2b-it-qat",
             mode=TranslationMode.FAST_NMT,
             glossary={"A": "B"},
-            cache_file=os.path.join(self.test_dir, ".translation_cache.enc"),
+            cache_file=get_job_cache_path(out_path, mode=TranslationMode.FAST_NMT, cache_policy=CachePolicy.ENCRYPTED_PERSISTENT),
             cache_policy=CachePolicy.ENCRYPTED_PERSISTENT,
+            legacy_cache_candidates=[
+                os.path.join(self.test_dir, ".translation_cache.enc"),
+                os.path.join(self.test_dir, ".translation_cache.json"),
+                os.path.join(self.test_dir, "translation_cache.json"),
+                os.path.join(self.test_dir, "translation_cache.enc"),
+            ],
             allow_llm=False,
             include_source_text=False,
             logger=None,
@@ -201,8 +208,14 @@ class TestRunJob(unittest.TestCase):
             model_name="gemma4:e2b-it-qat",
             mode=TranslationMode.FAST_NMT,
             glossary={},
-            cache_file=os.path.join(self.test_dir, ".translation_cache.json"),
+            cache_file=get_job_cache_path(out_path, mode=TranslationMode.FAST_NMT, cache_policy=CachePolicy.PLAINTEXT_PERSISTENT),
             cache_policy=CachePolicy.PLAINTEXT_PERSISTENT,
+            legacy_cache_candidates=[
+                os.path.join(self.test_dir, ".translation_cache.enc"),
+                os.path.join(self.test_dir, ".translation_cache.json"),
+                os.path.join(self.test_dir, "translation_cache.json"),
+                os.path.join(self.test_dir, "translation_cache.enc"),
+            ],
             allow_llm=False,
             include_source_text=False,
             logger=None,
@@ -236,8 +249,14 @@ class TestRunJob(unittest.TestCase):
             model_name="gemma4:e2b-it-qat",
             mode=TranslationMode.FAST_NMT,
             glossary={},
-            cache_file=os.path.join(self.test_dir, ".translation_cache.enc"),
+            cache_file=get_job_cache_path(out_path, mode=TranslationMode.FAST_NMT, cache_policy=CachePolicy.MEMORY_ONLY),
             cache_policy=CachePolicy.MEMORY_ONLY,
+            legacy_cache_candidates=[
+                os.path.join(self.test_dir, ".translation_cache.enc"),
+                os.path.join(self.test_dir, ".translation_cache.json"),
+                os.path.join(self.test_dir, "translation_cache.json"),
+                os.path.join(self.test_dir, "translation_cache.enc"),
+            ],
             allow_llm=False,
             include_source_text=False,
             logger=None,

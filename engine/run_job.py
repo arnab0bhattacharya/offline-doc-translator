@@ -9,6 +9,7 @@ import threading
 from typing import Dict, Optional, Callable, Any, Union
 from .core import TranslationEngine, TranslationMode
 from .cache import CachePolicy
+from .cache_locations import get_job_cache_path
 from .errors import ErrorCode, TranslatorError
 from .preflight import run_preflight, run_nmt_preflight
 from .logging import TranslationLogger
@@ -82,11 +83,18 @@ def execute_translation(
     if effective_log_cb:
         effective_log_cb(f"Initializing {mode.value.upper()} engine & persistent cache...")
 
+    target_cache_file = get_job_cache_path(
+        output_path=output_path,
+        mode=mode,
+        cache_policy=effective_cache_policy,
+    )
     out_dir = os.path.dirname(os.path.abspath(output_path))
-    if effective_cache_policy == CachePolicy.PLAINTEXT_PERSISTENT:
-        target_cache_file = os.path.join(out_dir, ".translation_cache.json")
-    else:
-        target_cache_file = os.path.join(out_dir, ".translation_cache.enc")
+    legacy_candidates = [
+        os.path.join(out_dir, ".translation_cache.enc"),
+        os.path.join(out_dir, ".translation_cache.json"),
+        os.path.join(out_dir, "translation_cache.json"),
+        os.path.join(out_dir, "translation_cache.enc"),
+    ]
 
     engine = TranslationEngine(
         model_name=model_name,
@@ -94,6 +102,7 @@ def execute_translation(
         glossary=glossary,
         cache_file=target_cache_file,
         cache_policy=effective_cache_policy,
+        legacy_cache_candidates=legacy_candidates,
         allow_llm=llm_available,
         include_source_text=include_source_text,
         logger=logger,

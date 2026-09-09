@@ -11,7 +11,7 @@ from typing import Callable, List, Optional
 import customtkinter as ctk
 
 from engine.backend_nmt import NMTBackend
-from engine.core import TranslationEngine
+from engine.cache_locations import get_cache_stats, clear_all_caches
 from engine.preflight import (
     check_ollama_status,
     list_installed_models,
@@ -222,12 +222,31 @@ class SystemView(ctk.CTkFrame):
 
         self.sys_cache_msg = ctk.CTkLabel(cache_action_row, text="", font=ctk.CTkFont(size=11))
         self.sys_cache_msg.pack(side="left")
+        self.refresh_cache_status()
 
     def refresh_status(self) -> None:
-        """Refreshes all diagnostics: Ollama, Argos, and Hardware."""
+        """Refreshes all diagnostics: Ollama, Argos, Hardware, and Cache."""
         self.refresh_ollama_status()
         self.refresh_argos_status()
         self.refresh_hw_status()
+        self.refresh_cache_status()
+
+    def refresh_cache_status(self) -> None:
+        """Refreshes cache statistics and directory display."""
+        try:
+            stats = get_cache_stats()
+            dir_path = stats["cache_dir"]
+            count = stats["file_count"]
+            size_kb = stats["total_kb"]
+            size_mb = stats["total_mb"]
+            size_str = f"{size_mb:.2f} MB" if size_mb >= 1.0 else f"{size_kb:.1f} KB"
+            desc = (
+                f"Application cache store: {dir_path}\n"
+                f"Status: {count} cache file(s) ({size_str}) storing encrypted translation pairs."
+            )
+            self.sys_cache_desc.configure(text=desc)
+        except Exception as e:
+            self.sys_cache_desc.configure(text=f"Cache store: (Error probing cache: {e})")
 
     def refresh_ollama_status(self) -> None:
         """Probes local Ollama instance and installed models."""
@@ -331,18 +350,32 @@ class SystemView(ctk.CTkFrame):
         self.refresh_argos_status()
 
     def _clear_cache_gui(self) -> None:
+        stats = get_cache_stats()
+        count = stats["file_count"]
+        size_kb = stats["total_kb"]
+        size_mb = stats["total_mb"]
+        size_str = f"{size_mb:.2f} MB" if size_mb >= 1.0 else f"{size_kb:.1f} KB"
+
+        if count == 0:
+            messagebox.showinfo("Translation Cache", "Translation cache is already empty.")
+            return
+
         confirm = messagebox.askyesno(
             "Clear Translation Cache",
-            "Are you sure you want to clear the local translation cache? All cached sentence pairs will be removed.",
+            f"Are you sure you want to clear the translation cache?\n\n"
+            f"Location: {stats['cache_dir']}\n"
+            f"Files to remove: {count} ({size_str})\n\n"
+            "All cached sentence pairs across all translation modes will be permanently deleted.",
         )
         if not confirm:
             return
 
-        engine = TranslationEngine()
-        engine.clear_cache()
+        # Clean legacy cache files in CWD if any remain
         for cp in [
             os.path.abspath("translation_cache.json"),
             os.path.abspath(".translation_cache.json"),
+            os.path.abspath("translation_cache.enc"),
+            os.path.abspath(".translation_cache.enc"),
         ]:
             if os.path.exists(cp):
                 try:
@@ -350,5 +383,21 @@ class SystemView(ctk.CTkFrame):
                 except OSError:
                     pass
 
-        self.sys_cache_msg.configure(text="✓ Cache cleared successfully", text_color=THEME["success"])
-        self.after(3000, lambda: self.sys_cache_msg.configure(text=""))
+        result = clear_all_caches()
+        deleted = result["deleted"]
+        freed_kb = result["freed_bytes"] / 1024.0
+        freed_mb = result["freed_bytes"] / (1024.0 * 1024.0)
+        freed_str = f"{freed_mb:.2f} MB" if freed_mb >= 1.0 else f"{freed_kb:.1f} KB"
+
+        if result["failed"] > 0:
+            self.sys_cache_msg.configure(
+                text=f"⚠ Cleared {deleted} file(s) ({freed_str}), {result['failed']} locked/failed",
+                text_color=THEME["warning"],
+            )
+        else:
+            self.sys_cache_msg.configure(
+                text=f"✓ Cleared {deleted} cache file(s) ({freed_str} freed)",
+                text_color=THEME["success"],
+            )
+        self.refresh_cache_status()
+        self.after(5000, lambda: self.sys_cache_msg.configure(text=""))

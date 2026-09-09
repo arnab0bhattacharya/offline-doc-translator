@@ -24,10 +24,11 @@ if PROJECT_ROOT not in sys.path:
 
 import argparse
 from tqdm import tqdm
-from typing import Dict
+from typing import Dict, Union
 
 from engine.errors import TranslatorError
 from engine.core import TranslationMode, DIRECTIONS
+from engine.cache import CachePolicy
 from engine.run_job import execute_translation
 from engine.logging import TranslationLogger, TranslationLogEvent
 
@@ -69,7 +70,8 @@ def run_cli(
     mode_str: str,
     model_name: str,
     glossary: Dict[str, str],
-    include_source_text: bool = False
+    include_source_text: bool = False,
+    cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
 ) -> None:
     """Executes translation in terminal with tqdm progress bar and live telemetry."""
     print(f"\n=======================================================")
@@ -80,6 +82,7 @@ def run_cli(
     print(f" Mode       : {mode_str.upper()}")
     print(f" Direction  : {direction}")
     print(f" Model      : {model_name}")
+    print(f" Cache      : {str(cache_policy).upper()}")
     if glossary:
         print(f" Glossary   : {len(glossary)} active rule(s)")
     print(f"=======================================================")
@@ -121,6 +124,7 @@ def run_cli(
             log_cb=cli_logger.as_log_cb(),
             include_source_text=include_source_text,
             logger=cli_logger,
+            cache_policy=cache_policy,
         )
         if pbar:
             pbar.close()
@@ -165,6 +169,12 @@ def main():
     parser.add_argument("--model", default="gemma4:e2b-it-qat", help="Ollama model name (default: gemma4:e2b-it-qat)")
     parser.add_argument("--glossary", help="Custom glossary string (e.g. 'Term:Translation') or text file path")
     parser.add_argument("--include-source-text", action="store_true", help="Include original text in review log for debugging (default: false, for privacy)")
+    parser.add_argument(
+        "--cache-policy",
+        default=CachePolicy.ENCRYPTED_PERSISTENT.value,
+        choices=[p.value for p in CachePolicy],
+        help="Cache storage policy: encrypted_persistent (default), memory_only, or plaintext_persistent",
+    )
     parser.add_argument("--gui", action="store_true", help="Force launch Desktop GUI")
 
     args = parser.parse_args()
@@ -191,7 +201,16 @@ def main():
         base, ext = os.path.splitext(input_file)
         output_file = f"{base}_{direction}{ext}"
 
-    run_cli(input_file, output_file, direction, mode_str, model_name, glossary, include_source_text=args.include_source_text)
+    run_cli(
+        input_file,
+        output_file,
+        direction,
+        mode_str,
+        model_name,
+        glossary,
+        include_source_text=args.include_source_text,
+        cache_policy=args.cache_policy,
+    )
 
 
 

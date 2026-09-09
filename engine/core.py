@@ -15,6 +15,7 @@ import time
 import hashlib
 import tempfile
 import html
+import logging
 from collections import Counter
 import psutil
 import requests
@@ -24,7 +25,7 @@ from typing import Dict, Tuple, Optional, Any, List, Callable, Union
 
 from .errors import ErrorCode, TranslatorError
 from .backend_base import TranslationBackend
-from .cache import TranslationCache, JSONFileCache, NullCache, EncryptedFileCache, CACHE_TTL_DAYS
+from .cache import TranslationCache, JSONFileCache, NullCache, EncryptedFileCache, CachePolicy, CACHE_TTL_DAYS
 from .logging import TranslationLogger, TranslationLogEvent, get_logger
 
 # Supported translation directions
@@ -285,14 +286,15 @@ class TranslationEngine:
         glossary: Optional[Dict[str, str]] = None,
         min_free_ram_mb: int = 150,
         context_window: int = 2048,
-        cache_file: str = "translation_cache.json",
+        cache_file: Optional[str] = None,
         allow_llm: Optional[bool] = None,
         include_source_text: bool = False,
         cache_ttl_days: int = CACHE_TTL_DAYS,
         backend: Optional[TranslationBackend] = None,
         cache: Optional[TranslationCache] = None,
         logger: Optional[TranslationLogger] = None,
-        encrypted_cache: bool = False,
+        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
+        encrypted_cache: Optional[bool] = None,
         cache_key: Optional[Union[str, bytes]] = None,
     ):
         self.model_name = model_name
@@ -301,7 +303,6 @@ class TranslationEngine:
         self.glossary = glossary or {}
         self.min_free_ram_mb = min_free_ram_mb
         self.context_window = context_window
-        self.cache_file = cache_file
         self.allow_llm = allow_llm
         self.include_source_text = include_source_text
         self.cache_ttl_days = cache_ttl_days
@@ -310,16 +311,49 @@ class TranslationEngine:
         self.failed_this_run: set = set()
         self.logged_failed_keys: set = set()
 
+        # Resolve CachePolicy (handling legacy encrypted_cache boolean if passed)
+        if encrypted_cache is not None:
+            effective_policy = CachePolicy.ENCRYPTED_PERSISTENT if encrypted_cache else CachePolicy.PLAINTEXT_PERSISTENT
+        elif isinstance(cache_policy, CachePolicy):
+            effective_policy = cache_policy
+        else:
+            try:
+                effective_policy = CachePolicy(cache_policy)
+            except (ValueError, TypeError):
+                effective_policy = CachePolicy.ENCRYPTED_PERSISTENT
+        self.cache_policy = effective_policy
+
+        if cache_file is None:
+            if self.cache_policy == CachePolicy.PLAINTEXT_PERSISTENT:
+                self.cache_file = "translation_cache.json"
+            else:
+                self.cache_file = "translation_cache.enc"
+        else:
+            self.cache_file = cache_file
+
         if cache is not None:
             self._cache_mgr = cache
-        elif encrypted_cache:
-            self._cache_mgr = EncryptedFileCache(
-                cache_file=cache_file,
-                key=cache_key,
-                ttl_days=cache_ttl_days,
-            )
-        else:
-            self._cache_mgr = JSONFileCache(cache_file=cache_file, ttl_days=cache_ttl_days)
+        elif self.cache_policy == CachePolicy.MEMORY_ONLY:
+            self._cache_mgr = NullCache()
+        elif self.cache_policy == CachePolicy.PLAINTEXT_PERSISTENT:
+            self._cache_mgr = JSONFileCache(cache_file=self.cache_file, ttl_days=cache_ttl_days)
+        else:  # CachePolicy.ENCRYPTED_PERSISTENT
+            try:
+                self._cache_mgr = EncryptedFileCache(
+                    cache_file=self.cache_file,
+                    key=cache_key,
+                    ttl_days=cache_ttl_days,
+                    fallback_to_plain=False,
+                )
+            except Exception as err:
+                warning_msg = (
+                    f"[!] Warning: Cache encryption unavailable ({err}). "
+                    "Disabling cache persistence (operating in memory-only mode for privacy)."
+                )
+                if self.logger:
+                    self.logger.warning(warning_msg, category="cache")
+                logging.warning(warning_msg)
+                self._cache_mgr = NullCache()
 
         # Lazy-loaded backend instances
         self._nmt_backend = None

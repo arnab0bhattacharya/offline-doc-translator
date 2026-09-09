@@ -24,6 +24,10 @@ htmlcov/
 translation_cache.json
 .translation_cache.json
 translation_cache.json.tmp*
+translation_cache.enc
+.translation_cache.enc
+*.translation_cache*.bak*
+*.tmp
 
 # Chat review items
 ChatItems/

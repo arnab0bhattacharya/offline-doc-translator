@@ -20,6 +20,7 @@ from engine.cache import (
     JSONFileCache,
     NullCache,
     EncryptedFileCache,
+    CachePolicy,
     derive_machine_key,
     derive_fernet_key,
     CACHE_TTL_DAYS,
@@ -473,5 +474,83 @@ class TestEngineEncryptedCacheIntegration(unittest.TestCase):
             self.assertEqual(backend2.calls, 0)
 
 
+class TestCachePolicyAndPrivacyDefaults(unittest.TestCase):
+    """Verifies CachePolicy enum, defaults, legacy migration, and privacy guarantees."""
+
+    def test_cache_policy_enum_values(self):
+        self.assertEqual(CachePolicy.ENCRYPTED_PERSISTENT.value, "encrypted_persistent")
+        self.assertEqual(CachePolicy.MEMORY_ONLY.value, "memory_only")
+        self.assertEqual(CachePolicy.PLAINTEXT_PERSISTENT.value, "plaintext_persistent")
+
+    def test_encrypted_file_cache_legacy_json_migration(self):
+        with tempfile.TemporaryDirectory() as td:
+            legacy_json = os.path.join(td, ".translation_cache.json")
+            enc_file = os.path.join(td, ".translation_cache.enc")
+
+            # 1. Create a legacy plaintext JSON cache
+            plain_data = {
+                "_meta": {"last_prune": 0},
+                "fast_nmt": {
+                    "ja2en": {
+                        "fp_legacy": {
+                            "legacy_hash": "Migrated Secret Text"
+                        }
+                    }
+                }
+            }
+            with open(legacy_json, "w", encoding="utf-8") as f:
+                json.dump(plain_data, f)
+
+            # 2. Instantiate EncryptedFileCache targeting .translation_cache.enc
+            cache = EncryptedFileCache(cache_file=enc_file)
+            cache.load("ja2en")
+
+            # 3. Assert legacy data was imported into memory
+            self.assertEqual(cache.get("legacy_hash", "ja2en", "fp_legacy", mode="fast_nmt"), "Migrated Secret Text")
+
+            # 4. Save cache: should write encrypted payload and backup legacy file
+            logs = []
+            cache.save(log_cb=lambda msg: logs.append(msg))
+            self.assertTrue(os.path.exists(enc_file))
+
+            with open(enc_file, "rb") as f:
+                enc_bytes = f.read()
+            self.assertTrue(enc_bytes.startswith(b"gAAAAA"))
+            self.assertNotIn(b"Migrated Secret Text", enc_bytes)
+
+            # Original .translation_cache.json should be renamed to a .bak file
+            self.assertFalse(os.path.exists(legacy_json))
+            bak_files = [f for f in os.listdir(td) if f.startswith(".translation_cache.json.bak")]
+            self.assertEqual(len(bak_files), 1)
+
+            # 5. Reload into a new cache instance: must load from .enc file directly
+            cache2 = EncryptedFileCache(cache_file=enc_file)
+            cache2.load("ja2en")
+            self.assertEqual(cache2.get("legacy_hash", "ja2en", "fp_legacy", mode="fast_nmt"), "Migrated Secret Text")
+
+    def test_engine_defaults_to_encrypted_cache(self):
+        engine = TranslationEngine()
+        self.assertEqual(engine.cache_policy, CachePolicy.ENCRYPTED_PERSISTENT)
+        self.assertIsInstance(engine.cache_mgr, EncryptedFileCache)
+
+    def test_engine_memory_only_uses_null_cache(self):
+        engine = TranslationEngine(cache_policy=CachePolicy.MEMORY_ONLY)
+        self.assertEqual(engine.cache_policy, CachePolicy.MEMORY_ONLY)
+        self.assertIsInstance(engine.cache_mgr, NullCache)
+
+    def test_engine_plaintext_persistent_uses_json_cache(self):
+        engine = TranslationEngine(cache_policy=CachePolicy.PLAINTEXT_PERSISTENT)
+        self.assertEqual(engine.cache_policy, CachePolicy.PLAINTEXT_PERSISTENT)
+        self.assertIsInstance(engine.cache_mgr, JSONFileCache)
+
+    def test_engine_crypto_unavailable_falls_back_to_null_cache_not_plain(self):
+        with patch("engine.cache.HAS_CRYPTOGRAPHY", False):
+            engine = TranslationEngine(cache_policy=CachePolicy.ENCRYPTED_PERSISTENT)
+            # Must NOT be JSONFileCache (which writes plaintext)
+            self.assertNotIsInstance(engine.cache_mgr, JSONFileCache)
+            self.assertIsInstance(engine.cache_mgr, NullCache)
+
+
 if __name__ == "__main__":
     unittest.main()
+

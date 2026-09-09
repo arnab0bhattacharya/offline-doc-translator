@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional, Union
 import customtkinter as ctk
 
 from engine.core import TranslationMode
+from engine.cache import CachePolicy
 from engine.preflight import check_ollama_status
 from engine.queue_manager import TranslationJob, JobStatus
 from gui.controllers.translation_controller import TranslationController
@@ -223,6 +224,33 @@ class DocumentsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
         )
         self.model_combo.pack()
+
+        # Cache Policy Box
+        self.cache_box = ctk.CTkFrame(ctrl_row, fg_color="transparent")
+        self.cache_box.pack(side="left", fill="y", padx=(14, 0))
+
+        ctk.CTkLabel(
+            self.cache_box,
+            text="CACHE POLICY",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=THEME["text_secondary"],
+        ).pack(anchor="w", pady=(0, 4))
+
+        self.cache_policy_display = [
+            "Encrypted (Default)",
+            "In-Memory (Privacy)",
+            "Plaintext (Compatibility)",
+        ]
+        self.cache_policy_var = ctk.StringVar(value=self.cache_policy_display[0])
+        self.cache_policy_combo = ctk.CTkComboBox(
+            self.cache_box,
+            values=self.cache_policy_display,
+            variable=self.cache_policy_var,
+            width=180,
+            state="readonly",
+            font=ctk.CTkFont(size=12),
+        )
+        self.cache_policy_combo.pack()
 
         # Collapsible Glossary in Card 2
         glossary_toggle_frame = ctk.CTkFrame(opt_inner, fg_color="transparent")
@@ -476,6 +504,14 @@ class DocumentsView(ctk.CTkFrame):
         raw_glossary = self.glossary_text.get("0.0", "end")
         glossary = parse_glossary_text(raw_glossary)
 
+        cache_sel = self.cache_policy_var.get()
+        if "In-Memory" in cache_sel:
+            cache_policy = CachePolicy.MEMORY_ONLY
+        elif "Plaintext" in cache_sel:
+            cache_policy = CachePolicy.PLAINTEXT_PERSISTENT
+        else:
+            cache_policy = CachePolicy.ENCRYPTED_PERSISTENT
+
         if mode == TranslationMode.PURE_LLM and not check_ollama_status():
             if not messagebox.askyesno(
                 "Ollama Offline",
@@ -489,6 +525,7 @@ class DocumentsView(ctk.CTkFrame):
             mode=mode,
             model_name=model,
             glossary=glossary,
+            cache_policy=cache_policy,
         )
 
         for job_id, in_path, out_path in dispatched:

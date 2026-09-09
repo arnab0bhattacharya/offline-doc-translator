@@ -8,6 +8,7 @@ import os
 import threading
 from typing import Dict, Optional, Callable, Any, Union
 from .core import TranslationEngine, TranslationMode
+from .cache import CachePolicy
 from .errors import ErrorCode, TranslatorError
 from .preflight import run_preflight, run_nmt_preflight
 from .logging import TranslationLogger
@@ -27,6 +28,7 @@ def execute_translation(
     policy: Optional[Any] = None,
     cancel_event: Optional[threading.Event] = None,
     logger: Optional[TranslationLogger] = None,
+    cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
 ) -> Dict[str, Any]:
     """
     Runs the full translation pipeline: preflight -> engine -> handler -> translate.
@@ -34,6 +36,14 @@ def execute_translation(
     """
     if not isinstance(mode, TranslationMode):
         mode = TranslationMode(mode)
+
+    if not isinstance(cache_policy, CachePolicy):
+        try:
+            effective_cache_policy = CachePolicy(cache_policy)
+        except (ValueError, TypeError):
+            effective_cache_policy = CachePolicy.ENCRYPTED_PERSISTENT
+    else:
+        effective_cache_policy = cache_policy
 
     if cancel_event and cancel_event.is_set():
         raise TranslatorError(ErrorCode.E09, detail="Translation cancelled before execution.")
@@ -71,14 +81,19 @@ def execute_translation(
     # 3. Engine + Cache
     if effective_log_cb:
         effective_log_cb(f"Initializing {mode.value.upper()} engine & persistent cache...")
+
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    if effective_cache_policy == CachePolicy.PLAINTEXT_PERSISTENT:
+        target_cache_file = os.path.join(out_dir, ".translation_cache.json")
+    else:
+        target_cache_file = os.path.join(out_dir, ".translation_cache.enc")
+
     engine = TranslationEngine(
         model_name=model_name,
         mode=mode,
         glossary=glossary,
-        cache_file=os.path.join(
-            os.path.dirname(os.path.abspath(output_path)),
-            ".translation_cache.json",
-        ),
+        cache_file=target_cache_file,
+        cache_policy=effective_cache_policy,
         allow_llm=llm_available,
         include_source_text=include_source_text,
         logger=logger,

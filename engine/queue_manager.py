@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List, Union
 
 from engine.core import TranslationMode
+from engine.cache import CachePolicy
 from engine.errors import ErrorCode, TranslatorError
 from engine.run_job import execute_translation
 
@@ -40,6 +41,7 @@ class TranslationJob:
     review_log_path: str = ""
     include_source_text: bool = False
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    cache_policy: CachePolicy = CachePolicy.ENCRYPTED_PERSISTENT
 
 
 class TranslationQueue:
@@ -71,11 +73,19 @@ class TranslationQueue:
         model_name: str,
         glossary: Dict[str, str],
         include_source_text: bool = False,
+        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
     ) -> str:
         """Creates a TranslationJob and adds to queue. Returns job ID."""
         job_id = str(uuid.uuid4())
         review_log_path = f"{output_path}.needs_review.log"
         mode_enum = mode if isinstance(mode, TranslationMode) else TranslationMode(mode)
+        if not isinstance(cache_policy, CachePolicy):
+            try:
+                cache_policy_enum = CachePolicy(cache_policy)
+            except (ValueError, TypeError):
+                cache_policy_enum = CachePolicy.ENCRYPTED_PERSISTENT
+        else:
+            cache_policy_enum = cache_policy
         
         job = TranslationJob(
             id=job_id,
@@ -95,6 +105,7 @@ class TranslationQueue:
             completed_at=None,
             review_log_path=review_log_path,
             include_source_text=include_source_text,
+            cache_policy=cache_policy_enum,
         )
 
         
@@ -245,5 +256,6 @@ class TranslationQueue:
             log_cb=log_cb,
             include_source_text=job.include_source_text,
             cancel_event=job.cancel_event,
+            cache_policy=job.cache_policy,
         )
 

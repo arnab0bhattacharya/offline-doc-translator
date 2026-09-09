@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from engine.queue_manager import TranslationQueue, JobStatus, TranslationJob
 from engine.errors import ErrorCode, TranslatorError
 from engine.core import TranslationMode
+from engine.cache import CachePolicy
 
 @pytest.fixture
 def queue_mgr():
@@ -319,4 +320,35 @@ def test_gui_widget_update_failed_generic_error():
         title_arg, msg_arg = mock_showerror.call_args[0]
         assert title_arg == "Translation Error"
         assert msg_arg == "Unknown system crash"
+
+
+def test_job_cache_policy_forwarding(queue_mgr):
+    with patch('engine.queue_manager.execute_translation') as mock_exec:
+        mock_exec.return_value = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
+
+        # 1. Default job has CachePolicy.ENCRYPTED_PERSISTENT
+        jid1 = queue_mgr.add_job("f1.docx", "o1.docx", "ja2en", "fast_nmt", "model", {})
+        job1 = queue_mgr.get_job(jid1)
+        assert job1.cache_policy == CachePolicy.ENCRYPTED_PERSISTENT
+
+        # 2. Custom job with string/enum cache policy
+        jid2 = queue_mgr.add_job(
+            "f2.docx", "o2.docx", "ja2en", "fast_nmt", "model", {},
+            cache_policy="memory_only"
+        )
+        job2 = queue_mgr.get_job(jid2)
+        assert job2.cache_policy == CachePolicy.MEMORY_ONLY
+
+        # Wait for job2 to finish processing
+        timeout = time.time() + 2.0
+        while (job1.status not in (JobStatus.COMPLETED, JobStatus.FAILED) or
+               job2.status not in (JobStatus.COMPLETED, JobStatus.FAILED)) and time.time() < timeout:
+            time.sleep(0.05)
+
+        # Assert execute_translation was called with each job's cache_policy
+        assert mock_exec.call_count >= 2
+        calls = mock_exec.call_args_list
+        assert any(c.kwargs.get("cache_policy") == CachePolicy.ENCRYPTED_PERSISTENT for c in calls)
+        assert any(c.kwargs.get("cache_policy") == CachePolicy.MEMORY_ONLY for c in calls)
+
 

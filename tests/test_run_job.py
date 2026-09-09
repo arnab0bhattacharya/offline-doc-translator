@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from engine.core import TranslationMode
+from engine.cache import CachePolicy
 from engine.errors import TranslatorError, ErrorCode
 from engine.run_job import execute_translation
 
@@ -57,6 +58,16 @@ class TestRunJob(unittest.TestCase):
         mock_nmt_preflight.assert_called_once_with("ja2en")
         mock_get_handler.assert_called_once_with(".docx", mock_engine_cls.return_value)
         mock_handler.translate.assert_called_once()
+        mock_engine_cls.assert_called_once_with(
+            model_name="gemma4:e2b-it-qat",
+            mode=TranslationMode.FAST_NMT,
+            glossary={"A": "B"},
+            cache_file=os.path.join(self.test_dir, ".translation_cache.enc"),
+            cache_policy=CachePolicy.ENCRYPTED_PERSISTENT,
+            allow_llm=False,
+            include_source_text=False,
+            logger=None,
+        )
 
     @patch("engine.run_job.get_handler")
     @patch("engine.run_job.TranslationEngine")
@@ -162,6 +173,77 @@ class TestRunJob(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, ErrorCode.E09)
 
+    @patch("engine.run_job.get_handler")
+    @patch("engine.run_job.TranslationEngine")
+    @patch("engine.run_job.run_nmt_preflight")
+    @patch("engine.run_job.run_preflight")
+    def test_execute_translation_plaintext_cache_policy(
+        self, mock_preflight, mock_nmt_preflight, mock_engine_cls, mock_get_handler
+    ):
+        mock_handler = MagicMock()
+        mock_handler.translate.return_value = {"total": 1, "translated": 1, "reverted": 0, "skipped": 0}
+        mock_get_handler.return_value = mock_handler
+
+        in_path = os.path.join(self.test_dir, "plain.docx")
+        out_path = os.path.join(self.test_dir, "plain_en.docx")
+
+        execute_translation(
+            input_path=in_path,
+            output_path=out_path,
+            direction="ja2en",
+            mode=TranslationMode.FAST_NMT,
+            model_name="gemma4:e2b-it-qat",
+            glossary={},
+            cache_policy=CachePolicy.PLAINTEXT_PERSISTENT,
+        )
+
+        mock_engine_cls.assert_called_once_with(
+            model_name="gemma4:e2b-it-qat",
+            mode=TranslationMode.FAST_NMT,
+            glossary={},
+            cache_file=os.path.join(self.test_dir, ".translation_cache.json"),
+            cache_policy=CachePolicy.PLAINTEXT_PERSISTENT,
+            allow_llm=False,
+            include_source_text=False,
+            logger=None,
+        )
+
+    @patch("engine.run_job.get_handler")
+    @patch("engine.run_job.TranslationEngine")
+    @patch("engine.run_job.run_nmt_preflight")
+    @patch("engine.run_job.run_preflight")
+    def test_execute_translation_memory_only_cache_policy(
+        self, mock_preflight, mock_nmt_preflight, mock_engine_cls, mock_get_handler
+    ):
+        mock_handler = MagicMock()
+        mock_handler.translate.return_value = {"total": 1, "translated": 1, "reverted": 0, "skipped": 0}
+        mock_get_handler.return_value = mock_handler
+
+        in_path = os.path.join(self.test_dir, "mem.docx")
+        out_path = os.path.join(self.test_dir, "mem_en.docx")
+
+        execute_translation(
+            input_path=in_path,
+            output_path=out_path,
+            direction="ja2en",
+            mode=TranslationMode.FAST_NMT,
+            model_name="gemma4:e2b-it-qat",
+            glossary={},
+            cache_policy="memory_only",
+        )
+
+        mock_engine_cls.assert_called_once_with(
+            model_name="gemma4:e2b-it-qat",
+            mode=TranslationMode.FAST_NMT,
+            glossary={},
+            cache_file=os.path.join(self.test_dir, ".translation_cache.enc"),
+            cache_policy=CachePolicy.MEMORY_ONLY,
+            allow_llm=False,
+            include_source_text=False,
+            logger=None,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

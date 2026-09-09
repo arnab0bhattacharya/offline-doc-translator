@@ -8,6 +8,7 @@ import os
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from engine.core import TranslationMode
+from engine.cache import CachePolicy
 from engine.queue_manager import TranslationQueue, TranslationJob
 
 
@@ -52,6 +53,7 @@ class TranslationController:
         model_name: str,
         glossary: Dict[str, str],
         include_source_text: bool = False,
+        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
     ) -> str:
         """Enqueues a single translation job."""
         return self.queue.add_job(
@@ -62,6 +64,7 @@ class TranslationController:
             model_name=model_name,
             glossary=glossary,
             include_source_text=include_source_text,
+            cache_policy=cache_policy,
         )
 
     def start_batch(
@@ -72,6 +75,7 @@ class TranslationController:
         model_name: str,
         glossary: Dict[str, str],
         include_source_text: bool = False,
+        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
     ) -> List[Tuple[str, str, str]]:
         """
         Calculates output paths and adds multiple documents to the queue.
@@ -92,6 +96,7 @@ class TranslationController:
                 model_name=model_name,
                 glossary=glossary,
                 include_source_text=include_source_text,
+                cache_policy=cache_policy,
             )
             dispatched.append((job_id, input_path, output_path))
         return dispatched

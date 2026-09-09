@@ -17,6 +17,7 @@ import getpass
 import platform
 import logging
 import tempfile
+from enum import Enum
 from typing import Optional, Dict, Any, Callable, Union
 
 try:
@@ -33,6 +34,13 @@ except ImportError:
 
 CACHE_TTL_DAYS = 30
 CACHE_SALT_DEFAULT = b"offline-doc-translator-cache-salt-v1"
+
+
+class CachePolicy(str, Enum):
+    """Explicit cache storage policy."""
+    ENCRYPTED_PERSISTENT = "encrypted_persistent"
+    MEMORY_ONLY = "memory_only"
+    PLAINTEXT_PERSISTENT = "plaintext_persistent"
 
 
 def derive_machine_key(salt: Optional[bytes] = None) -> bytes:
@@ -391,13 +399,14 @@ class EncryptedFileCache(JSONFileCache):
         cache_file: str = "translation_cache.enc",
         key: Optional[Union[str, bytes]] = None,
         ttl_days: int = CACHE_TTL_DAYS,
-        fallback_to_plain: bool = True,
+        fallback_to_plain: bool = False,
     ):
         super().__init__(cache_file=cache_file, ttl_days=ttl_days)
         self.key = key
         self.fallback_to_plain = fallback_to_plain
         self.fernet: Optional[Any] = None
         self._crypto_available: bool = HAS_CRYPTOGRAPHY
+        self._migrated_from_legacy: Optional[str] = None
 
         if HAS_CRYPTOGRAPHY:
             try:
@@ -428,6 +437,7 @@ class EncryptedFileCache(JSONFileCache):
                     # Backward compatibility: if the file is plaintext JSON, load it directly
                     if stripped.startswith(b"{") or stripped.startswith(b"["):
                         self._data = json.loads(raw_bytes.decode("utf-8"))
+                        self._migrated_from_legacy = self.cache_file
                     else:
                         try:
                             decrypted = self.fernet.decrypt(raw_bytes)
@@ -445,7 +455,31 @@ class EncryptedFileCache(JSONFileCache):
                 logging.warning("[!] Warning: Failed to load cache file '%s': %s", self.cache_file, e)
                 self._data = {}
         else:
-            self._data = {}
+            # Check for legacy plaintext cache files for migration
+            legacy_candidates = []
+            base, ext = os.path.splitext(self.cache_file)
+            if ext != ".json":
+                legacy_candidates.append(base + ".json")
+            cache_dir = os.path.dirname(os.path.abspath(self.cache_file))
+            legacy_candidates.append(os.path.join(cache_dir, ".translation_cache.json"))
+            legacy_candidates.append(os.path.join(cache_dir, "translation_cache.json"))
+
+            migrated = False
+            for legacy_path in legacy_candidates:
+                if os.path.exists(legacy_path) and os.path.isfile(legacy_path):
+                    try:
+                        with open(legacy_path, "r", encoding="utf-8") as f:
+                            self._data = json.load(f)
+                        self._migrated_from_legacy = legacy_path
+                        logging.info("Discovered legacy plaintext cache '%s'; queued for migration to encrypted format.", legacy_path)
+                        migrated = True
+                        break
+                    except Exception as e:
+                        logging.warning("Failed to read legacy cache candidate '%s': %s", legacy_path, e)
+
+            if not migrated:
+                self._data = {}
+
         self._loaded = True
 
         # Prune stale entries at most once per day
@@ -474,10 +508,23 @@ class EncryptedFileCache(JSONFileCache):
             with os.fdopen(fd, "wb") as f:
                 f.write(payload)
             os.replace(temp_file, self.cache_file)
+            temp_file = None
+
+            # If this save was preceded by a legacy cache migration, safely backup the legacy file
+            if self._migrated_from_legacy and os.path.exists(self._migrated_from_legacy):
+                if os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
+                    try:
+                        backup_path = f"{self._migrated_from_legacy}.bak.{int(time.time())}"
+                        os.replace(self._migrated_from_legacy, backup_path)
+                        if log_cb:
+                            log_cb(f"Migrated legacy cache to encrypted cache and backed up original to {os.path.basename(backup_path)}")
+                        self._migrated_from_legacy = None
+                    except Exception as bak_err:
+                        logging.warning("Could not backup legacy cache file '%s': %s", self._migrated_from_legacy, bak_err)
         except Exception as e:
             if log_cb:
-                log_cb(f"[!] Warning: Failed to save encrypted translation cache: {e}")
-            logging.warning("[!] Warning: Failed to save encrypted translation cache: %s", e)
+                log_cb(f"[!] Warning: Failed to save translation cache: {e}")
+            logging.warning("[!] Warning: Failed to save translation cache: %s", e)
         finally:
             if temp_file and os.path.exists(temp_file):
                 try:

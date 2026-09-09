@@ -36,6 +36,18 @@ MAX_SINGLE_ENTRY_BYTES = DEFAULT_POLICY.max_single_entry_bytes
 XML_TAG_ATTRS = r'(?:[^>"\']|"[^"]*"|\'[^\']*\')*'
 
 
+class ZipSecurityError(TranslatorError, zipfile.BadZipFile):
+    """Raised when an archive violates document security policies (zip bomb, traversal, disk limits)."""
+
+    def __init__(
+        self,
+        detail: str = "",
+        code: ErrorCode = ErrorCode.E04,
+        original_exc: Optional[Exception] = None,
+    ):
+        super().__init__(code=code, detail=detail, original_exc=original_exc)
+
+
 class BaseFormatHandler(ABC):
     """Base class for document format translation handlers."""
 
@@ -111,48 +123,108 @@ class BaseFormatHandler(ABC):
         target_dir: str,
         policy: Optional[DocumentSecurityPolicy] = None,
     ) -> None:
-        """Extracts an OOXML archive with decompression-bomb protection."""
+        """Extracts an OOXML archive with disk-aware decompression-bomb protection."""
         pol = policy or DEFAULT_POLICY
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir, ignore_errors=True)
-        os.makedirs(target_dir, exist_ok=True)
+        target_root = os.path.abspath(target_dir)
+        if os.path.exists(target_root):
+            shutil.rmtree(target_root, ignore_errors=True)
+        os.makedirs(target_root, exist_ok=True)
 
-        with zipfile.ZipFile(archive_path, "r") as z:
-            target_root = os.path.abspath(target_dir)
+        try:
+            with zipfile.ZipFile(archive_path, "r") as z:
+                members = z.infolist()
 
-            # Security: check entry count
-            members = z.infolist()
-            if len(members) > pol.max_archive_entries:
-                raise zipfile.BadZipFile(
-                    f"Archive has {len(members)} entries (max {pol.max_archive_entries}). "
-                    f"Refusing to extract — possible zip bomb."
-                )
-
-            # Security: check total and per-entry uncompressed sizes
-            total_uncompressed = 0
-            for member in members:
-                if member.file_size > pol.max_single_entry_bytes:
-                    raise zipfile.BadZipFile(
-                        f"Archive member '{member.filename}' is {member.file_size / 1024 / 1024:.0f} MB "
-                        f"(max {pol.max_single_entry_bytes / 1024 / 1024:.0f} MB)."
+                # 1. Check entry count
+                if len(members) > pol.max_archive_entries:
+                    raise ZipSecurityError(
+                        detail=(
+                            f"Archive has {len(members)} entries (max {pol.max_archive_entries}). "
+                            f"Refusing to extract — possible zip bomb."
+                        ),
+                        code=ErrorCode.E04,
                     )
-                total_uncompressed += member.file_size
 
-            if total_uncompressed > pol.max_extracted_bytes:
-                raise zipfile.BadZipFile(
-                    f"Archive total uncompressed size is {total_uncompressed / 1024 / 1024:.0f} MB "
-                    f"(max {pol.max_extracted_bytes / 1024 / 1024:.0f} MB). "
-                    f"Refusing to extract — possible zip bomb."
-                )
+                # 2. Check total declared uncompressed size, single-entry size, and compression ratio
+                total_uncompressed = 0
+                for member in members:
+                    if member.file_size > pol.max_single_entry_bytes:
+                        raise ZipSecurityError(
+                            detail=(
+                                f"Archive member '{member.filename}' is {member.file_size / 1024 / 1024:.0f} MB "
+                                f"(max {pol.max_single_entry_bytes / 1024 / 1024:.0f} MB)."
+                            ),
+                            code=ErrorCode.E04,
+                        )
 
-            # Security: path traversal check
-            for member in members:
-                member_path = os.path.abspath(os.path.join(target_root, member.filename))
-                if os.path.commonpath([target_root, member_path]) != target_root:
-                    raise zipfile.BadZipFile(f"Unsafe archive member: {member.filename}")
+                    if member.compress_size > 0 and pol.max_compression_ratio > 0:
+                        ratio = member.file_size / member.compress_size
+                        if ratio > pol.max_compression_ratio:
+                            raise ZipSecurityError(
+                                detail=(
+                                    f"Archive member '{member.filename}' exceeds maximum compression ratio "
+                                    f"({ratio:.1f}:1 > {pol.max_compression_ratio:.0f}:1). "
+                                    f"Refusing to extract — possible zip bomb."
+                                ),
+                                code=ErrorCode.E04,
+                            )
 
-            z.extractall(target_dir)
+                    total_uncompressed += member.file_size
 
+                # 3. Check total uncompressed size limit
+                if total_uncompressed > pol.max_extracted_bytes:
+                    raise ZipSecurityError(
+                        detail=(
+                            f"Archive total uncompressed size is {total_uncompressed / 1024 / 1024:.0f} MB "
+                            f"(max {pol.max_extracted_bytes / 1024 / 1024:.0f} MB). "
+                            f"Refusing to extract — possible zip bomb."
+                        ),
+                        code=ErrorCode.E04,
+                    )
+
+                # 4. Usable free disk space check
+                try:
+                    probe_dir = target_root if os.path.exists(target_root) else os.path.dirname(target_root)
+                    free_disk_bytes = shutil.disk_usage(probe_dir).free
+                except OSError:
+                    free_disk_bytes = float("inf")
+
+                required_disk_bytes = total_uncompressed + pol.min_free_disk_after_extract_bytes
+                if required_disk_bytes > free_disk_bytes:
+                    raise ZipSecurityError(
+                        detail=(
+                            f"Insufficient disk space for archive extraction: required "
+                            f"{required_disk_bytes / 1024 / 1024:.1f} MB (archive: {total_uncompressed / 1024 / 1024:.1f} MB + "
+                            f"reserve: {pol.min_free_disk_after_extract_bytes / 1024 / 1024:.1f} MB), "
+                            f"available: {free_disk_bytes / 1024 / 1024:.1f} MB."
+                        ),
+                        code=ErrorCode.E04,
+                    )
+
+                # 5. Path traversal check (Zip Slip)
+                for member in members:
+                    member_path = os.path.abspath(os.path.join(target_root, member.filename))
+                    if os.path.commonpath([target_root, member_path]) != target_root:
+                        raise ZipSecurityError(
+                            detail=f"Unsafe archive member: {member.filename}",
+                            code=ErrorCode.E04,
+                        )
+
+                z.extractall(target_root)
+
+        except zipfile.BadZipFile as bzf:
+            if os.path.exists(target_root):
+                shutil.rmtree(target_root, ignore_errors=True)
+            if isinstance(bzf, ZipSecurityError):
+                raise
+            raise ZipSecurityError(
+                detail=f"Corrupted or invalid zip archive '{os.path.basename(archive_path)}': {bzf}",
+                code=ErrorCode.E04,
+                original_exc=bzf,
+            )
+        except Exception:
+            if os.path.exists(target_root):
+                shutil.rmtree(target_root, ignore_errors=True)
+            raise
 
     @staticmethod
     def pack_zip(source_dir: str, output_archive: str) -> None:
@@ -171,7 +243,10 @@ class BaseFormatHandler(ABC):
 
             with zipfile.ZipFile(temp_archive, "r") as z:
                 if z.testzip() is not None:
-                    raise zipfile.BadZipFile("Translated archive failed integrity validation.")
+                    raise ZipSecurityError(
+                        detail="Translated archive failed integrity validation.",
+                        code=ErrorCode.E04,
+                    )
             os.replace(temp_archive, output_archive)
         finally:
             if os.path.exists(temp_archive):

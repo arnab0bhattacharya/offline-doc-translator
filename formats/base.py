@@ -307,6 +307,7 @@ class BaseFormatHandler(ABC):
         tag_prefix: str,
         recent_paragraphs: Optional[List[str]] = None,
         cancel_event: Optional[threading.Event] = None,
+        extra_nsmap: Optional[Dict[str, str]] = None,
     ) -> Optional[str]:
         """
         Shared logic for translating and replacing text units within an OOXML paragraph:
@@ -393,29 +394,20 @@ class BaseFormatHandler(ABC):
                 if len(recent_paragraphs) > 2:
                     recent_paragraphs.pop(0)
 
-            # 1. Primary path: lxml DOM mutation
+            # Primary and exclusive safe path: lxml DOM mutation with complete namespace awareness
             dom_mutated = mutate_paragraph_text_nodes_lxml(
                 p_content=p_content,
                 tag_prefix=tag_prefix,
                 translated_text=result.text,
+                extra_nsmap=extra_nsmap,
             )
             if dom_mutated is not None:
                 return dom_mutated
 
-            # 2. Fallback path: regex replacement
-            escaped_translation = escape_xml(result.text)
-            new_p_content = ""
-            last_idx = 0
-            for i, m in enumerate(t_matches):
-                new_p_content += p_content[last_idx:m.start()]
-                if i == 0:
-                    new_p_content += f'<{tag_prefix}:t xml:space="preserve">{escaped_translation}</{tag_prefix}:t>'
-                else:
-                    new_p_content += f'<{tag_prefix}:t></{tag_prefix}:t>'
-                last_idx = m.end()
-
-            new_p_content += p_content[last_idx:]
-            return new_p_content
+            raise TranslatorError(
+                ErrorCode.E04,
+                detail=f"Failed DOM mutation for text unit in {part_name}: no valid text nodes found."
+            )
 
         return None
 

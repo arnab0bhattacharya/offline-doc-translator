@@ -44,6 +44,7 @@ class DOCXHandler(BaseFormatHandler):
         progress_cb: Optional[Callable[[int, int, str], None]],
         log_cb: Optional[Callable[[str], None]],
         cancel_event: Optional[threading.Event] = None,
+        extra_nsmap: Optional[Dict[str, str]] = None,
     ) -> str:
         p_pattern = re.compile(rf"(<w:p\b{XML_TAG_ATTRS}>)(.*?)(</w:p>)", re.DOTALL)
         recent_paragraphs: List[str] = []
@@ -76,6 +77,7 @@ class DOCXHandler(BaseFormatHandler):
                 tag_prefix="w",
                 recent_paragraphs=recent_paragraphs,
                 cancel_event=cancel_event,
+                extra_nsmap=extra_nsmap,
             )
 
             if new_p_content is not None:
@@ -145,9 +147,12 @@ class DOCXHandler(BaseFormatHandler):
                 with open(file_path, "r", encoding="utf-8") as f:
                     xml_data = f.read()
 
-                # Security: check for XXE / prohibited entity or DTD declarations
+                # Security: check for XXE / prohibited entity or DTD declarations and extract root nsmap
+                part_nsmap = {}
                 try:
-                    parse_xml_safely(xml_data)
+                    root, _ = parse_xml_safely(xml_data)
+                    if hasattr(root, "nsmap"):
+                        part_nsmap = {k: v for k, v in root.nsmap.items() if k}
                 except TranslatorError:
                     raise
                 except Exception:
@@ -163,6 +168,7 @@ class DOCXHandler(BaseFormatHandler):
                     progress_cb=progress_cb,
                     log_cb=log_cb,
                     cancel_event=cancel_event,
+                    extra_nsmap=part_nsmap,
                 )
 
                 with open(file_path, "w", encoding="utf-8") as f:

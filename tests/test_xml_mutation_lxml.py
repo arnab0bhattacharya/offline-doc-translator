@@ -25,6 +25,7 @@ from formats.xml_utils import (
     parse_xml_safely,
     serialize_xml_safely,
     mutate_paragraph_text_nodes_lxml,
+    mutate_complete_xml_part_dom,
     create_inline_str_cell_dom,
     check_xml_safety,
     get_secure_xml_parser,
@@ -231,6 +232,135 @@ class TestXMLMutationLXML(unittest.TestCase):
         serialized = serialize_xml_safely(root, was_wrapped=was_wrapped)
         self.assertIn('フラグメント', serialized)
         self.assertNotIn('<_wrap', serialized)
+
+    # ─────────────────────────────────────────────────────────────
+    # 7. Rich Namespaces (w14, w15, mc, a14) & Attribute Preservation
+    # ─────────────────────────────────────────────────────────────
+    def test_docx_dom_mutation_rich_namespaces_w14_w15_mc(self):
+        """Fragments containing w14, w15, mc namespaces parse and mutate properly without fallback."""
+        p_content = (
+            '<w:pPr>'
+            '<w14:paraId w14:val="12345678"/>'
+            '<w14:textId w14:val="87654321"/>'
+            '</w:pPr>'
+            '<mc:AlternateContent>'
+            '<mc:Choice Requires="w14">'
+            '<w:r><w:t>Choice text</w:t></w:r>'
+            '</mc:Choice>'
+            '<mc:Fallback>'
+            '<w:r><w:t>Fallback text</w:t></w:r>'
+            '</mc:Fallback>'
+            '</mc:AlternateContent>'
+        )
+        translated = "[TRANS: Choice text Fallback text]"
+        mutated = mutate_paragraph_text_nodes_lxml(
+            p_content=p_content,
+            tag_prefix="w",
+            translated_text=translated,
+        )
+        self.assertIsNotNone(mutated)
+        self.assertIn('w14:paraId', mutated)
+        self.assertIn('w14:val="12345678"', mutated)
+        self.assertIn(translated, mutated)
+
+    def test_docx_dom_mutation_preserves_t_node_attributes(self):
+        """Attributes on <w:t> like custom annotations or xml:space are preserved during DOM mutation."""
+        p_content = '<w:r><w:t note="score &gt; 90" xml:space="preserve">オリジナル</w:t></w:r>'
+        translated = "Translated"
+        mutated = mutate_paragraph_text_nodes_lxml(
+            p_content=p_content,
+            tag_prefix="w",
+            translated_text=translated,
+        )
+        self.assertIsNotNone(mutated)
+        self.assertIn('note="score &gt; 90"', mutated)
+        self.assertIn('xml:space="preserve"', mutated)
+        self.assertIn(translated, mutated)
+
+    def test_pptx_dom_mutation_drawing14_and_mc(self):
+        """PowerPoint fragments containing a14 and mc markup mutate cleanly on the DOM path."""
+        p_content = (
+            '<a:pPr>'
+            '<mc:AlternateContent>'
+            '<mc:Choice Requires="a14"/>'
+            '</mc:AlternateContent>'
+            '</a:pPr>'
+            '<a:r><a:t>スライドプレゼンテーション</a:t></a:r>'
+        )
+        translated = "[TRANS: Slide Presentation]"
+        mutated = mutate_paragraph_text_nodes_lxml(
+            p_content=p_content,
+            tag_prefix="a",
+            translated_text=translated,
+        )
+        self.assertIsNotNone(mutated)
+        self.assertIn('mc:AlternateContent', mutated)
+        self.assertIn(translated, mutated)
+
+    # ─────────────────────────────────────────────────────────────
+    # 8. Malformed XML Handling & Strict Rejection (No Regex Write)
+    # ─────────────────────────────────────────────────────────────
+    def test_malformed_xml_in_paragraph_raises_e04(self):
+        """Malformed XML in paragraph fragment strictly raises TranslatorError(ErrorCode.E04)."""
+        malformed_content = '<w:r><w:t>Unclosed tag</w:r>'
+        with self.assertRaises(TranslatorError) as ctx:
+            mutate_paragraph_text_nodes_lxml(
+                p_content=malformed_content,
+                tag_prefix="w",
+                translated_text="Should fail",
+            )
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("Malformed XML in paragraph", ctx.exception.detail)
+
+    def test_base_handler_no_regex_write_fallback_on_malformed_xml(self):
+        """_translate_and_replace_text_nodes raises TranslatorError(ErrorCode.E04) on malformed XML."""
+        handler = DOCXHandler(self.engine)
+        malformed_p = '<w:r><w:t>テスト</w:r>'
+        stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
+        prog = {"current": 0, "total": 1}
+
+        with self.assertRaises(TranslatorError) as ctx:
+            handler._translate_and_replace_text_nodes(
+                full_text="テスト",
+                t_matches=["テスト"],
+                p_content=malformed_p,
+                direction="ja2en",
+                context=None,
+                part_name="document.xml",
+                review_log_path=None,
+                stats=stats,
+                progress_state=prog,
+                progress_cb=None,
+                log_cb=None,
+                tag_prefix="w",
+            )
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+
+    # ─────────────────────────────────────────────────────────────
+    # 9. Full Document DOM Part Mutation
+    # ─────────────────────────────────────────────────────────────
+    def test_mutate_complete_xml_part_dom(self):
+        """mutate_complete_xml_part_dom performs full document DOM mutation with XPath."""
+        doc_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body>'
+            '<w:p><w:r><w:t>段落 1</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>段落 2</w:t></w:r></w:p>'
+            '</w:body>'
+            '</w:document>'
+        )
+        def mock_translate(text, attrs):
+            return f"[TRANS: {text}]"
+
+        result = mutate_complete_xml_part_dom(
+            xml_str=doc_xml,
+            tag_prefix="w",
+            paragraph_translator=mock_translate,
+        )
+        self.assertIn('[TRANS: 段落 1]', result)
+        self.assertIn('[TRANS: 段落 2]', result)
+        self.assertIn('<?xml version=', result)
 
 
 if __name__ == "__main__":

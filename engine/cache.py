@@ -175,6 +175,48 @@ class TranslationCache(ABC):
         """Removes expired entries according to TTL policy. Returns number of pruned entries."""
         pass
 
+    @staticmethod
+    def _cleanup_migrated_legacy_file(
+        legacy_path: str,
+        log_cb: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """
+        Safely deletes the migrated plaintext legacy cache file and any lingering
+        adjacent .bak backup files to ensure no plaintext translation data remains
+        beside the user's documents.
+        """
+        try:
+            if os.path.exists(legacy_path):
+                os.remove(legacy_path)
+                if log_cb:
+                    log_cb(f"Migrated legacy cache and removed plaintext file: {os.path.basename(legacy_path)}")
+                logging.info("Deleted plaintext legacy cache '%s' after successful migration.", legacy_path)
+        except Exception as rm_err:
+            logging.warning("Could not delete legacy cache file '%s': %s", legacy_path, rm_err)
+
+        # Also purge any lingering .bak files for this cache in the legacy directory
+        try:
+            legacy_dir = os.path.dirname(os.path.abspath(legacy_path))
+            legacy_base = os.path.basename(legacy_path)
+            if os.path.exists(legacy_dir):
+                for fname in os.listdir(legacy_dir):
+                    if (
+                        (fname.startswith(legacy_base + ".bak.") or
+                         fname.startswith(".translation_cache") or
+                         fname.startswith("translation_cache"))
+                        and ".bak" in fname
+                    ):
+                        bak_path = os.path.join(legacy_dir, fname)
+                        if os.path.isfile(bak_path):
+                            try:
+                                os.remove(bak_path)
+                                logging.info("Purged lingering legacy cache backup '%s'.", bak_path)
+                            except OSError:
+                                pass
+        except Exception as e:
+            logging.warning("Error cleaning lingering backup files in '%s': %s", legacy_path, e)
+
+
 
 class JSONFileCache(TranslationCache):
     """
@@ -363,17 +405,15 @@ class JSONFileCache(TranslationCache):
             os.replace(temp_file, self.cache_file)
             temp_file = None
 
-            # If this save was preceded by a legacy cache migration, safely backup the legacy file
-            if self._migrated_from_legacy and os.path.exists(self._migrated_from_legacy):
-                if os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
+            # If this save was preceded by a legacy cache migration, delete the plaintext legacy file
+            if self._migrated_from_legacy:
+                if os.path.exists(self._migrated_from_legacy) and os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
                     try:
-                        backup_path = f"{self._migrated_from_legacy}.bak.{int(time.time())}"
-                        os.replace(self._migrated_from_legacy, backup_path)
-                        if log_cb:
-                            log_cb(f"Migrated legacy cache to target cache and backed up original to {os.path.basename(backup_path)}")
-                        self._migrated_from_legacy = None
-                    except Exception as bak_err:
-                        logging.warning("Could not backup legacy cache file '%s': %s", self._migrated_from_legacy, bak_err)
+                        if os.path.exists(self.cache_file) and os.path.getsize(self.cache_file) > 0:
+                            self._cleanup_migrated_legacy_file(self._migrated_from_legacy, log_cb=log_cb)
+                    except Exception as clean_err:
+                        logging.warning("Could not clean legacy cache file '%s': %s", self._migrated_from_legacy, clean_err)
+                self._migrated_from_legacy = None
         except Exception as e:
             if log_cb:
                 log_cb(f"[!] Warning: Failed to save translation cache: {e}")
@@ -582,17 +622,15 @@ class EncryptedFileCache(JSONFileCache):
             os.replace(temp_file, self.cache_file)
             temp_file = None
 
-            # If this save was preceded by a legacy cache migration, safely backup the legacy file
-            if self._migrated_from_legacy and os.path.exists(self._migrated_from_legacy):
-                if os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
+            # If this save was preceded by a legacy cache migration, delete the plaintext legacy file
+            if self._migrated_from_legacy:
+                if os.path.exists(self._migrated_from_legacy) and os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
                     try:
-                        backup_path = f"{self._migrated_from_legacy}.bak.{int(time.time())}"
-                        os.replace(self._migrated_from_legacy, backup_path)
-                        if log_cb:
-                            log_cb(f"Migrated legacy cache to encrypted cache and backed up original to {os.path.basename(backup_path)}")
-                        self._migrated_from_legacy = None
-                    except Exception as bak_err:
-                        logging.warning("Could not backup legacy cache file '%s': %s", self._migrated_from_legacy, bak_err)
+                        if os.path.exists(self.cache_file) and os.path.getsize(self.cache_file) > 0:
+                            self._cleanup_migrated_legacy_file(self._migrated_from_legacy, log_cb=log_cb)
+                    except Exception as clean_err:
+                        logging.warning("Could not clean legacy cache file '%s': %s", self._migrated_from_legacy, clean_err)
+                self._migrated_from_legacy = None
         except Exception as e:
             if log_cb:
                 log_cb(f"[!] Warning: Failed to save translation cache: {e}")

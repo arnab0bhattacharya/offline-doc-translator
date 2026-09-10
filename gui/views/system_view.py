@@ -11,7 +11,11 @@ from typing import Callable, List, Optional
 import customtkinter as ctk
 
 from engine.backend_nmt import NMTBackend
-from engine.cache_locations import get_cache_stats, clear_all_caches
+from engine.cache_locations import (
+    get_cache_stats,
+    clear_all_caches,
+    cleanup_legacy_cache_remnants,
+)
 from engine.preflight import (
     check_ollama_status,
     list_installed_models,
@@ -370,18 +374,8 @@ class SystemView(ctk.CTkFrame):
         if not confirm:
             return
 
-        # Clean legacy cache files in CWD if any remain
-        for cp in [
-            os.path.abspath("translation_cache.json"),
-            os.path.abspath(".translation_cache.json"),
-            os.path.abspath("translation_cache.enc"),
-            os.path.abspath(".translation_cache.enc"),
-        ]:
-            if os.path.exists(cp):
-                try:
-                    os.remove(cp)
-                except OSError:
-                    pass
+        # Clean legacy cache files and backup remnants in CWD if any remain
+        cleanup_legacy_cache_remnants(os.path.abspath("."))
 
         result = clear_all_caches()
         deleted = result["deleted"]

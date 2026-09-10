@@ -162,3 +162,35 @@ def clear_all_caches() -> Dict[str, int]:
         "failed": failed,
         "freed_bytes": freed_bytes,
     }
+
+
+def cleanup_legacy_cache_remnants(directory: str) -> int:
+    """
+    Deletes any legacy plaintext cache files and .bak cache remnants from the specified directory.
+    Returns the count of deleted files.
+    """
+    if not os.path.exists(directory) or not os.path.isdir(directory):
+        return 0
+    deleted = 0
+    try:
+        for fname in os.listdir(directory):
+            if (
+                fname.startswith("translation_cache")
+                or fname.startswith(".translation_cache")
+            ) and (
+                fname.endswith(".json")
+                or fname.endswith(".enc")
+                or ".bak" in fname
+                or fname.endswith(".tmp")
+            ):
+                target = os.path.join(directory, fname)
+                try:
+                    if os.path.isfile(target):
+                        os.remove(target)
+                        deleted += 1
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return deleted
+

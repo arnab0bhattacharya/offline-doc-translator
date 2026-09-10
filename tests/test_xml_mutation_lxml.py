@@ -201,6 +201,19 @@ class TestXMLMutationLXML(unittest.TestCase):
             parse_xml_safely(bomb_xml)
         self.assertEqual(ctx.exception.code, ErrorCode.E04)
 
+    def test_bare_doctype_rejected(self):
+        """Bare internal DOCTYPE declarations without entities are strictly rejected for OOXML parts."""
+        bare_dtd_xml = (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE root>'
+            '<root><child>text</child></root>'
+        )
+        with self.assertRaises(TranslatorError) as ctx:
+            parse_xml_safely(bare_dtd_xml)
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("Security violation in XML", ctx.exception.detail)
+
+
     # ─────────────────────────────────────────────────────────────
     # 5. Entity Escaping and Safe Serialization
     # ─────────────────────────────────────────────────────────────

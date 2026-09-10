@@ -518,15 +518,36 @@ class TestCachePolicyAndPrivacyDefaults(unittest.TestCase):
             self.assertTrue(enc_bytes.startswith(b"gAAAAA"))
             self.assertNotIn(b"Migrated Secret Text", enc_bytes)
 
-            # Original .translation_cache.json should be renamed to a .bak file
+            # Original .translation_cache.json must be deleted, and NO .bak or plaintext file remains
             self.assertFalse(os.path.exists(legacy_json))
-            bak_files = [f for f in os.listdir(td) if f.startswith(".translation_cache.json.bak")]
-            self.assertEqual(len(bak_files), 1)
+            remaining_files = os.listdir(td)
+            self.assertEqual(remaining_files, [os.path.basename(enc_file)])
 
             # 5. Reload into a new cache instance: must load from .enc file directly
             cache2 = EncryptedFileCache(cache_file=enc_file)
             cache2.load("ja2en")
             self.assertEqual(cache2.get("legacy_hash", "ja2en", "fp_legacy", mode="fast_nmt"), "Migrated Secret Text")
+
+    def test_encrypted_file_cache_purges_lingering_legacy_bak_files(self):
+        """Migration safely purges existing lingering .bak files in the legacy directory."""
+        with tempfile.TemporaryDirectory() as td:
+            legacy_json = os.path.join(td, ".translation_cache.json")
+            lingering_bak = os.path.join(td, ".translation_cache.json.bak.123456")
+            enc_file = os.path.join(td, "cache_fast_nmt_scope.enc")
+
+            with open(legacy_json, "w", encoding="utf-8") as f:
+                json.dump({"fast_nmt": {"ja2en": {"fp": {"k": "v"}}}}, f)
+            with open(lingering_bak, "w", encoding="utf-8") as f:
+                f.write("old backup plaintext")
+
+            cache = EncryptedFileCache(cache_file=enc_file, legacy_candidates=[legacy_json])
+            cache.load("ja2en")
+            cache.save()
+
+            self.assertTrue(os.path.exists(enc_file))
+            self.assertFalse(os.path.exists(legacy_json))
+            self.assertFalse(os.path.exists(lingering_bak))
+            self.assertEqual(os.listdir(td), [os.path.basename(enc_file)])
 
     def test_engine_defaults_to_encrypted_cache(self):
         engine = TranslationEngine()

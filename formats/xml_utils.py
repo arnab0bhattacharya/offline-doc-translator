@@ -98,13 +98,15 @@ def get_secure_xml_parser(recover: bool = False) -> etree.XMLParser:
 def check_xml_safety(tree: Union[etree._ElementTree, etree._Element]) -> None:
     """
     Validates that parsed XML does not contain prohibited DTD or entity declarations.
-    Raises TranslatorError(ErrorCode.E04) if hostile constructs are detected.
+    OOXML parts strictly require no DTD declarations; any DOCTYPE (internal, external,
+    or entity-based) is prohibited as defense in depth.
+    Raises TranslatorError(ErrorCode.E04) if any DTD or entity declaration is detected.
     """
     element_tree = tree if isinstance(tree, etree._ElementTree) else tree.getroottree()
     if element_tree is not None:
         if check_docinfo is not None:
             try:
-                check_docinfo(element_tree, forbid_dtd=False, forbid_entities=True)
+                check_docinfo(element_tree, forbid_dtd=True, forbid_entities=True)
             except Exception as e:
                 raise TranslatorError(
                     ErrorCode.E04,
@@ -114,11 +116,11 @@ def check_xml_safety(tree: Union[etree._ElementTree, etree._Element]) -> None:
         # Fallback inspection on docinfo
         docinfo = element_tree.docinfo
         if docinfo is not None:
-            doctype_str = (docinfo.doctype or "").upper()
-            if "ENTITY" in doctype_str or "SYSTEM" in doctype_str or "PUBLIC" in doctype_str:
+            doctype_str = (docinfo.doctype or "").strip()
+            if doctype_str:
                 raise TranslatorError(
                     ErrorCode.E04,
-                    detail="Prohibited DTD or external entity detected in XML part."
+                    detail=f"Security violation in XML: Prohibited DOCTYPE declaration detected ({doctype_str[:50]})."
                 )
 
 

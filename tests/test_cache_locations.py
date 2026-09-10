@@ -20,6 +20,7 @@ from engine.cache_locations import (
     is_owned_cache_file,
     get_cache_stats,
     clear_all_caches,
+    cleanup_legacy_cache_remnants,
 )
 
 
@@ -174,15 +175,38 @@ class TestCacheLocations(unittest.TestCase):
             # Target encrypted cache was written
             self.assertTrue(os.path.exists(target_cache_file))
 
-            # Old legacy file was moved to .bak
+            # Old legacy file was deleted, and NO .bak or plaintext file remains in the document directory
             self.assertFalse(os.path.exists(legacy_file))
-            bak_files = [fn for fn in os.listdir(self.doc_dir) if fn.startswith(".translation_cache.json.bak.")]
-            self.assertEqual(len(bak_files), 1)
+            remaining_doc_files = [
+                fn for fn in os.listdir(self.doc_dir)
+                if ".translation_cache" in fn or "translation_cache" in fn or ".bak" in fn
+            ]
+            self.assertEqual(remaining_doc_files, [])
 
             # Re-loading without legacy candidates uses the newly migrated central cache
             fresh_cache = EncryptedFileCache(cache_file=target_cache_file)
             fresh_cache.load()
             self.assertEqual(fresh_cache.get("こんにちは", "ja2en", "fp123", mode="fast_nmt"), "Hello")
+
+    def test_cleanup_legacy_cache_remnants(self):
+        """cleanup_legacy_cache_remnants purges all legacy cache variants and .bak remnants."""
+        files_to_create = [
+            "translation_cache.json",
+            ".translation_cache.json",
+            "translation_cache.enc",
+            ".translation_cache.enc",
+            "translation_cache.json.bak.12345",
+            ".translation_cache.json.bak.67890",
+            "unrelated_document.docx",
+        ]
+        for f in files_to_create:
+            with open(os.path.join(self.doc_dir, f), "w", encoding="utf-8") as fh:
+                fh.write("dummy")
+
+        deleted_count = cleanup_legacy_cache_remnants(self.doc_dir)
+        self.assertEqual(deleted_count, 6)
+        remaining = os.listdir(self.doc_dir)
+        self.assertEqual(remaining, ["unrelated_document.docx"])
 
 
 if __name__ == "__main__":

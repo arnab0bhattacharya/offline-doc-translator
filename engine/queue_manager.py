@@ -5,7 +5,7 @@ import threading
 import queue
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Dict, List, Union
+from typing import Optional, Callable, Dict, List, Union, Any
 
 from engine.core import TranslationMode
 from engine.cache import CachePolicy
@@ -42,6 +42,7 @@ class TranslationJob:
     include_source_text: bool = False
     cancel_event: threading.Event = field(default_factory=threading.Event)
     cache_policy: CachePolicy = CachePolicy.ENCRYPTED_PERSISTENT
+    result: Optional[Dict[str, Any]] = None
 
 
 class TranslationQueue:
@@ -245,7 +246,7 @@ class TranslationQueue:
         def log_cb(msg: str) -> None:
             self._log(job.id, msg)
 
-        execute_translation(
+        stats = execute_translation(
             input_path=job.input_path,
             output_path=job.output_path,
             direction=job.direction,
@@ -258,4 +259,6 @@ class TranslationQueue:
             cancel_event=job.cancel_event,
             cache_policy=job.cache_policy,
         )
+        job.result = stats
+        return stats
 

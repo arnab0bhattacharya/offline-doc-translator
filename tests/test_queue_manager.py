@@ -56,6 +56,7 @@ def test_job_creation_and_processing(mock_execute, queue_mgr):
     assert job.status == JobStatus.COMPLETED
     assert job.progress == 100.0
     assert job.progress_message == "Completed"
+    assert job.result == {"total": 2, "translated": 2, "reverted": 0, "skipped": 0}
     
     # Verify updates were sent
     assert len(updates) > 0
@@ -350,5 +351,150 @@ def test_job_cache_policy_forwarding(queue_mgr):
         calls = mock_exec.call_args_list
         assert any(c.kwargs.get("cache_policy") == CachePolicy.ENCRYPTED_PERSISTENT for c in calls)
         assert any(c.kwargs.get("cache_policy") == CachePolicy.MEMORY_ONLY for c in calls)
+
+
+def test_job_row_update_job_completed_with_stats():
+    from gui.widgets.job_row import JobRow
+    st_lbl = MagicMock()
+    progress_bar = MagicMock()
+    cancel_btn = MagicMock()
+
+    job = TranslationJob(
+        id="job-stats-1",
+        input_path="sample.docx",
+        output_path="sample_out.docx",
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Completed",
+        started_at=100.0,
+        completed_at=165.0,  # 65s -> 01:05
+        result={"total": 10, "translated": 8, "reverted": 2, "skipped": 1},
+    )
+
+    row = MagicMock(spec=JobRow)
+    row.st_label = st_lbl
+    row.progress_bar = progress_bar
+    row.cancel_button = cancel_btn
+
+    JobRow.update_job(row, job)
+
+    assert progress_bar.set.called
+    progress_bar.set.assert_called_with(1.0)
+    assert cancel_btn.configure.called
+    cancel_btn.configure.assert_called_with(state="disabled")
+
+    assert st_lbl.configure.called
+    text_val = st_lbl.configure.call_args.kwargs.get("text", "")
+    assert "✅ Done (01:05)" in text_val
+    assert "8 translated" in text_val
+    assert "⚠ 2 reverted" in text_val
+    assert "1 skipped" in text_val
+
+
+def test_job_row_update_job_completed_clean_stats():
+    from gui.widgets.job_row import JobRow
+    st_lbl = MagicMock()
+    progress_bar = MagicMock()
+    cancel_btn = MagicMock()
+
+    job = TranslationJob(
+        id="job-stats-clean",
+        input_path="sample.pptx",
+        output_path="sample_out.pptx",
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Completed",
+        started_at=100.0,
+        completed_at=115.0,  # 15s -> 00:15
+        result={"total": 5, "translated": 5, "reverted": 0, "skipped": 0},
+    )
+
+    row = MagicMock(spec=JobRow)
+    row.st_label = st_lbl
+    row.progress_bar = progress_bar
+    row.cancel_button = cancel_btn
+
+    JobRow.update_job(row, job)
+
+    text_val = st_lbl.configure.call_args.kwargs.get("text", "")
+    assert text_val == "✅ Done (00:15) — 5 translated"
+
+
+def test_job_row_update_job_completed_without_result():
+    from gui.widgets.job_row import JobRow
+    st_lbl = MagicMock()
+    progress_bar = MagicMock()
+    cancel_btn = MagicMock()
+
+    job = TranslationJob(
+        id="job-stats-none",
+        input_path="sample.xlsx",
+        output_path="sample_out.xlsx",
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Completed",
+        started_at=100.0,
+        completed_at=105.0,  # 5s -> 00:05
+        result=None,
+    )
+
+    row = MagicMock(spec=JobRow)
+    row.st_label = st_lbl
+    row.progress_bar = progress_bar
+    row.cancel_button = cancel_btn
+
+    JobRow.update_job(row, job)
+
+    text_val = st_lbl.configure.call_args.kwargs.get("text", "")
+    assert text_val == "✅ Done (00:05)"
+
+
+def test_gui_widget_update_completed_stats():
+    from gui.app import TranslatorApp
+    app = MagicMock()
+    st_lbl = MagicMock()
+    app._job_widgets = {
+        "job-done-1": {
+            "progress": MagicMock(),
+            "status_label": st_lbl,
+            "cancel_btn": MagicMock(),
+        }
+    }
+    job = TranslationJob(
+        id="job-done-1",
+        input_path="sample.docx",
+        output_path="sample_out.docx",
+        direction="ja2en",
+        mode=TranslationMode.PURE_LLM,
+        model_name="gemma",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Completed",
+        started_at=50.0,
+        completed_at=70.0,
+        result={"total": 12, "translated": 11, "reverted": 1, "skipped": 0},
+    )
+
+    TranslatorApp._update_job_widget(app, job)
+
+    assert st_lbl.configure.called
+    text_val = st_lbl.configure.call_args.kwargs.get("text", "")
+    assert "✅ Done (00:20)" in text_val
+    assert "11 translated" in text_val
+    assert "⚠ 1 reverted" in text_val
+
 
 

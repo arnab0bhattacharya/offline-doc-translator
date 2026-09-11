@@ -113,10 +113,28 @@ class JobRow(ctk.CTkFrame):
         elif job.status == JobStatus.COMPLETED:
             elapsed = ""
             if job.started_at and job.completed_at:
-                secs = int(job.completed_at - job.started_at)
+                secs = max(0, int(job.completed_at - job.started_at))
                 m, s = divmod(secs, 60)
                 elapsed = f" ({m:02d}:{s:02d})"
-            self.st_label.configure(text=f"✅ Done{elapsed}", text_color=THEME["success"], cursor="")
+
+            stats = getattr(job, "result", None) or {}
+            reverted = stats.get("reverted", 0)
+            skipped = stats.get("skipped", 0)
+            translated = stats.get("translated", 0)
+
+            suffix_parts = []
+            if reverted > 0:
+                suffix_parts.append(f"⚠ {reverted} reverted")
+            if skipped > 0:
+                suffix_parts.append(f"{skipped} skipped")
+            suffix = f" — {', '.join(suffix_parts)}" if suffix_parts else ""
+
+            if "translated" in stats:
+                status_text = f"✅ Done{elapsed} — {translated} translated{suffix}"
+            else:
+                status_text = f"✅ Done{elapsed}"
+
+            self.st_label.configure(text=status_text, text_color=THEME["success"], cursor="")
             self.st_label.unbind("<Button-1>")
             self.cancel_button.configure(state="disabled")
             self.progress_bar.set(1.0)

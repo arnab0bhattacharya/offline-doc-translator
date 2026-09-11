@@ -571,7 +571,30 @@ class DocumentsView(ctk.CTkFrame):
                 elif job.status == JobStatus.RUNNING:
                     st_lbl.configure(text=f"🔄 {job.progress:.0f}% {job.progress_message}", text_color=THEME["primary"], cursor="")
                 elif job.status == JobStatus.COMPLETED:
-                    st_lbl.configure(text="✅ Done", text_color=THEME["success"], cursor="")
+                    elapsed = ""
+                    if job.started_at and job.completed_at:
+                        secs = max(0, int(job.completed_at - job.started_at))
+                        m, s = divmod(secs, 60)
+                        elapsed = f" ({m:02d}:{s:02d})"
+
+                    stats = getattr(job, "result", None) or {}
+                    reverted = stats.get("reverted", 0)
+                    skipped = stats.get("skipped", 0)
+                    translated = stats.get("translated", 0)
+
+                    suffix_parts = []
+                    if reverted > 0:
+                        suffix_parts.append(f"⚠ {reverted} reverted")
+                    if skipped > 0:
+                        suffix_parts.append(f"{skipped} skipped")
+                    suffix = f" — {', '.join(suffix_parts)}" if suffix_parts else ""
+
+                    if "translated" in stats:
+                        status_text = f"✅ Done{elapsed} — {translated} translated{suffix}"
+                    else:
+                        status_text = f"✅ Done{elapsed}"
+
+                    st_lbl.configure(text=status_text, text_color=THEME["success"], cursor="")
                 elif job.status == JobStatus.FAILED:
                     err_msg = job.error.title if (job.error and hasattr(job.error, "title")) else (job.error_message or "Failed")
                     st_lbl.configure(text=f"❌ {err_msg}", text_color=THEME["error"], cursor="hand2")

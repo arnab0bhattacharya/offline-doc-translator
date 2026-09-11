@@ -497,4 +497,177 @@ def test_gui_widget_update_completed_stats():
     assert "⚠ 1 reverted" in text_val
 
 
+def test_format_eta():
+    from engine.queue_manager import format_eta
+    assert format_eta(None) == ""
+    assert format_eta(0) == ""
+    assert format_eta(-10) == ""
+    assert format_eta(15) == "~15s left"
+    assert format_eta(60) == "~60s left"
+    assert format_eta(119) == "~119s left"
+    assert format_eta(120) == "~2m left"
+    assert format_eta(180) == "~3m left"
+    assert format_eta(3599) == "~60m left"
+    assert format_eta(3600) == "~1h left"
+    assert format_eta(3900) == "~1h 5m left"
+    assert format_eta(7200) == "~2h left"
+
+
+def test_job_eta_str_property():
+    job = TranslationJob(
+        id="job-eta-1",
+        input_path="sample.docx",
+        output_path="sample_out.docx",
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.RUNNING,
+        progress=50.0,
+        progress_message="Translating",
+        started_at=100.0,
+        eta_seconds=45.0,
+    )
+    assert job.eta_str == "~45s left"
+
+    # Test dynamic fallback calculation when eta_seconds is None
+    job.eta_seconds = None
+    with patch("time.time", return_value=120.0):  # elapsed = 20s, at 50% -> remaining = 20s
+        assert job.eta_str == "~20s left"
+
+    # Completed job has empty eta_str
+    job.status = JobStatus.COMPLETED
+    assert job.eta_str == ""
+
+
+def test_queue_manager_progress_cb_calculates_eta(queue_mgr):
+    with patch('engine.queue_manager.execute_translation') as mock_execute:
+        def fake_execute(*args, progress_cb=None, **kwargs):
+            if progress_cb:
+                progress_cb(1, 4, "Chunk 1")
+                # Wait briefly so elapsed > 0
+                time.sleep(0.05)
+                progress_cb(2, 4, "Chunk 2")
+            return {"total": 4, "translated": 4, "reverted": 0, "skipped": 0}
+
+        mock_execute.side_effect = fake_execute
+
+        job_id = queue_mgr.add_job("doc.docx", "doc_out.docx", "ja2en", "fast_nmt", "test", {})
+        job = queue_mgr.get_job(job_id)
+
+        timeout = time.time() + 2.0
+        while job.status != JobStatus.COMPLETED and time.time() < timeout:
+            time.sleep(0.02)
+
+        assert job.status == JobStatus.COMPLETED
+        # On completion, eta_seconds is reset to 0.0
+        assert job.eta_seconds == 0.0
+
+
+def test_job_row_update_job_running_with_eta():
+    from gui.widgets.job_row import JobRow
+    st_lbl = MagicMock()
+    progress_bar = MagicMock()
+    cancel_btn = MagicMock()
+
+    job = TranslationJob(
+        id="job-running-eta",
+        input_path="sample.docx",
+        output_path="sample_out.docx",
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.RUNNING,
+        progress=45.0,
+        progress_message="Translating text node 9/20...",
+        started_at=100.0,
+        eta_seconds=35.0,
+    )
+
+    row = MagicMock(spec=JobRow)
+    row.st_label = st_lbl
+    row.progress_bar = progress_bar
+    row.cancel_button = cancel_btn
+
+    JobRow.update_job(row, job)
+
+    assert progress_bar.set.called
+    assert cancel_btn.configure.called
+    cancel_btn.configure.assert_called_with(state="normal")
+
+    assert st_lbl.configure.called
+    text_val = st_lbl.configure.call_args.kwargs.get("text", "")
+    assert "🔄 45%" in text_val
+    assert "(~35s left)" in text_val
+    assert "Translating text" in text_val
+
+
+def test_job_row_update_job_running_without_eta():
+    from gui.widgets.job_row import JobRow
+    st_lbl = MagicMock()
+    progress_bar = MagicMock()
+    cancel_btn = MagicMock()
+
+    job = TranslationJob(
+        id="job-running-no-eta",
+        input_path="sample.docx",
+        output_path="sample_out.docx",
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.RUNNING,
+        progress=0.0,
+        progress_message="Starting...",
+        started_at=100.0,
+        eta_seconds=None,
+    )
+
+    row = MagicMock(spec=JobRow)
+    row.st_label = st_lbl
+    row.progress_bar = progress_bar
+    row.cancel_button = cancel_btn
+
+    JobRow.update_job(row, job)
+
+    text_val = st_lbl.configure.call_args.kwargs.get("text", "")
+    assert text_val == "🔄 0% Starting..."
+
+
+def test_gui_widget_update_running_eta():
+    from gui.app import TranslatorApp
+    app = MagicMock()
+    st_lbl = MagicMock()
+    app._job_widgets = {
+        "job-run-1": {
+            "progress": MagicMock(),
+            "status_label": st_lbl,
+            "cancel_btn": MagicMock(),
+        }
+    }
+    job = TranslationJob(
+        id="job-run-1",
+        input_path="sample.docx",
+        output_path="sample_out.docx",
+        direction="ja2en",
+        mode=TranslationMode.PURE_LLM,
+        model_name="gemma",
+        glossary={},
+        status=JobStatus.RUNNING,
+        progress=60.0,
+        progress_message="Translating...",
+        started_at=100.0,
+        eta_seconds=150.0,
+    )
+
+    TranslatorApp._update_job_widget(app, job)
+
+    assert st_lbl.configure.called
+    text_val = st_lbl.configure.call_args.kwargs.get("text", "")
+    assert "🔄 60%" in text_val
+    assert "(~2m left)" in text_val
+
+
+
 

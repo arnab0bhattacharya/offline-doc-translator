@@ -336,10 +336,21 @@ class TranslatorApp:
                 st_label.configure(text="⏳ Queued", text_color=THEME["text_secondary"], cursor="")
                 st_label.unbind("<Button-1>")
             elif job.status == JobStatus.RUNNING:
-                msg = job.progress_message
+                eta_str = getattr(job, "eta_str", "")
+                if not eta_str and job.started_at and job.progress > 0 and job.progress < 100.0:
+                    from engine.queue_manager import format_eta
+                    elapsed = max(0.0, time.time() - job.started_at)
+                    rem = elapsed * (100.0 - job.progress) / job.progress
+                    eta_str = format_eta(rem)
+
+                msg = job.progress_message or ""
                 if len(msg) > 20:
                     msg = msg[:18] + "..."
-                st_label.configure(text=f"🔄 {job.progress:.0f}% {msg}", text_color=THEME["primary"], cursor="")
+                if eta_str:
+                    status_text = f"🔄 {job.progress:.0f}% ({eta_str}) {msg}".strip()
+                else:
+                    status_text = f"🔄 {job.progress:.0f}% {msg}".strip()
+                st_label.configure(text=status_text, text_color=THEME["primary"], cursor="")
                 st_label.unbind("<Button-1>")
             elif job.status == JobStatus.COMPLETED:
                 elapsed = ""

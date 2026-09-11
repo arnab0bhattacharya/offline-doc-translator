@@ -5,11 +5,12 @@ Reusable widget representing a single active, queued, or completed translation j
 """
 
 import os
+import time
 from tkinter import messagebox
 from typing import Callable, Optional
 import customtkinter as ctk
 
-from engine.queue_manager import TranslationJob, JobStatus
+from engine.queue_manager import TranslationJob, JobStatus, format_eta
 from gui.theme import THEME
 
 
@@ -101,10 +102,22 @@ class JobRow(ctk.CTkFrame):
             self.st_label.unbind("<Button-1>")
             self.cancel_button.configure(state="normal")
         elif job.status == JobStatus.RUNNING:
-            msg = job.progress_message
+            eta_str = getattr(job, "eta_str", "")
+            if not eta_str and job.started_at and job.progress > 0 and job.progress < 100.0:
+                elapsed = max(0.0, time.time() - job.started_at)
+                rem = elapsed * (100.0 - job.progress) / job.progress
+                eta_str = format_eta(rem)
+
+            msg = job.progress_message or ""
             if len(msg) > 20:
                 msg = msg[:18] + "..."
-            self.st_label.configure(text=f"🔄 {job.progress:.0f}% {msg}", text_color=THEME["primary"], cursor="")
+
+            if eta_str:
+                status_text = f"🔄 {job.progress:.0f}% ({eta_str}) {msg}".strip()
+            else:
+                status_text = f"🔄 {job.progress:.0f}% {msg}".strip()
+
+            self.st_label.configure(text=status_text, text_color=THEME["primary"], cursor="")
             self.st_label.unbind("<Button-1>")
             if getattr(job, "cancel_event", None) and job.cancel_event.is_set():
                 self.cancel_button.configure(state="disabled")

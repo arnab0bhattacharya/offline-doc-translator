@@ -5,6 +5,7 @@ Main workspace view for multi-document batch translation, staging, and queue mon
 """
 
 import os
+import time
 import subprocess
 from tkinter import messagebox
 from typing import Callable, Dict, List, Optional, Union
@@ -13,7 +14,7 @@ import customtkinter as ctk
 from engine.core import TranslationMode
 from engine.cache import CachePolicy
 from engine.preflight import check_ollama_status
-from engine.queue_manager import TranslationJob, JobStatus
+from engine.queue_manager import TranslationJob, JobStatus, format_eta
 from gui.controllers.translation_controller import TranslationController
 from gui.theme import THEME, LANGUAGE_PAIRS, GEMMA_PRESETS, parse_glossary_text
 from gui.widgets.job_row import JobRow
@@ -569,7 +570,20 @@ class DocumentsView(ctk.CTkFrame):
                 if job.status == JobStatus.QUEUED:
                     st_lbl.configure(text="⏳ Queued", text_color=THEME["text_secondary"], cursor="")
                 elif job.status == JobStatus.RUNNING:
-                    st_lbl.configure(text=f"🔄 {job.progress:.0f}% {job.progress_message}", text_color=THEME["primary"], cursor="")
+                    eta_str = getattr(job, "eta_str", "")
+                    if not eta_str and job.started_at and job.progress > 0 and job.progress < 100.0:
+                        elapsed = max(0.0, time.time() - job.started_at)
+                        rem = elapsed * (100.0 - job.progress) / job.progress
+                        eta_str = format_eta(rem)
+
+                    msg = job.progress_message or ""
+                    if len(msg) > 20:
+                        msg = msg[:18] + "..."
+                    if eta_str:
+                        status_text = f"🔄 {job.progress:.0f}% ({eta_str}) {msg}".strip()
+                    else:
+                        status_text = f"🔄 {job.progress:.0f}% {msg}".strip()
+                    st_lbl.configure(text=status_text, text_color=THEME["primary"], cursor="")
                 elif job.status == JobStatus.COMPLETED:
                     elapsed = ""
                     if job.started_at and job.completed_at:

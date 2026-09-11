@@ -21,6 +21,26 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+def format_eta(eta_seconds: Optional[float]) -> str:
+    """Formats estimated time remaining in seconds into a human-readable string."""
+    if eta_seconds is None or eta_seconds <= 0:
+        return ""
+    remaining = int(round(eta_seconds))
+    if remaining < 120:
+        return f"~{remaining}s left"
+    elif remaining < 3600:
+        return f"~{int(round(remaining / 60))}m left"
+    else:
+        hrs = remaining // 3600
+        mins = int(round((remaining % 3600) / 60))
+        if mins == 60:
+            hrs += 1
+            mins = 0
+        if mins > 0:
+            return f"~{hrs}h {mins}m left"
+        return f"~{hrs}h left"
+
+
 @dataclass
 class TranslationJob:
     id: str
@@ -43,6 +63,17 @@ class TranslationJob:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     cache_policy: CachePolicy = CachePolicy.ENCRYPTED_PERSISTENT
     result: Optional[Dict[str, Any]] = None
+    eta_seconds: Optional[float] = None
+
+    @property
+    def eta_str(self) -> str:
+        if self.eta_seconds is not None:
+            return format_eta(self.eta_seconds)
+        if self.status == JobStatus.RUNNING and self.started_at and self.progress > 0 and self.progress < 100.0:
+            elapsed = max(0.0, time.time() - self.started_at)
+            rem = elapsed * (100.0 - self.progress) / self.progress
+            return format_eta(rem)
+        return ""
 
 
 class TranslationQueue:
@@ -205,11 +236,14 @@ class TranslationQueue:
                     job.status = JobStatus.CANCELLED
                     job.progress_message = "Cancelled"
                     job.error_message = "Cancelled by user"
+                    job.eta_seconds = None
                 else:
                     job.status = JobStatus.COMPLETED
                     job.progress = 100.0
                     job.progress_message = "Completed"
+                    job.eta_seconds = 0.0
             except TranslatorError as te:
+                job.eta_seconds = None
                 if te.code == ErrorCode.E09 or job.cancel_event.is_set():
                     job.status = JobStatus.CANCELLED
                     job.error = te
@@ -221,6 +255,7 @@ class TranslationQueue:
                     job.error_message = te.title
                     job.progress_message = f"Failed: {te.title}"
             except Exception as e:
+                job.eta_seconds = None
                 if job.cancel_event.is_set():
                     job.status = JobStatus.CANCELLED
                     job.error = TranslatorError(ErrorCode.E09, detail=str(e))
@@ -241,6 +276,14 @@ class TranslationQueue:
             pct = (current / max(1, total)) * 100.0 if total > 0 else 0.0
             job.progress = pct
             job.progress_message = msg
+            if job.started_at and pct > 0:
+                elapsed = max(0.0, time.time() - job.started_at)
+                if pct < 100.0:
+                    job.eta_seconds = elapsed * (100.0 - pct) / pct
+                else:
+                    job.eta_seconds = 0.0
+            else:
+                job.eta_seconds = None
             self._trigger_update(job)
 
         def log_cb(msg: str) -> None:

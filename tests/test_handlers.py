@@ -580,6 +580,67 @@ class TestPDFHandler(unittest.TestCase):
         finally:
             fitz.Page.insert_textbox = real_insert
 
+    def test_sample_background_color_white_default(self):
+        doc = fitz.open()
+        page = doc.new_page(width=400, height=300)
+        handler = PDFHandler(self.mock_engine)
+
+        bg = handler._sample_background_color(page, fitz.Rect(50, 50, 150, 100))
+        doc.close()
+        self.assertEqual(bg, (1.0, 1.0, 1.0))
+
+    def test_sample_background_color_tinted_rect(self):
+        doc = fitz.open()
+        page = doc.new_page(width=400, height=300)
+        # Draw a tinted background box
+        tint = (0.5, 0.6, 0.7)
+        page.draw_rect(fitz.Rect(30, 30, 250, 200), fill=tint, color=None)
+
+        handler = PDFHandler(self.mock_engine)
+        bg = handler._sample_background_color(page, fitz.Rect(50, 50, 200, 150))
+        doc.close()
+
+        self.assertAlmostEqual(bg[0], 0.5, delta=0.05)
+        self.assertAlmostEqual(bg[1], 0.6, delta=0.05)
+        self.assertAlmostEqual(bg[2], 0.7, delta=0.05)
+
+    def test_sample_background_color_rejects_corner_outliers(self):
+        doc = fitz.open()
+        page = doc.new_page(width=400, height=300)
+        # Fill a region with light gray (0.8, 0.8, 0.8)
+        page.draw_rect(fitz.Rect(40, 40, 260, 210), fill=(0.8, 0.8, 0.8), color=None)
+        # Draw a dark stroke at top-left corner (0, 0 in sample clip space)
+        # Target rect is (50, 50, 200, 150), with margin=2 clip is (48, 48, 202, 152)
+        # Draw black stroke across the top-left corner
+        page.draw_rect(fitz.Rect(47, 47, 52, 52), fill=(0.0, 0.0, 0.0), color=None)
+
+        handler = PDFHandler(self.mock_engine)
+        bg = handler._sample_background_color(page, fitz.Rect(50, 50, 200, 150))
+        doc.close()
+
+        # Median of 5 samples (1 black outlier, 4 light gray) should reject the black outlier
+        self.assertAlmostEqual(bg[0], 0.8, delta=0.05)
+        self.assertAlmostEqual(bg[1], 0.8, delta=0.05)
+        self.assertAlmostEqual(bg[2], 0.8, delta=0.05)
+
+    def test_sample_background_color_fallback_on_invalid_or_empty_rect(self):
+        doc = fitz.open()
+        page = doc.new_page(width=400, height=300)
+        handler = PDFHandler(self.mock_engine)
+
+        # Empty rect
+        bg_empty = handler._sample_background_color(page, fitz.Rect(0, 0, 0, 0))
+        self.assertEqual(bg_empty, (1.0, 1.0, 1.0))
+
+        # Completely out-of-bounds rect
+        bg_oob = handler._sample_background_color(page, fitz.Rect(1000, 1000, 1100, 1100))
+        self.assertEqual(bg_oob, (1.0, 1.0, 1.0))
+
+        # Invalid rect object / exception triggering
+        bg_err = handler._sample_background_color(page, None)
+        self.assertEqual(bg_err, (1.0, 1.0, 1.0))
+        doc.close()
+
     def test_ooxml_text_unit_processing(self):
         handler = DOCXHandler(self.mock_engine)
 

@@ -28,20 +28,67 @@ class PDFHandler(BaseFormatHandler):
 
     def _sample_background_color(self, page, rect) -> tuple[float, float, float]:
         """
-        Samples the corner pixel near the bounding box to match background color
-        (e.g., white, light gray, shaded table row). Defaults to white on failure.
+        Samples background color using the median of 4 corner pixels and the center pixel
+        from a margin-expanded clip. This rejects outlier pixels (border lines, ink strokes)
+        to accurately match shaded table rows, tinted callouts, or white pages.
+        Defaults to white (1.0, 1.0, 1.0) on failure.
         """
         try:
-            sample_rect = page.rect & rect
+            import fitz
+
+            margin = 2.0  # Sample slightly outside the text area
+            rx0 = getattr(rect, "x0", rect[0])
+            ry0 = getattr(rect, "y0", rect[1])
+            rx1 = getattr(rect, "x1", rect[2])
+            ry1 = getattr(rect, "y1", rect[3])
+
+            px0 = page.rect.x0
+            py0 = page.rect.y0
+            px1 = page.rect.x1
+            py1 = page.rect.y1
+
+            sample_rect = (
+                fitz.Rect(
+                    max(px0, rx0 - margin),
+                    max(py0, ry0 - margin),
+                    min(px1, rx1 + margin),
+                    min(py1, ry1 + margin),
+                )
+                & page.rect
+            )
+
             if sample_rect.is_empty:
                 return (1.0, 1.0, 1.0)
+
             pix = page.get_pixmap(clip=sample_rect, dpi=72)
-            if pix.width > 0 and pix.height > 0:
-                pixel = pix.pixel(0, 0)
-                return (pixel[0] / 255.0, pixel[1] / 255.0, pixel[2] / 255.0)
+            if pix.width < 2 or pix.height < 2:
+                return (1.0, 1.0, 1.0)
+
+            # Sample 4 corners + center
+            points = [
+                (0, 0),
+                (pix.width - 1, 0),
+                (0, pix.height - 1),
+                (pix.width - 1, pix.height - 1),
+                (pix.width // 2, pix.height // 2),
+            ]
+
+            samples = []
+            for x, y in points:
+                p = pix.pixel(x, y)
+                if len(p) == 1:
+                    samples.append((p[0], p[0], p[0]))
+                else:
+                    samples.append((p[0], p[1], p[2]))
+
+            # Use median per channel to reject outliers (border lines, ink)
+            mid = len(samples) // 2
+            r = sorted(s[0] for s in samples)[mid]
+            g = sorted(s[1] for s in samples)[mid]
+            b = sorted(s[2] for s in samples)[mid]
+            return (r / 255.0, g / 255.0, b / 255.0)
         except Exception:
-            pass
-        return (1.0, 1.0, 1.0)
+            return (1.0, 1.0, 1.0)
 
     def translate(
         self,

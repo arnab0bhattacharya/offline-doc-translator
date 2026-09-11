@@ -382,6 +382,108 @@ class TestPDFHandler(unittest.TestCase):
             review_log = os.path.join(self.test_dir, "review.log")
             stats = handler.translate(input_path, output_path, "ja2en", review_log_path=review_log)
 
+            self.assertEqual(stats["reverted"], 1)
+            self.assertEqual(stats["translated"], 0)
+            self.assertTrue(os.path.exists(output_path))
+            self.assertTrue(os.path.exists(review_log))
+            with open(review_log, "r", encoding="utf-8") as f:
+                log_content = f.read()
+                self.assertIn("Overflow_b", log_content)
+
+            out_doc = fitz.open(output_path)
+            self.assertIn("テスト", out_doc[0].get_text("text"))
+            out_doc.close()
+
+    def test_pdf_batch_redaction_single_call_per_page(self):
+        doc = fitz.open()
+        page = doc.new_page(width=600, height=600)
+        page.insert_textbox(fitz.Rect(50, 50, 450, 100), "ブロック一の日本語テキストです。", fontsize=14, fontname="japan")
+        page.insert_textbox(fitz.Rect(50, 150, 450, 200), "ブロック二の日本語テキストです。", fontsize=14, fontname="japan")
+        page.insert_textbox(fitz.Rect(50, 250, 450, 300), "ブロック三の日本語テキストです。", fontsize=14, fontname="japan")
+        input_path = os.path.join(self.test_dir, "multi_block.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        apply_count = 0
+        real_apply = fitz.Page.apply_redactions
+
+        def spy_apply(page_self, *args, **kwargs):
+            nonlocal apply_count
+            apply_count += 1
+            return real_apply(page_self, *args, **kwargs)
+
+        def mock_translate(text, **kw):
+            if "一" in text:
+                return "English Block 1", True, False
+            elif "二" in text:
+                return "English Block 2", True, False
+            else:
+                return "English Block 3", True, False
+
+        fitz.Page.apply_redactions = spy_apply
+        try:
+            with patch.object(self.mock_engine, "translate_chunk", side_effect=mock_translate):
+                handler = PDFHandler(self.mock_engine)
+                output_path = os.path.join(self.test_dir, "multi_block_out.pdf")
+                stats = handler.translate(input_path, output_path, "ja2en")
+
+                # Verify single apply_redactions call for the entire page with 3 blocks
+                self.assertEqual(apply_count, 1)
+                self.assertEqual(stats["total"], 3)
+                self.assertEqual(stats["translated"], 3)
+                self.assertEqual(stats["reverted"], 0)
+
+                out_doc = fitz.open(output_path)
+                out_text = out_doc[0].get_text("text")
+                out_doc.close()
+                self.assertIn("English Block 1", out_text)
+                self.assertIn("English Block 2", out_text)
+                self.assertIn("English Block 3", out_text)
+        finally:
+            fitz.Page.apply_redactions = real_apply
+
+    def test_pdf_partial_overflow_preserves_unfitted_block(self):
+        doc = fitz.open()
+        page = doc.new_page(width=600, height=400)
+        page.insert_textbox(fitz.Rect(50, 50, 450, 100), "通常テキストの日本語文です。", fontsize=14, fontname="japan")
+        page.insert_textbox(fitz.Rect(50, 150, 450, 200), "オーバーフロー用の文です。", fontsize=14, fontname="japan")
+        input_path = os.path.join(self.test_dir, "partial_overflow.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        apply_count = 0
+        real_apply = fitz.Page.apply_redactions
+
+        def spy_apply(page_self, *args, **kwargs):
+            nonlocal apply_count
+            apply_count += 1
+            return real_apply(page_self, *args, **kwargs)
+
+        def mock_translate(text, **kw):
+            if "通常" in text:
+                return "Normal English text", True, False
+            else:
+                return "An extremely long translated English sentence " * 40, True, False
+
+        fitz.Page.apply_redactions = spy_apply
+        try:
+            with patch.object(self.mock_engine, "translate_chunk", side_effect=mock_translate):
+                handler = PDFHandler(self.mock_engine)
+                output_path = os.path.join(self.test_dir, "partial_overflow_out.pdf")
+                stats = handler.translate(input_path, output_path, "ja2en")
+
+                self.assertEqual(apply_count, 1)
+                self.assertEqual(stats["translated"], 1)
+                self.assertEqual(stats["reverted"], 1)
+
+                out_doc = fitz.open(output_path)
+                out_text = out_doc[0].get_text("text")
+                out_doc.close()
+                self.assertIn("Normal English text", out_text)
+                self.assertIn("オーバーフロー用の文です。", out_text)
+        finally:
+            fitz.Page.apply_redactions = real_apply
+
     def test_ooxml_text_unit_processing(self):
         handler = DOCXHandler(self.mock_engine)
 

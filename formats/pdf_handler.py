@@ -209,7 +209,8 @@ class PDFHandler(BaseFormatHandler):
                 if cancel_event and cancel_event.is_set():
                     raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
-                # Phase 3: Redact & Re-insert
+                # Phase 3: Batch Redact & Re-insert
+                fitted_blocks = []
                 for item in translated_blocks:
                     rect = item["rect"]
                     trans_text = item["text"]
@@ -255,17 +256,32 @@ class PDFHandler(BaseFormatHandler):
                             )
                         continue
 
-                    bg_color = self._sample_background_color(page, rect)
-                    page.add_redact_annot(rect, fill=bg_color)
+                    item["fitted_size"] = cur_size
+                    fitted_blocks.append(item)
+
+                if cancel_event and cancel_event.is_set():
+                    raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+
+                if fitted_blocks:
+                    # 1. Add all redaction annotations for the page
+                    for item in fitted_blocks:
+                        bg_color = self._sample_background_color(page, item["rect"])
+                        page.add_redact_annot(item["rect"], fill=bg_color)
+                        item["bg_color"] = bg_color
+
+                    # 2. Single apply_redactions call for entire page
                     page.apply_redactions()
-                    page.insert_textbox(
-                        rect,
-                        trans_text,
-                        fontsize=cur_size,
-                        fontname=cjk_font,
-                        color=(0, 0, 0),
-                        align=fitz.TEXT_ALIGN_LEFT
-                    )
+
+                    # 3. Insert all translated text boxes
+                    for item in fitted_blocks:
+                        page.insert_textbox(
+                            item["rect"],
+                            item["text"],
+                            fontsize=item["fitted_size"],
+                            fontname=cjk_font,
+                            color=(0, 0, 0),
+                            align=fitz.TEXT_ALIGN_LEFT
+                        )
 
                 self.engine.save_cache_atomically(log_cb=log_cb)
 

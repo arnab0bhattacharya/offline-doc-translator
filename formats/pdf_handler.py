@@ -10,6 +10,7 @@ Executes a 3-phase pipeline with live block-by-block progress and telemetry:
 """
 
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -18,6 +19,8 @@ from typing import Callable, Optional, Dict, Any, List, Tuple
 from formats.base import BaseFormatHandler
 from engine.core import hash_text, should_translate, TranslationResult
 from engine.errors import ErrorCode, TranslatorError
+
+HAS_CJK = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]")
 
 
 class PDFHandler(BaseFormatHandler):
@@ -89,8 +92,6 @@ class PDFHandler(BaseFormatHandler):
                     f"exceeds maximum page limit ({self.policy.max_pdf_pages} pages)."
                 )
             )
-
-        cjk_font = "japan" if direction == "en2ja" else "helv"
 
         try:
             # 1. Count total translatable blocks
@@ -215,6 +216,11 @@ class PDFHandler(BaseFormatHandler):
                     rect = item["rect"]
                     trans_text = item["text"]
 
+                    if direction == "en2ja" or HAS_CJK.search(trans_text):
+                        effective_font = "japan"
+                    else:
+                        effective_font = "helv"
+
                     estimated_fontsize = max(8.0, min(14.0, (rect.height / max(1, len(trans_text.splitlines()))) * 0.85))
                     font_floor = max(6.0, estimated_fontsize * 0.70)
                     cur_size = estimated_fontsize
@@ -231,7 +237,7 @@ class PDFHandler(BaseFormatHandler):
                                 scratch_rect,
                                 trans_text,
                                 fontsize=cur_size,
-                                fontname=cjk_font,
+                                fontname=effective_font,
                                 color=(0, 0, 0),
                                 align=fitz.TEXT_ALIGN_LEFT
                             )
@@ -257,6 +263,7 @@ class PDFHandler(BaseFormatHandler):
                         continue
 
                     item["fitted_size"] = cur_size
+                    item["fontname"] = effective_font
                     fitted_blocks.append(item)
 
                 if cancel_event and cancel_event.is_set():
@@ -278,7 +285,7 @@ class PDFHandler(BaseFormatHandler):
                             item["rect"],
                             item["text"],
                             fontsize=item["fitted_size"],
-                            fontname=cjk_font,
+                            fontname=item["fontname"],
                             color=(0, 0, 0),
                             align=fitz.TEXT_ALIGN_LEFT
                         )

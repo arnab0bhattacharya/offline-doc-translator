@@ -484,6 +484,80 @@ class TestPDFHandler(unittest.TestCase):
         finally:
             fitz.Page.apply_redactions = real_apply
 
+    def test_pdf_mixed_script_ja2en_font_fallback(self):
+        doc = fitz.open()
+        page = doc.new_page(width=600, height=300)
+        page.insert_textbox(fitz.Rect(50, 50, 450, 120), "元の会社名と住所の日本語テキストです。", fontsize=14, fontname="japan")
+        input_path = os.path.join(self.test_dir, "mixed_input.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        mixed_translation = "Company: 株式会社 (Tokyo)"
+        used_fonts = []
+        real_insert = fitz.Page.insert_textbox
+
+        def spy_insert(page_self, *args, **kwargs):
+            if "fontname" in kwargs:
+                used_fonts.append(kwargs["fontname"])
+            return real_insert(page_self, *args, **kwargs)
+
+        fitz.Page.insert_textbox = spy_insert
+        try:
+            with patch.object(self.mock_engine, "translate_chunk", return_value=(mixed_translation, True, False)):
+                handler = PDFHandler(self.mock_engine)
+                output_path = os.path.join(self.test_dir, "mixed_out.pdf")
+                stats = handler.translate(input_path, output_path, "ja2en")
+
+                self.assertEqual(stats["translated"], 1)
+                self.assertEqual(stats["reverted"], 0)
+                # Verify fallback to "japan" font for mixed-script output
+                self.assertEqual(set(used_fonts), {"japan"})
+
+                out_doc = fitz.open(output_path)
+                out_text = out_doc[0].get_text("text")
+                out_doc.close()
+                # Japanese characters are preserved, not replaced with "??" by Helvetica
+                self.assertIn("Company: 株式会社 (Tokyo)", out_text)
+                self.assertNotIn("??", out_text)
+        finally:
+            fitz.Page.insert_textbox = real_insert
+
+    def test_pdf_pure_english_ja2en_uses_helv(self):
+        doc = fitz.open()
+        page = doc.new_page(width=600, height=300)
+        page.insert_textbox(fitz.Rect(50, 50, 450, 120), "元の会社名と住所の日本語テキストです。", fontsize=14, fontname="japan")
+        input_path = os.path.join(self.test_dir, "english_input.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        pure_translation = "Company: Corporation (Tokyo)"
+        used_fonts = []
+        real_insert = fitz.Page.insert_textbox
+
+        def spy_insert(page_self, *args, **kwargs):
+            if "fontname" in kwargs:
+                used_fonts.append(kwargs["fontname"])
+            return real_insert(page_self, *args, **kwargs)
+
+        fitz.Page.insert_textbox = spy_insert
+        try:
+            with patch.object(self.mock_engine, "translate_chunk", return_value=(pure_translation, True, False)):
+                handler = PDFHandler(self.mock_engine)
+                output_path = os.path.join(self.test_dir, "english_out.pdf")
+                stats = handler.translate(input_path, output_path, "ja2en")
+
+                self.assertEqual(stats["translated"], 1)
+                self.assertEqual(stats["reverted"], 0)
+                # Verify standard "helv" font for pure English output
+                self.assertEqual(set(used_fonts), {"helv"})
+
+                out_doc = fitz.open(output_path)
+                out_text = out_doc[0].get_text("text")
+                out_doc.close()
+                self.assertIn("Company: Corporation (Tokyo)", out_text)
+        finally:
+            fitz.Page.insert_textbox = real_insert
+
     def test_ooxml_text_unit_processing(self):
         handler = DOCXHandler(self.mock_engine)
 

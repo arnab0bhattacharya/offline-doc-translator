@@ -260,16 +260,27 @@ class BaseFormatHandler(ABC):
         """
         Counts total translatable paragraphs in an OOXML XML string.
         tag_prefix is 'w' for Word (.docx) or 'a' for PowerPoint (.pptx).
+        Robust against arbitrarily nested paragraphs (e.g. textboxes, shapes).
         """
         total = 0
-        p_pattern = re.compile(rf"<{tag_prefix}:p\b{XML_TAG_ATTRS}>(.*?)</{tag_prefix}:p>", re.DOTALL)
+        p_open = rf"<{tag_prefix}:p\b{XML_TAG_ATTRS}(?<!/)>"
+        innermost_p = re.compile(
+            rf"({p_open})((?:(?!{p_open}).)*?)(</{tag_prefix}:p>)",
+            re.DOTALL,
+        )
         t_pattern = re.compile(rf"<{tag_prefix}:t\b{XML_TAG_ATTRS}>(.*?)</{tag_prefix}:t>", re.DOTALL)
 
-        for p_match in p_pattern.finditer(xml_str):
-            t_matches = t_pattern.findall(p_match.group(1))
-            full_text = unescape_xml("".join(t_matches)).strip()
-            if full_text and should_translate(full_text, direction):
-                total += 1
+        current_xml = xml_str
+        while True:
+            matches = list(innermost_p.finditer(current_xml))
+            if not matches:
+                break
+            for m in matches:
+                t_matches = t_pattern.findall(m.group(2))
+                full_text = unescape_xml("".join(t_matches)).strip()
+                if full_text and should_translate(full_text, direction):
+                    total += 1
+            current_xml = innermost_p.sub("__P__", current_xml)
         return total
 
     @staticmethod

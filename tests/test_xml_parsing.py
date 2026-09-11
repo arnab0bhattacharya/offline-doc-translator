@@ -527,6 +527,69 @@ class TestXMLParsingEdgeCases(unittest.TestCase):
         self.assertEqual(stats["reverted"], 1)
         self.assertEqual(stats["translated"], 0)
 
+    # ─────────────────────────────────────────────────────────────
+    # Nested Paragraph Handling (Excel/PDF conversions with textboxes)
+    # ─────────────────────────────────────────────────────────────
+    def test_nested_paragraphs_in_drawing_textboxes(self):
+        """Nested <w:p> inside <w:drawing>/<w:txbxContent> are both translated without tag mismatch errors."""
+        xml_input = (
+            "<w:p>"
+            "<w:r><w:t>外側の段落テキスト1</w:t></w:r>"
+            "<w:drawing>"
+            "<wp:anchor>"
+            "<a:graphic>"
+            "<a:graphicData>"
+            "<wps:wsp>"
+            "<wps:txbx>"
+            "<w:txbxContent>"
+            "<w:p><w:r><w:t>テキストボックス内のセルテキスト</w:t></w:r></w:p>"
+            "</w:txbxContent>"
+            "</wps:txbx>"
+            "</wps:wsp>"
+            "</a:graphicData>"
+            "</a:graphic>"
+            "</wp:anchor>"
+            "</w:drawing>"
+            "<w:r><w:t>外側の段落テキスト2</w:t></w:r>"
+            "</w:p>"
+        )
+        stats, prog = self._init_stats_prog(2)
+        result = self.docx_handler._process_xml_content(
+            xml_str=xml_input,
+            part_name="document.xml",
+            direction="ja2en",
+            review_log_path=None,
+            stats=stats,
+            progress_state=prog,
+            progress_cb=None,
+            log_cb=None,
+        )
+
+        self.assertEqual(stats["translated"], 2)
+        self.assertIn("[TRANS: テキストボックス内のセルテキスト]", result)
+        self.assertIn("[TRANS: 外側の段落テキスト1外側の段落テキスト2]", result)
+        self.assertIn("<w:txbxContent>", result)
+        self.assertIn("</w:txbxContent>", result)
+
+    def test_count_translatable_paragraphs_nested_xml(self):
+        """count_translatable_paragraphs_in_xml accurately counts all nested and enclosing paragraphs."""
+        xml_input = (
+            "<w:document>"
+            "<w:body>"
+            "<w:p>"
+            "<w:r><w:t>外側1</w:t></w:r>"
+            "<w:drawing><w:txbxContent>"
+            "<w:p><w:r><w:t>内側1</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>内側2</w:t></w:r></w:p>"
+            "</w:txbxContent></w:drawing>"
+            "</w:p>"
+            "<w:p><w:r><w:t>外側2</w:t></w:r></w:p>"
+            "</w:body>"
+            "</w:document>"
+        )
+        count = self.docx_handler.count_translatable_paragraphs_in_xml(xml_input, "w", "ja2en")
+        self.assertEqual(count, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

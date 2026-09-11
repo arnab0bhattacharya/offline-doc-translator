@@ -45,6 +45,10 @@ OOXML_NAMESPACES: dict[str, str] = {
     "w10": "urn:schemas-microsoft-com:office:word",
     "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
     "wp14": "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing",
+    "wps": "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+    "wpg": "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup",
+    "wpi": "http://schemas.microsoft.com/office/word/2010/wordprocessingInk",
+    "wpc": "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas",
     "wne": "http://schemas.microsoft.com/office/word/2006/wordml",
     # DrawingML & Extensions
     "a": NS_DRAWING,

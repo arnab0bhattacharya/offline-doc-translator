@@ -75,51 +75,74 @@ class PPTXHandler(BaseFormatHandler):
         xml_str = fld_pattern.sub(fld_repl, xml_str)
 
         # 2. Extract and translate paragraphs
-        p_pattern = re.compile(rf"(<a:p\b{XML_TAG_ATTRS}>)(.*?)(</a:p>)", re.DOTALL)
+        p_open = rf"<a:p\b{XML_TAG_ATTRS}(?<!/)>"
+        innermost_p_pattern = re.compile(
+            rf"({p_open})((?:(?!{p_open}).)*?)(</a:p>)",
+            re.DOTALL,
+        )
+        placeholders: dict[str, str] = {}
+        placeholder_idx = 0
 
-        def p_repl(match):
-            if cancel_event and cancel_event.is_set():
-                raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
+        current_xml = xml_str
+        while True:
+            matches = list(innermost_p_pattern.finditer(current_xml))
+            if not matches:
+                break
 
-            p_start = match.group(1)
-            p_content = match.group(2)
-            p_end = match.group(3)
+            new_xml = []
+            last_idx = 0
+            for match in matches:
+                if cancel_event and cancel_event.is_set():
+                    raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
-            full_text, t_matches = self.extract_paragraph_text_nodes(p_content, tag_prefix="a")
-            if not full_text.strip():
-                return match.group(0)
+                p_start = match.group(1)
+                p_content = match.group(2)
+                p_end = match.group(3)
 
-            # Use slide title as context if it differs from current paragraph
-            context = f"Slide Header: {slide_title}" if slide_title and slide_title != full_text else None
-            new_p_content = self._translate_and_replace_text_nodes(
-                full_text=full_text,
-                t_matches=t_matches,
-                p_content=p_content,
-                direction=direction,
-                context=context,
-                part_name=slide_name,
-                review_log_path=review_log_path,
-                stats=stats,
-                progress_state=progress_state,
-                progress_cb=progress_cb,
-                log_cb=log_cb,
-                tag_prefix="a",
-                cancel_event=cancel_event,
-                extra_nsmap=extra_nsmap,
-            )
+                full_text, t_matches = self.extract_paragraph_text_nodes(p_content, tag_prefix="a")
+                if not full_text.strip():
+                    replacement = match.group(0)
+                else:
+                    # Use slide title as context if it differs from current paragraph
+                    context = f"Slide Header: {slide_title}" if slide_title and slide_title != full_text else None
+                    new_p_content = self._translate_and_replace_text_nodes(
+                        full_text=full_text,
+                        t_matches=t_matches,
+                        p_content=p_content,
+                        direction=direction,
+                        context=context,
+                        part_name=slide_name,
+                        review_log_path=review_log_path,
+                        stats=stats,
+                        progress_state=progress_state,
+                        progress_cb=progress_cb,
+                        log_cb=log_cb,
+                        tag_prefix="a",
+                        cancel_event=cancel_event,
+                        extra_nsmap=extra_nsmap,
+                    )
 
-            if new_p_content is not None:
-                return p_start + new_p_content + p_end
+                    replacement = p_start + new_p_content + p_end if new_p_content is not None else match.group(0)
 
-            return match.group(0)
+                key = f"__P_NESTED_HOLD_{placeholder_idx}__"
+                placeholder_idx += 1
+                placeholders[key] = replacement
 
-        xml_str = p_pattern.sub(p_repl, xml_str)
+                new_xml.append(current_xml[last_idx : match.start()])
+                new_xml.append(key)
+                last_idx = match.end()
+
+            new_xml.append(current_xml[last_idx:])
+            current_xml = "".join(new_xml)
+
+        for key in reversed(list(placeholders.keys())):
+            current_xml = current_xml.replace(key, placeholders[key])
 
         # 3. Restore protected <a:fld> blocks
         for key, val in flds.items():
-            xml_str = xml_str.replace(key, val)
+            current_xml = current_xml.replace(key, val)
 
-        return xml_str
+        return current_xml
 
     def translate(
         self,

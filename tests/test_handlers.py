@@ -194,6 +194,66 @@ class TestFormatHandlers(unittest.TestCase):
             self.assertIn("[EN: 社外秘 &amp; 2024年度報告書]", trans_hdr_xml)
             self.assertNotIn("&amp;amp;", trans_hdr_xml)
 
+    def test_docx_handler_nested_drawing_paragraphs_excel_pdf_converted(self):
+        """Word documents converted from Excel/PDF with nested paragraphs in drawing textboxes translate cleanly."""
+        docx_path = os.path.join(self.test_dir, "nested_sample.docx")
+        out_docx_path = os.path.join(self.test_dir, "nested_sample_translated.docx")
+
+        document_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+            'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+            "<w:body>"
+            "<w:p>"
+            "<w:r><w:t>表のタイトル：</w:t></w:r>"
+            "<w:drawing>"
+            "<wp:anchor>"
+            "<a:graphic>"
+            "<a:graphicData>"
+            "<wps:wsp>"
+            "<wps:txbx>"
+            "<w:txbxContent>"
+            "<w:p><w:r><w:t>品名：ウィジェットA</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>単価：1000円</w:t></w:r></w:p>"
+            "<w:p/>"
+            "</w:txbxContent>"
+            "</wps:txbx>"
+            "</wps:wsp>"
+            "</a:graphicData>"
+            "</a:graphic>"
+            "</wp:anchor>"
+            "</w:drawing>"
+            "<w:r><w:t>注記：税別価格です。</w:t></w:r>"
+            "</w:p>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+        with zipfile.ZipFile(docx_path, "w") as z:
+            z.writestr("word/document.xml", document_xml)
+            z.writestr(
+                "[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'
+            )
+
+        handler = DOCXHandler(self.mock_engine)
+        stats = handler.translate(docx_path, out_docx_path, "ja2en")
+
+        self.assertTrue(os.path.exists(out_docx_path))
+        self.assertEqual(stats["translated"], 3)
+
+        with zipfile.ZipFile(out_docx_path, "r") as z:
+            trans_doc_xml = z.read("word/document.xml").decode("utf-8")
+            self.assertIn("[EN: 品名：ウィジェットA]", trans_doc_xml)
+            self.assertIn("[EN: 単価：1000円]", trans_doc_xml)
+            self.assertIn("[EN: 表のタイトル：注記：税別価格です。]", trans_doc_xml)
+            # Ensure drawing wrappers are preserved
+            self.assertIn("<w:txbxContent>", trans_doc_xml)
+            self.assertIn("</w:txbxContent>", trans_doc_xml)
+            self.assertIn("<w:drawing>", trans_doc_xml)
+            self.assertIn("</w:drawing>", trans_doc_xml)
+
 
 class TestFormatRegistry(unittest.TestCase):
     def test_get_handler_valid(self):

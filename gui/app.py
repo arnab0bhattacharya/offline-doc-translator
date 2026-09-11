@@ -420,7 +420,9 @@ class TranslatorApp:
             self.docs_view.log(message)
 
     def cleanup(self):
-        """Clean shutdown of translation queue worker thread."""
+        """Clean shutdown of translation queue worker thread and auto-persists state."""
+        if hasattr(self, "docs_view") and hasattr(self.docs_view, "persist_glossary"):
+            self.docs_view.persist_glossary()
         self.controller.shutdown()
 
 

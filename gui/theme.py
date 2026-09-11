@@ -42,10 +42,30 @@ GEMMA_PRESETS = [
     "gemma4:27b-it-qat",
 ]
 
+import logging
+from typing import Dict, Optional, Callable
 
-def parse_glossary_text(text: str) -> Dict[str, str]:
-    """Parses key-value glossary lines supporting ->, :, or = delimiters."""
+logger = logging.getLogger("offline_translator.glossary")
+
+MAX_GLOSSARY_ENTRIES: int = 10_000
+MAX_TERM_LENGTH: int = 200
+
+
+def parse_glossary_text(
+    text: str,
+    on_warning: Optional[Callable[[str], None]] = None,
+) -> Dict[str, str]:
+    """
+    Parses key-value glossary lines supporting ->, :, or = delimiters.
+    Enforces security & performance limits from Codex Finding 3:
+      - Max 10,000 entries
+      - Max 200 characters per term (source or target)
+      - Logs warning when limits are exceeded.
+    """
     glossary: Dict[str, str] = {}
+    skipped_length = 0
+    limit_reached = False
+
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -60,6 +80,36 @@ def parse_glossary_text(text: str) -> Dict[str, str]:
             continue
         src = parts[0].strip()
         tgt = parts[1].strip()
-        if src and tgt:
-            glossary[src] = tgt
+        if not src or not tgt:
+            continue
+
+        if len(src) > MAX_TERM_LENGTH or len(tgt) > MAX_TERM_LENGTH:
+            skipped_length += 1
+            continue
+
+        if len(glossary) >= MAX_GLOSSARY_ENTRIES:
+            if not limit_reached:
+                limit_reached = True
+                warn_msg = f"Glossary exceeded maximum limit of {MAX_GLOSSARY_ENTRIES} entries. Remaining entries were ignored."
+                logger.warning(warn_msg)
+                if on_warning:
+                    on_warning(warn_msg)
+            break
+
+        glossary[src] = tgt
+
+    if skipped_length > 0:
+        warn_msg = f"Skipped {skipped_length} glossary term(s) exceeding {MAX_TERM_LENGTH} characters."
+        logger.warning(warn_msg)
+        if on_warning:
+            on_warning(warn_msg)
+
     return glossary
+
+
+def format_glossary_text(glossary: Dict[str, str]) -> str:
+    """Formats a dictionary back to standard glossary text representation."""
+    lines = ["# Term -> Translation (one per line)"]
+    for k, v in glossary.items():
+        lines.append(f"{k} -> {v}")
+    return "\n".join(lines) + "\n"

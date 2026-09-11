@@ -33,8 +33,12 @@ from engine.run_job import execute_translation
 from engine.logging import TranslationLogger, TranslationLogEvent
 
 
+MAX_GLOSSARY_ENTRIES: int = 10_000
+MAX_TERM_LENGTH: int = 200
+
+
 def parse_cli_glossary(glossary_arg: str) -> Dict[str, str]:
-    """Parses glossary from string or file path."""
+    """Parses glossary from string or file path with size and term limits."""
     if not glossary_arg:
         return {}
     if os.path.exists(glossary_arg):
@@ -46,7 +50,7 @@ def parse_cli_glossary(glossary_arg: str) -> Dict[str, str]:
     glossary = {}
     for entry in content.replace("\n", ",").split(","):
         entry = entry.strip()
-        if not entry:
+        if not entry or entry.startswith("#"):
             continue
         if "->" in entry:
             parts = entry.split("->", 1)
@@ -58,8 +62,13 @@ def parse_cli_glossary(glossary_arg: str) -> Dict[str, str]:
             continue
         k = parts[0].strip()
         v = parts[1].strip()
-        if k and v:
-            glossary[k] = v
+        if not k or not v:
+            continue
+        if len(k) > MAX_TERM_LENGTH or len(v) > MAX_TERM_LENGTH:
+            continue
+        if len(glossary) >= MAX_GLOSSARY_ENTRIES:
+            break
+        glossary[k] = v
     return glossary
 
 

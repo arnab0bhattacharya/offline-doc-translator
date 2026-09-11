@@ -8,8 +8,8 @@ import os
 import sys
 import time
 import subprocess
-from tkinter import messagebox
-from typing import Callable, Dict, List, Optional, Union
+from tkinter import messagebox, filedialog
+from typing import Callable, Dict, List, Optional, Union, Any
 import customtkinter as ctk
 
 from engine.core import TranslationMode
@@ -17,15 +17,34 @@ from engine.cache import CachePolicy
 from engine.preflight import check_ollama_status
 from engine.queue_manager import TranslationJob, JobStatus, format_eta
 from gui.controllers.translation_controller import TranslationController
-from gui.theme import THEME, LANGUAGE_PAIRS, GEMMA_PRESETS, parse_glossary_text
+from gui.dnd_helper import WindowsDropHook, is_point_in_widget
+from gui.theme import (
+    THEME,
+    LANGUAGE_PAIRS,
+    GEMMA_PRESETS,
+    parse_glossary_text,
+    format_glossary_text,
+    MAX_GLOSSARY_ENTRIES,
+    MAX_TERM_LENGTH,
+)
 from gui.widgets.job_row import JobRow
 from gui.widgets.staged_file_list import StagedFileList
+
+GLOSSARY_DIR = os.path.expanduser("~/.offline-translator")
+LAST_GLOSSARY_PATH = os.path.join(GLOSSARY_DIR, "last_glossary.txt")
 
 
 class DocumentsView(ctk.CTkFrame):
     """
     Renders the document staging, configuration, queue, and post-action panels.
     """
+
+    glossary_btn: Any = None
+    glossary_load_btn: Any = None
+    glossary_save_btn: Any = None
+    glossary_drawer: Any = None
+    glossary_text: Any = None
+    queue_empty_label: Any = None
 
     def __init__(
         self,
@@ -45,6 +64,7 @@ class DocumentsView(ctk.CTkFrame):
         self._last_review_log: Optional[str] = None
         self._glossary_open = False
         self._log_open = False
+        self._drop_hook: Optional[WindowsDropHook] = None
 
         self._build_ui()
 
@@ -272,6 +292,32 @@ class DocumentsView(ctk.CTkFrame):
         )
         self.glossary_btn.pack(side="left")
 
+        self.glossary_save_btn = ctk.CTkButton(
+            glossary_toggle_frame,
+            text="💾 Save",
+            width=68,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],
+            hover_color=THEME["btn_secondary"],
+            command=self._save_glossary_file,
+        )
+        self.glossary_save_btn.pack(side="right", padx=(4, 0))
+
+        self.glossary_load_btn = ctk.CTkButton(
+            glossary_toggle_frame,
+            text="📥 Load",
+            width=68,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],
+            hover_color=THEME["btn_secondary"],
+            command=self._load_glossary_file,
+        )
+        self.glossary_load_btn.pack(side="right")
+
         self.glossary_drawer = ctk.CTkFrame(opt_inner, fg_color="transparent")
         self.glossary_text = ctk.CTkTextbox(
             self.glossary_drawer,
@@ -425,6 +471,10 @@ class DocumentsView(ctk.CTkFrame):
         )
         self.log_text.pack(fill="x", padx=12, pady=12)
 
+        # Auto-load persisted glossary & initialize DND
+        self._auto_load_glossary()
+        self._setup_dnd()
+
     # ── Properties & Staged List Integration ──
 
     @property
@@ -477,6 +527,163 @@ class DocumentsView(ctk.CTkFrame):
             self.glossary_btn.configure(text="▼  Custom Glossary (Optional)")
             self._glossary_open = True
 
+    # ── Glossary Persistence & Management ──
+
+    def _auto_load_glossary(self):
+        """Auto-loads last-used glossary from ~/.offline-translator/last_glossary.txt on startup."""
+        try:
+            if os.path.isfile(LAST_GLOSSARY_PATH):
+                with open(LAST_GLOSSARY_PATH, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if content.strip():
+                    self.glossary_text.delete("0.0", "end")
+                    self.glossary_text.insert("0.0", content)
+        except Exception:
+            pass
+
+    def persist_glossary(self):
+        """Auto-persists current glossary to ~/.offline-translator/last_glossary.txt."""
+        try:
+            os.makedirs(GLOSSARY_DIR, exist_ok=True)
+            content = self.glossary_text.get("0.0", "end").rstrip()
+            with open(LAST_GLOSSARY_PATH, "w", encoding="utf-8") as f:
+                f.write(content + "\n" if content else "")
+        except Exception:
+            pass
+
+    def _load_glossary_file(self, file_path: Optional[str] = None):
+        """Loads a glossary text/csv file into the glossary drawer."""
+        if not file_path:
+            file_path = filedialog.askopenfilename(
+                title="Load Glossary File",
+                filetypes=[
+                    ("Glossary / Text Files", "*.txt *.csv"),
+                    ("Text Files", "*.txt"),
+                    ("CSV Files", "*.csv"),
+                    ("All Files", "*.*"),
+                ],
+            )
+        if not file_path or not os.path.isfile(file_path):
+            return
+
+        try:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                with open(file_path, "r", encoding="latin-1") as f:
+                    content = f.read()
+
+            warnings: List[str] = []
+            parsed = parse_glossary_text(content, on_warning=lambda w: warnings.append(w))
+
+            self.glossary_text.delete("0.0", "end")
+            self.glossary_text.insert("0.0", content)
+
+            if not self._glossary_open:
+                self._toggle_glossary()
+
+            msg = f"[Glossary] Loaded {len(parsed)} entries from {os.path.basename(file_path)}."
+            if warnings:
+                msg += f" (Warnings: {'; '.join(warnings)})"
+                messagebox.showwarning("Glossary Limits", "\n".join(warnings))
+            self.log(msg)
+            self.persist_glossary()
+        except Exception as e:
+            messagebox.showerror("Glossary Load Error", f"Failed to load glossary file:\n{e}")
+
+    def _save_glossary_file(self):
+        """Saves current glossary drawer content to a user-chosen text file."""
+        content = self.glossary_text.get("0.0", "end").strip()
+        if not content or content == "# Term -> Translation (one per line)":
+            messagebox.showinfo("Empty Glossary", "There are no glossary entries to save.")
+            return
+
+        dest = filedialog.asksaveasfilename(
+            title="Save Glossary As",
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+            initialfile="glossary.txt",
+        )
+        if not dest:
+            return
+
+        try:
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(content + "\n")
+            self.log(f"[Glossary] Saved glossary to {os.path.basename(dest)}.")
+        except Exception as e:
+            messagebox.showerror("Glossary Save Error", f"Failed to save glossary:\n{e}")
+
+    def _setup_dnd(self):
+        """Initializes drag-and-drop support on Windows and via Tkinter extensions."""
+        for w in (self.glossary_drawer, self.glossary_text):
+            if hasattr(w, "drop_target_register"):
+                try:
+                    w.drop_target_register("DND_Files")
+                    w.dnd_bind("<<Drop>>", self._on_tkdnd_drop)
+                except Exception:
+                    pass
+
+        if sys.platform == "win32":
+            try:
+                self._drop_hook = WindowsDropHook(self, self._on_window_drop)
+                self.after(200, self._drop_hook.hook)
+            except Exception:
+                pass
+
+        self.bind("<Destroy>", self._on_destroy_cleanup, add="+")
+
+    def _on_destroy_cleanup(self, event=None):
+        if event and event.widget != self:
+            return
+        self.persist_glossary()
+        if self._drop_hook:
+            self._drop_hook.unhook()
+            self._drop_hook = None
+
+    def _on_window_drop(self, files: List[str], screen_x: int, screen_y: int):
+        """Handles dropped files from Windows Explorer."""
+        if not files:
+            return
+
+        hit_glossary = is_point_in_widget(self.glossary_drawer, screen_x, screen_y) or is_point_in_widget(
+            self.glossary_text, screen_x, screen_y
+        )
+        txt_files = [f for f in files if f.lower().endswith((".txt", ".csv"))]
+        doc_files = [
+            f for f in files if os.path.splitext(f.lower())[1] in [".docx", ".pptx", ".xlsx", ".pdf"]
+        ]
+
+        if hit_glossary or (txt_files and not doc_files):
+            target = txt_files[0] if txt_files else files[0]
+            self._load_glossary_file(target)
+        elif doc_files:
+            self.staged_list.add_files(doc_files)
+        elif os.path.isdir(files[0]):
+            self._browse_folder_path(files[0])
+
+    def _browse_folder_path(self, folder_path: str):
+        from formats.registry import SUPPORTED_EXTENSIONS
+
+        added = []
+        for root_dir, _, filenames in os.walk(folder_path):
+            for fn in filenames:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext in SUPPORTED_EXTENSIONS:
+                    added.append(os.path.join(root_dir, fn))
+        if added:
+            self.staged_list.add_files(added)
+            self.log(f"Staged {len(added)} document(s) from dropped folder.")
+
+    def _on_tkdnd_drop(self, event):
+        try:
+            files = self.tk.splitlist(event.data)
+            if files:
+                self._load_glossary_file(files[0])
+        except Exception:
+            pass
+
     def _toggle_log(self):
         if self._log_open:
             self.log_drawer.pack_forget()
@@ -506,7 +713,11 @@ class DocumentsView(ctk.CTkFrame):
         mode = TranslationMode(self.mode_var.get())
         model = self.model_var.get().strip() or GEMMA_PRESETS[0]
         raw_glossary = self.glossary_text.get("0.0", "end")
-        glossary = parse_glossary_text(raw_glossary)
+        glossary_warnings: List[str] = []
+        glossary = parse_glossary_text(raw_glossary, on_warning=lambda w: glossary_warnings.append(w))
+        if glossary_warnings:
+            self.log(f"[Glossary Warning] {'; '.join(glossary_warnings)}")
+        self.persist_glossary()
 
         cache_sel = self.cache_policy_var.get()
         if "In-Memory" in cache_sel:

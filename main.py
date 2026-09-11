@@ -14,8 +14,8 @@ Usage:
      python main.py --input document.docx --direction ja2en --glossary "リード:Sales Leads, 当四半期:Q3 Period"
 """
 
-import sys
 import os
+import sys
 
 # Ensure project root is first in sys.path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -23,26 +23,25 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import argparse
+
 from tqdm import tqdm
-from typing import Dict, Union
 
-from engine.errors import TranslatorError
-from engine.core import TranslationMode, DIRECTIONS
 from engine.cache import CachePolicy
+from engine.core import DIRECTIONS, TranslationMode
+from engine.errors import TranslatorError
+from engine.logging import TranslationLogEvent, TranslationLogger
 from engine.run_job import execute_translation
-from engine.logging import TranslationLogger, TranslationLogEvent
-
 
 MAX_GLOSSARY_ENTRIES: int = 10_000
 MAX_TERM_LENGTH: int = 200
 
 
-def parse_cli_glossary(glossary_arg: str) -> Dict[str, str]:
+def parse_cli_glossary(glossary_arg: str) -> dict[str, str]:
     """Parses glossary from string or file path with size and term limits."""
     if not glossary_arg:
         return {}
     if os.path.exists(glossary_arg):
-        with open(glossary_arg, "r", encoding="utf-8") as f:
+        with open(glossary_arg, encoding="utf-8") as f:
             content = f.read()
     else:
         content = glossary_arg
@@ -78,14 +77,14 @@ def run_cli(
     direction: str,
     mode_str: str,
     model_name: str,
-    glossary: Dict[str, str],
+    glossary: dict[str, str],
     include_source_text: bool = False,
-    cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
+    cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
 ) -> None:
     """Executes translation in terminal with tqdm progress bar and live telemetry."""
-    print(f"\n=======================================================")
-    print(f" Offline Document Translator (CLI Mode)")
-    print(f"=======================================================")
+    print("\n=======================================================")
+    print(" Offline Document Translator (CLI Mode)")
+    print("=======================================================")
     print(f" Input File : {input_path}")
     print(f" Output File: {output_path}")
     print(f" Mode       : {mode_str.upper()}")
@@ -94,7 +93,7 @@ def run_cli(
     print(f" Cache      : {str(cache_policy).upper()}")
     if glossary:
         print(f" Glossary   : {len(glossary)} active rule(s)")
-    print(f"=======================================================")
+    print("=======================================================")
 
     mode_enum = mode_str if isinstance(mode_str, TranslationMode) else TranslationMode(mode_str)
     review_log_path = f"{output_path}.needs_review.log"
@@ -148,7 +147,7 @@ def run_cli(
         print(f" Output Saved to   : {output_path}")
 
         if os.path.exists(review_log_path) and os.path.getsize(review_log_path) > 0:
-            print(f"\n[!] Notice [E06]: Some items failed validation and were kept in original language.")
+            print("\n[!] Notice [E06]: Some items failed validation and were kept in original language.")
             print(f"    See '{review_log_path}' for the full audit log.")
         print("=======================================================\n")
 
@@ -166,7 +165,6 @@ def run_cli(
         sys.exit(1)
 
 
-
 def main():
     parser = argparse.ArgumentParser(
         description="Offline Document Translator (PPTX, XLSX, DOCX, PDF) powered by Local NMT + Local LLMs."
@@ -174,10 +172,19 @@ def main():
     parser.add_argument("--input", help="Source document path (.pptx, .xlsx, .docx, .pdf)")
     parser.add_argument("--output", help="Output path. Defaults to '<input>_<direction>.<ext>'")
     parser.add_argument("--direction", choices=DIRECTIONS, help="Translation direction: ja2en or en2ja")
-    parser.add_argument("--mode", default=TranslationMode.FAST_NMT.value, choices=[m.value for m in TranslationMode], help="Engine mode (default: fast_nmt)")
+    parser.add_argument(
+        "--mode",
+        default=TranslationMode.FAST_NMT.value,
+        choices=[m.value for m in TranslationMode],
+        help="Engine mode (default: fast_nmt)",
+    )
     parser.add_argument("--model", default="gemma4:e2b-it-qat", help="Ollama model name (default: gemma4:e2b-it-qat)")
     parser.add_argument("--glossary", help="Custom glossary string (e.g. 'Term:Translation') or text file path")
-    parser.add_argument("--include-source-text", action="store_true", help="Include original text in review log for debugging (default: false, for privacy)")
+    parser.add_argument(
+        "--include-source-text",
+        action="store_true",
+        help="Include original text in review log for debugging (default: false, for privacy)",
+    )
     parser.add_argument(
         "--cache-policy",
         default=CachePolicy.ENCRYPTED_PERSISTENT.value,
@@ -190,6 +197,7 @@ def main():
 
     if args.gui or len(sys.argv) == 1:
         from gui.app import launch_gui
+
         launch_gui()
         return
 
@@ -220,7 +228,6 @@ def main():
         include_source_text=args.include_source_text,
         cache_policy=args.cache_policy,
     )
-
 
 
 if __name__ == "__main__":

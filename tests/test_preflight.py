@@ -4,23 +4,21 @@ tests/test_preflight.py
 Tests for preflight checks, system diagnostics, and standardized error codes.
 """
 
-import unittest
-from unittest.mock import patch
 import os
 import sys
+import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from engine.errors import ErrorCode, TranslatorError, ERROR_MESSAGES
+from engine.errors import ERROR_MESSAGES, ErrorCode, TranslatorError
 from engine.preflight import (
-    check_ram,
     check_disk_space,
+    check_ram,
     run_preflight,
 )
 
 
 class TestPreflight(unittest.TestCase):
-
     def test_error_definitions(self):
         for code in ErrorCode:
             self.assertIn(code, ERROR_MESSAGES)
@@ -58,7 +56,6 @@ class TestPreflight(unittest.TestCase):
                 require_ollama=False,
             )
         self.assertEqual(ctx.exception.code, ErrorCode.E04)
-
 
 
 if __name__ == "__main__":

@@ -3,30 +3,29 @@ formats package initialization.
 """
 
 from .base import (
-    BaseFormatHandler,
-    MAX_EXTRACTED_BYTES,
     MAX_ARCHIVE_ENTRIES,
+    MAX_EXTRACTED_BYTES,
     MAX_SINGLE_ENTRY_BYTES,
+    BaseFormatHandler,
 )
-from .pptx_handler import PPTXHandler
-from .xlsx_handler import XLSXHandler
 from .docx_handler import DOCXHandler
 from .pdf_handler import PDFHandler
-from .registry import get_handler, HANDLER_REGISTRY, SUPPORTED_EXTENSIONS, _ensure_registry_loaded
+from .pptx_handler import PPTXHandler
+from .registry import HANDLER_REGISTRY, SUPPORTED_EXTENSIONS, _ensure_registry_loaded, get_handler
+from .xlsx_handler import XLSXHandler
 
 _ensure_registry_loaded()
 
 __all__ = [
-    "BaseFormatHandler",
-    "MAX_EXTRACTED_BYTES",
+    "HANDLER_REGISTRY",
     "MAX_ARCHIVE_ENTRIES",
+    "MAX_EXTRACTED_BYTES",
     "MAX_SINGLE_ENTRY_BYTES",
-    "PPTXHandler",
-    "XLSXHandler",
+    "SUPPORTED_EXTENSIONS",
+    "BaseFormatHandler",
     "DOCXHandler",
     "PDFHandler",
+    "PPTXHandler",
+    "XLSXHandler",
     "get_handler",
-    "HANDLER_REGISTRY",
-    "SUPPORTED_EXTENSIONS",
 ]
-

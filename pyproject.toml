@@ -1,0 +1,133 @@
+[project]
+name = "offline-doc-translator"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.9.0",
+    "bandit>=1.8.0",
+    "pytest>=8.0.0",
+]
+
+# ─────────────────────────────────────────────
+# Ruff — Linter + Formatter (replaces flake8, black, isort)
+# ─────────────────────────────────────────────
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+fix = false  # Don't auto-fix on lint — only on explicit `ruff format`
+
+# Files to scan
+include = ["engine/**/*.py", "formats/**/*.py", "gui/**/*.py", "tests/**/*.py", "main.py", "build.py"]
+exclude = ["__pycache__", ".venv", "dist", "build", "installer"]
+
+[tool.ruff.lint]
+# Start with a practical, non-overwhelming rule set.
+# These catch real bugs and enforce consistent style without being pedantic.
+select = [
+    "F",      # Pyflakes — undefined names, unused imports, redefined builtins
+    "E",      # pycodestyle errors — syntax, whitespace, indentation
+    "W",      # pycodestyle warnings
+    "I",      # isort — import ordering
+    "N",      # pep8-naming — class/function/variable naming conventions
+    "UP",     # pyupgrade — modernize syntax for target Python version
+    "B",      # flake8-bugbear — common bug patterns and anti-patterns
+    "A",      # flake8-builtins — shadowing Python builtins
+    "S",      # flake8-bandit (Bandit rules in Ruff) — security checks
+    "T20",    # flake8-print — flag print() left in production code
+    "SIM",    # flake8-simplify — simplifiable if/else, with, etc.
+    "TCH",    # flake8-type-checking — optimize TYPE_CHECKING imports
+    "RUF",    # Ruff-specific rules
+    "PERF",   # Perflint — performance anti-patterns
+    "PLC",    # Pylint convention
+    "PLE",    # Pylint errors
+    "PLW",    # Pylint warnings
+]
+
+ignore = [
+    # ── Style preferences (safe to ignore permanently) ──
+    "E501",    # Line too long — handled by formatter, not linter
+    "N802",    # Function name should be lowercase — we use some camelCase for Tkinter overrides
+    "N803",    # Argument name should be lowercase — same Tkinter reason
+    "N806",    # Variable in function should be lowercase — NS, LANG_MAP, etc. are fine
+    "N812",    # Lowercase imported as non-lowercase — TYPE_CHECKING patterns
+
+    # ── Print statements (intentional in CLI mode and log_cb callbacks) ──
+    "T201",    # print found — we use print() deliberately in main.py CLI
+
+    # ── Security false positives for this codebase ──
+    "S603",    # subprocess call without shell=True — we use subprocess.Popen with list args intentionally
+    "S607",    # Starting process with partial path — "explorer", "ollama" are correct on Windows
+    "S606",    # Starting process with no shell — os.startfile is fine for opening user files
+    "S110",    # try-except-pass — we have legitimate silent exception handlers
+    "S112",    # try-except-continue — same
+
+    # ── Patterns that are correct in our codebase ──
+    "B007",    # Unused loop variable — we use `for _ in range(...)` patterns
+    "UP012",   # Unnecessary encode("utf-8") — explicit is fine
+    "SIM102",  # Collapsible if — sometimes nested ifs are more readable
+    "PLW0603", # Global statement — used in a few controlled places
+    "PERF203", # try-except in loop — necessary for per-chunk error handling in handlers
+    "PLW2901", # Redefined loop name — used in legitimate retry patterns
+    "RUF001",  # Ambiguous unicode — we have Japanese text in strings intentionally
+    "E402",    # Module level import not at top of file — sys.path bootstrap is required before package imports
+    "PLC0415", # Import outside top-level — used for lazy loading heavy modules and in tests
+    "SIM105",  # Use contextlib.suppress — explicit try/except pass is clearer
+    "UP042",   # Class inherits from (str, Enum) — backward-compatible enum pattern
+]
+
+# Per-file rule overrides
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # Use of assert — required for pytest/unittest
+    "S105",    # Hardcoded password / secret strings in test fixtures
+    "S106",    # Hardcoded password in func args
+    "B011",    # Do not assert False — used in tests
+    "PLW0108", # Unnecessary lambda — test fixtures sometimes need them
+    "RUF059",  # Unused unpacked variables in test asserts
+    "F841",    # Local variable assigned but unused in test setups
+    "E701",    # Multiple statements on one line
+    "SIM117",  # Nested with statements in mocks
+    "PERF401", # Loop instead of list comprehension in test fixtures
+    "UP045",   # Optional type hint in tests asserting typing.get_type_hints
+]
+"main.py" = [
+    "T201",    # print() is the CLI's output mechanism
+]
+"gui/**/*.py" = [
+    "PLW0108", # Unnecessary lambda — Tkinter command= bindings need them
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["engine", "formats", "gui"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+
+# ─────────────────────────────────────────────
+# Bandit — Security Scanner
+# ─────────────────────────────────────────────
+[tool.bandit]
+targets = ["engine", "formats", "gui", "main.py"]
+exclude_dirs = ["tests", "__pycache__", ".venv", "dist", "build"]
+# Skip low-confidence noise that Ruff's S rules already cover better
+skips = [
+    "B110",  # try-except-pass — too many false positives in error-resilient code
+    "B404",  # import subprocess — it's a standard library, not a vulnerability
+    "B112",  # try-except-continue
+    "B603",  # subprocess call without shell=True
+    "B606",  # start process with no shell (os.startfile)
+    "B607",  # start process with partial path (explorer, xdg-open)
+]
+
+# ─────────────────────────────────────────────
+# pytest
+# ─────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

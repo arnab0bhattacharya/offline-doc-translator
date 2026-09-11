@@ -8,9 +8,10 @@ free from XXE, entity expansion bombs, and DTD exploits.
 
 import re
 import warnings
-from typing import Optional, Tuple, Dict, Any, Union, Callable, List
+from collections.abc import Callable
 
 from lxml import etree
+
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
     try:
@@ -19,7 +20,6 @@ with warnings.catch_warnings():
         check_docinfo = None
 
 from engine.errors import ErrorCode, TranslatorError
-
 
 # Standard OOXML & Microsoft Office Extension Namespaces
 NS_WORD = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -34,7 +34,7 @@ NS_RELATIONSHIPS = "http://schemas.openxmlformats.org/officeDocument/2006/relati
 NS_MARKUP_COMPAT = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 
-OOXML_NAMESPACES: Dict[str, str] = {
+OOXML_NAMESPACES: dict[str, str] = {
     # WordprocessingML & Extensions
     "w": NS_WORD,
     "w14": NS_WORD14,
@@ -46,7 +46,6 @@ OOXML_NAMESPACES: Dict[str, str] = {
     "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
     "wp14": "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing",
     "wne": "http://schemas.microsoft.com/office/word/2006/wordml",
-
     # DrawingML & Extensions
     "a": NS_DRAWING,
     "a14": NS_DRAWING14,
@@ -55,18 +54,15 @@ OOXML_NAMESPACES: Dict[str, str] = {
     "pic": "http://schemas.openxmlformats.org/drawingml/2006/picture",
     "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
     "dgm": "http://schemas.openxmlformats.org/drawingml/2006/diagram",
-
     # PresentationML & Extensions
     "p": NS_PRESENTATION,
     "p14": "http://schemas.microsoft.com/office/powerpoint/2010/main",
     "p15": "http://schemas.microsoft.com/office/powerpoint/2012/main",
-
     # SpreadsheetML & Extensions
     "s": NS_SPREADSHEET,
     "x": NS_SPREADSHEET,
     "x14": "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
     "x15": "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main",
-
     # Common, Relationships, VML, Math, Compatibility
     "r": NS_RELATIONSHIPS,
     "r14": "http://schemas.microsoft.com/office/2007/relationships",
@@ -95,7 +91,7 @@ def get_secure_xml_parser(recover: bool = False) -> etree.XMLParser:
     )
 
 
-def check_xml_safety(tree: Union[etree._ElementTree, etree._Element]) -> None:
+def check_xml_safety(tree: etree._ElementTree | etree._Element) -> None:
     """
     Validates that parsed XML does not contain prohibited DTD or entity declarations.
     OOXML parts strictly require no DTD declarations; any DOCTYPE (internal, external,
@@ -109,8 +105,7 @@ def check_xml_safety(tree: Union[etree._ElementTree, etree._Element]) -> None:
                 check_docinfo(element_tree, forbid_dtd=True, forbid_entities=True)
             except Exception as e:
                 raise TranslatorError(
-                    ErrorCode.E04,
-                    detail=f"Security violation in XML: {e} (prohibited DTD or entity declaration)."
+                    ErrorCode.E04, detail=f"Security violation in XML: {e} (prohibited DTD or entity declaration)."
                 ) from e
 
         # Fallback inspection on docinfo
@@ -120,14 +115,14 @@ def check_xml_safety(tree: Union[etree._ElementTree, etree._Element]) -> None:
             if doctype_str:
                 raise TranslatorError(
                     ErrorCode.E04,
-                    detail=f"Security violation in XML: Prohibited DOCTYPE declaration detected ({doctype_str[:50]})."
+                    detail=f"Security violation in XML: Prohibited DOCTYPE declaration detected ({doctype_str[:50]}).",
                 )
 
 
 def parse_xml_safely(
-    source: Union[str, bytes],
+    source: str | bytes,
     recover_on_error: bool = False,
-) -> Tuple[etree._Element, bool]:
+) -> tuple[etree._Element, bool]:
     """
     Safely parses an XML string or bytes using the secure parser and verifies safety.
     If the XML is a fragment with undeclared namespace prefixes (e.g. <w:p> without xmlns:w),
@@ -169,11 +164,7 @@ def serialize_xml_safely(
     If was_wrapped is True, strips the temporary <_wrap> root container.
     """
     if was_wrapped and elem.tag == "_wrap":
-        # Extract inner XML of children
-        pieces = []
-        for child in elem:
-            pieces.append(etree.tostring(child, encoding="unicode"))
-        return "".join(pieces)
+        return "".join(etree.tostring(child, encoding="unicode") for child in elem)
 
     if xml_declaration:
         raw_bytes = etree.tostring(
@@ -191,8 +182,8 @@ def mutate_paragraph_text_nodes_lxml(
     p_content: str,
     tag_prefix: str,
     translated_text: str,
-    extra_nsmap: Optional[Dict[str, str]] = None,
-) -> Optional[str]:
+    extra_nsmap: dict[str, str] | None = None,
+) -> str | None:
     """
     Mutates text nodes within OOXML paragraph content using lxml DOM.
     Sets the translated text on the first <prefix:t> node with xml:space="preserve",
@@ -206,15 +197,13 @@ def mutate_paragraph_text_nodes_lxml(
     """
     active_nsmap = dict(OOXML_NAMESPACES)
     if extra_nsmap:
-        for pfx, uri in extra_nsmap.items():
-            if pfx and uri:
-                active_nsmap[pfx] = uri
+        active_nsmap.update({pfx: uri for pfx, uri in extra_nsmap.items() if pfx and uri})
 
     # Detect any undeclared prefixes in p_content to prevent parser failures on fragments
-    for pfx in set(re.findall(r'<([a-zA-Z0-9_\-]+):[a-zA-Z0-9_\-]+', p_content)):
+    for pfx in set(re.findall(r"<([a-zA-Z0-9_\-]+):[a-zA-Z0-9_\-]+", p_content)):
         if pfx not in active_nsmap:
             active_nsmap[pfx] = f"urn:schemas-fallback:{pfx}"
-    for pfx in set(re.findall(r'\s([a-zA-Z0-9_\-]+):[a-zA-Z0-9_\-]+=', p_content)):
+    for pfx in set(re.findall(r"\s([a-zA-Z0-9_\-]+):[a-zA-Z0-9_\-]+=", p_content)):
         if pfx not in active_nsmap:
             active_nsmap[pfx] = f"urn:schemas-fallback:{pfx}"
 
@@ -230,15 +219,9 @@ def mutate_paragraph_text_nodes_lxml(
     except TranslatorError:
         raise
     except etree.XMLSyntaxError as err:
-        raise TranslatorError(
-            ErrorCode.E04,
-            detail=f"Malformed XML in paragraph: {err}"
-        ) from err
+        raise TranslatorError(ErrorCode.E04, detail=f"Malformed XML in paragraph: {err}") from err
     except Exception as err:
-        raise TranslatorError(
-            ErrorCode.E04,
-            detail=f"Unexpected error parsing paragraph XML: {err}"
-        ) from err
+        raise TranslatorError(ErrorCode.E04, detail=f"Unexpected error parsing paragraph XML: {err}") from err
 
     # Locate all <tag_prefix:t> nodes
     t_nodes = root.xpath(f".//{tag_prefix}:t", namespaces=active_nsmap)
@@ -270,23 +253,18 @@ def mutate_paragraph_text_nodes_lxml(
     # (&quot; and &apos;) for strict conformance with downstream expectations
     def t_quote_repl(m):
         t_open = m.group(1)
-        t_body = m.group(2).replace('"', '&quot;').replace("'", '&apos;')
+        t_body = m.group(2).replace('"', "&quot;").replace("'", "&apos;")
         t_close = m.group(3)
         return t_open + t_body + t_close
 
-    inner = re.sub(
-        rf'(<{tag_prefix}:t\b[^>]*>)(.*?)(</{tag_prefix}:t>)',
-        t_quote_repl,
-        inner,
-        flags=re.DOTALL
-    )
+    inner = re.sub(rf"(<{tag_prefix}:t\b[^>]*>)(.*?)(</{tag_prefix}:t>)", t_quote_repl, inner, flags=re.DOTALL)
     return inner
 
 
 def mutate_complete_xml_part_dom(
     xml_str: str,
     tag_prefix: str,
-    paragraph_translator: Callable[[str, Dict[str, str]], Optional[str]],
+    paragraph_translator: Callable[[str, dict[str, str]], str | None],
 ) -> str:
     """
     Parses a complete OOXML XML part into an lxml ElementTree, selects paragraphs
@@ -297,9 +275,7 @@ def mutate_complete_xml_part_dom(
 
     active_nsmap = dict(OOXML_NAMESPACES)
     if hasattr(root, "nsmap"):
-        for k, v in root.nsmap.items():
-            if k and v:
-                active_nsmap[k] = v
+        active_nsmap.update({k: v for k, v in root.nsmap.items() if k and v})
 
     p_nodes = root.xpath(f".//{tag_prefix}:p", namespaces=active_nsmap)
     for p_elem in p_nodes:
@@ -325,7 +301,6 @@ def mutate_complete_xml_part_dom(
                 t.text = ""
 
     return serialize_xml_safely(root, was_wrapped=was_wrapped, xml_declaration=True)
-
 
 
 def create_inline_str_cell_dom(

@@ -1,24 +1,23 @@
+import json
 import os
 import sys
-import json
-import zipfile
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+import zipfile
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from engine.backend_nmt import (
-    normalize_nmt_placeholders,
     NMTBackend,
-    load_trusted_packages,
     compute_file_sha256,
+    load_trusted_packages,
+    normalize_nmt_placeholders,
     verify_package_archive,
 )
 
 
 class TestNMTBackend(unittest.TestCase):
-
     def test_placeholder_normalization(self):
         raw_1 = "Revenue increased by [ [ N0 ] ] % in Q3."
         norm_1 = normalize_nmt_placeholders(raw_1)
@@ -49,19 +48,13 @@ class TestTrustedPackagesManifest(unittest.TestCase):
         self.assertEqual(ja_en["from_code"], "ja")
         self.assertEqual(ja_en["to_code"], "en")
         self.assertEqual(ja_en["package_version"], "1.1")
-        self.assertEqual(
-            ja_en["sha256"],
-            "623e3477959a815eb0a5ef53e09079ae8f1f9d3bbcd230473baf28c03fb83335"
-        )
+        self.assertEqual(ja_en["sha256"], "623e3477959a815eb0a5ef53e09079ae8f1f9d3bbcd230473baf28c03fb83335")
 
         en_ja = manifest["en-ja"]
         self.assertEqual(en_ja["from_code"], "en")
         self.assertEqual(en_ja["to_code"], "ja")
         self.assertEqual(en_ja["package_version"], "1.1")
-        self.assertEqual(
-            en_ja["sha256"],
-            "16300cc4eaa85320520cabcf433b63d01be40ef6966251de72043a083408f716"
-        )
+        self.assertEqual(en_ja["sha256"], "16300cc4eaa85320520cabcf433b63d01be40ef6966251de72043a083408f716")
 
     def test_load_trusted_packages_fallback(self):
         # Non-existent file path should return built-in fallback dictionary
@@ -74,11 +67,7 @@ class TestTrustedPackagesManifest(unittest.TestCase):
             custom_path = os.path.join(td, "custom_trusted.json")
             custom_data = {
                 "_comment": "test",
-                "custom-pair": {
-                    "from_code": "es",
-                    "to_code": "en",
-                    "sha256": "abcdef123456"
-                }
+                "custom-pair": {"from_code": "es", "to_code": "en", "sha256": "abcdef123456"},
             }
             with open(custom_path, "w", encoding="utf-8") as f:
                 json.dump(custom_data, f)
@@ -110,6 +99,7 @@ class TestPackageArchiveVerification(unittest.TestCase):
             f.write(b"offline-doc-translator")
 
         import hashlib
+
         expected = hashlib.sha256(b"offline-doc-translator").hexdigest()
         self.assertEqual(compute_file_sha256(test_file), expected)
 
@@ -134,9 +124,7 @@ class TestPackageArchiveVerification(unittest.TestCase):
         path = self._create_valid_archive()
         logs = []
         is_valid, _ = verify_package_archive(
-            path,
-            expected_hash="1111111111111111111111111111111111111111111111111111111111111111",
-            log_cb=logs.append
+            path, expected_hash="1111111111111111111111111111111111111111111111111111111111111111", log_cb=logs.append
         )
         self.assertFalse(is_valid)
         self.assertTrue(any("mismatch" in m.lower() for m in logs))
@@ -171,16 +159,10 @@ class TestNMTBackendPackagePinning(unittest.TestCase):
     def test_get_expected_hash(self):
         backend = NMTBackend()
         ja_en_hash = backend.get_expected_hash("ja", "en")
-        self.assertEqual(
-            ja_en_hash,
-            "623e3477959a815eb0a5ef53e09079ae8f1f9d3bbcd230473baf28c03fb83335"
-        )
+        self.assertEqual(ja_en_hash, "623e3477959a815eb0a5ef53e09079ae8f1f9d3bbcd230473baf28c03fb83335")
 
         en_ja_hash = backend.get_expected_hash("en", "ja")
-        self.assertEqual(
-            en_ja_hash,
-            "16300cc4eaa85320520cabcf433b63d01be40ef6966251de72043a083408f716"
-        )
+        self.assertEqual(en_ja_hash, "16300cc4eaa85320520cabcf433b63d01be40ef6966251de72043a083408f716")
 
         # Unpinned pair returns None
         self.assertIsNone(backend.get_expected_hash("fr", "de"))
@@ -229,9 +211,11 @@ class TestNMTBackendPackagePinning(unittest.TestCase):
             mock_pkg.download.return_value = download_file
 
             logs = []
-            with patch("argostranslate.package.update_package_index"), \
-                 patch("argostranslate.package.get_available_packages", return_value=[mock_pkg]), \
-                 patch("argostranslate.package.install_from_path") as mock_install:
+            with (
+                patch("argostranslate.package.update_package_index"),
+                patch("argostranslate.package.get_available_packages", return_value=[mock_pkg]),
+                patch("argostranslate.package.install_from_path") as mock_install,
+            ):
                 success = backend.install_language_pair("ja", "en", log_cb=logs.append)
 
             self.assertFalse(success)
@@ -260,9 +244,11 @@ class TestNMTBackendPackagePinning(unittest.TestCase):
             mock_pkg.download.return_value = download_file
 
             logs = []
-            with patch("argostranslate.package.update_package_index"), \
-                 patch("argostranslate.package.get_available_packages", return_value=[mock_pkg]), \
-                 patch("argostranslate.package.install_from_path") as mock_install:
+            with (
+                patch("argostranslate.package.update_package_index"),
+                patch("argostranslate.package.get_available_packages", return_value=[mock_pkg]),
+                patch("argostranslate.package.install_from_path") as mock_install,
+            ):
                 success = backend.install_language_pair("ja", "en", log_cb=logs.append)
 
             self.assertTrue(success)

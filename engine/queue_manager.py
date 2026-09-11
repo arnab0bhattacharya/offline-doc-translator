@@ -1,14 +1,14 @@
-import os
+import queue
+import threading
 import time
 import uuid
-import threading
-import queue
-from enum import Enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Dict, List, Union, Any
+from enum import Enum
+from typing import Any
 
-from engine.core import TranslationMode
 from engine.cache import CachePolicy
+from engine.core import TranslationMode
 from engine.errors import ErrorCode, TranslatorError
 from engine.run_job import execute_translation
 
@@ -21,18 +21,18 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-def format_eta(eta_seconds: Optional[float]) -> str:
+def format_eta(eta_seconds: float | None) -> str:
     """Formats estimated time remaining in seconds into a human-readable string."""
     if eta_seconds is None or eta_seconds <= 0:
         return ""
-    remaining = int(round(eta_seconds))
+    remaining = round(eta_seconds)
     if remaining < 120:
         return f"~{remaining}s left"
     elif remaining < 3600:
-        return f"~{int(round(remaining / 60))}m left"
+        return f"~{round(remaining / 60)}m left"
     else:
         hrs = remaining // 3600
-        mins = int(round((remaining % 3600) / 60))
+        mins = round((remaining % 3600) / 60)
         if mins == 60:
             hrs += 1
             mins = 0
@@ -49,21 +49,21 @@ class TranslationJob:
     direction: str
     mode: TranslationMode
     model_name: str
-    glossary: Dict[str, str]
+    glossary: dict[str, str]
     status: JobStatus
     progress: float
     progress_message: str
-    error: Optional[TranslatorError] = None
-    error_message: Optional[str] = None
+    error: TranslatorError | None = None
+    error_message: str | None = None
     created_at: float = 0.0
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
+    started_at: float | None = None
+    completed_at: float | None = None
     review_log_path: str = ""
     include_source_text: bool = False
     cancel_event: threading.Event = field(default_factory=threading.Event)
     cache_policy: CachePolicy = CachePolicy.ENCRYPTED_PERSISTENT
-    result: Optional[Dict[str, Any]] = None
-    eta_seconds: Optional[float] = None
+    result: dict[str, Any] | None = None
+    eta_seconds: float | None = None
 
     @property
     def eta_str(self) -> str:
@@ -79,8 +79,8 @@ class TranslationJob:
 class TranslationQueue:
     def __init__(
         self,
-        on_job_update: Optional[Callable[[TranslationJob], None]] = None,
-        on_log: Optional[Callable[[str, str], None]] = None
+        on_job_update: Callable[[TranslationJob], None] | None = None,
+        on_log: Callable[[str, str], None] | None = None,
     ):
         """
         on_job_update called whenever a job's status/progress changes.
@@ -88,10 +88,10 @@ class TranslationQueue:
         """
         self.on_job_update = on_job_update
         self.on_log = on_log
-        self._jobs: List[TranslationJob] = []
+        self._jobs: list[TranslationJob] = []
         self._lock = threading.Lock()
         self._queue = queue.Queue()
-        
+
         self._shutdown_event = threading.Event()
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker_thread.start()
@@ -101,11 +101,11 @@ class TranslationQueue:
         input_path: str,
         output_path: str,
         direction: str,
-        mode: Union[TranslationMode, str],
+        mode: TranslationMode | str,
         model_name: str,
-        glossary: Dict[str, str],
+        glossary: dict[str, str],
         include_source_text: bool = False,
-        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
+        cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
     ) -> str:
         """Creates a TranslationJob and adds to queue. Returns job ID."""
         job_id = str(uuid.uuid4())
@@ -118,7 +118,7 @@ class TranslationQueue:
                 cache_policy_enum = CachePolicy.ENCRYPTED_PERSISTENT
         else:
             cache_policy_enum = cache_policy
-        
+
         job = TranslationJob(
             id=job_id,
             input_path=input_path,
@@ -140,13 +140,12 @@ class TranslationQueue:
             cache_policy=cache_policy_enum,
         )
 
-        
         with self._lock:
             self._jobs.append(job)
-        
+
         self._trigger_update(job)
         self._queue.put(job)
-        
+
         return job_id
 
     def cancel_job(self, job_id: str) -> bool:
@@ -167,12 +166,12 @@ class TranslationQueue:
                     return False
         return False
 
-    def get_all_jobs(self) -> List[TranslationJob]:
+    def get_all_jobs(self) -> list[TranslationJob]:
         """Returns all jobs (queued, running, completed, failed) in order."""
         with self._lock:
             return list(self._jobs)
 
-    def get_job(self, job_id: str) -> Optional[TranslationJob]:
+    def get_job(self, job_id: str) -> TranslationJob | None:
         """Get a specific job by ID."""
         with self._lock:
             for job in self._jobs:
@@ -184,7 +183,8 @@ class TranslationQueue:
         """Remove completed and failed jobs from the list."""
         with self._lock:
             self._jobs = [
-                job for job in self._jobs
+                job
+                for job in self._jobs
                 if job.status not in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
             ]
 
@@ -216,20 +216,20 @@ class TranslationQueue:
                 job = self._queue.get(timeout=0.5)
             except queue.Empty:
                 continue
-                
+
             if job is None:
                 # Sentinel received
                 break
-                
+
             if job.status == JobStatus.CANCELLED:
                 self._queue.task_done()
                 continue
-                
+
             job.status = JobStatus.RUNNING
             job.started_at = time.time()
             job.progress_message = "Starting..."
             self._trigger_update(job)
-            
+
             try:
                 self._process_job(job)
                 if job.cancel_event.is_set():
@@ -265,7 +265,7 @@ class TranslationQueue:
                     job.status = JobStatus.FAILED
                     job.error = None
                     job.error_message = str(e)
-                    job.progress_message = f"Failed: {str(e)}"
+                    job.progress_message = f"Failed: {e!s}"
             finally:
                 job.completed_at = time.time()
                 self._trigger_update(job)
@@ -304,4 +304,3 @@ class TranslationQueue:
         )
         job.result = stats
         return stats
-

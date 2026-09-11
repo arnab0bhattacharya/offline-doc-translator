@@ -5,27 +5,26 @@ Unit tests for centralized application cache storage, path derivation,
 accurate cache statistics, safe clearing, and legacy migration.
 """
 
-import os
 import json
+import os
 import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from engine.core import TranslationMode
-from engine.cache import CachePolicy, EncryptedFileCache, JSONFileCache
+from engine.cache import CachePolicy, EncryptedFileCache
 from engine.cache_locations import (
+    cleanup_legacy_cache_remnants,
+    clear_all_caches,
     get_cache_root_dir,
+    get_cache_stats,
     get_job_cache_path,
     is_owned_cache_file,
-    get_cache_stats,
-    clear_all_caches,
-    cleanup_legacy_cache_remnants,
 )
+from engine.core import TranslationMode
 
 
 class TestCacheLocations(unittest.TestCase):
-
     def setUp(self):
         self.temp_root = tempfile.mkdtemp(prefix="test_cache_loc_")
         self.doc_dir = os.path.join(self.temp_root, "docs")
@@ -140,15 +139,7 @@ class TestCacheLocations(unittest.TestCase):
         with patch.dict(os.environ, {"TRANSLATION_CACHE_DIR": self.cache_dir}):
             # Setup a legacy cache in the document directory
             legacy_file = os.path.join(self.doc_dir, ".translation_cache.json")
-            sample_data = {
-                "fast_nmt": {
-                    "ja2en": {
-                        "fp123": {
-                            "こんにちは": "Hello"
-                        }
-                    }
-                }
-            }
+            sample_data = {"fast_nmt": {"ja2en": {"fp123": {"こんにちは": "Hello"}}}}
             with open(legacy_file, "w", encoding="utf-8") as f:
                 json.dump(sample_data, f)
 
@@ -178,7 +169,8 @@ class TestCacheLocations(unittest.TestCase):
             # Old legacy file was deleted, and NO .bak or plaintext file remains in the document directory
             self.assertFalse(os.path.exists(legacy_file))
             remaining_doc_files = [
-                fn for fn in os.listdir(self.doc_dir)
+                fn
+                for fn in os.listdir(self.doc_dir)
                 if ".translation_cache" in fn or "translation_cache" in fn or ".bak" in fn
             ]
             self.assertEqual(remaining_doc_files, [])

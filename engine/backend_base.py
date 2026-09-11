@@ -5,7 +5,8 @@ Formal protocol definition for translation backends.
 Enables polymorphic dispatch across NMT, LLM, and future custom backends.
 """
 
-from typing import Protocol, Optional, Dict, Tuple, Callable, runtime_checkable
+from collections.abc import Callable
+from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -13,6 +14,7 @@ class TranslationBackend(Protocol):
     """
     Formal interface defining the contract that all translation backends must implement.
     """
+
     name: str
 
     def is_available(self) -> bool:
@@ -27,10 +29,10 @@ class TranslationBackend(Protocol):
         self,
         text: str,
         direction: str,
-        placeholder_map: Optional[Dict[str, str]] = None,
-        context: Optional[str] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-    ) -> Tuple[Optional[str], float]:
+        placeholder_map: dict[str, str] | None = None,
+        context: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
+    ) -> tuple[str | None, float]:
         """
         Translates a single text unit (optionally containing placeholders).
 

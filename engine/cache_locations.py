@@ -7,15 +7,14 @@ derives collision-resistant and privacy-preserving scope identifiers, and provid
 truthful cache metrics and clearing operations.
 """
 
-import os
-import sys
 import hashlib
 import logging
-from typing import Optional, Dict, Any, List, Union
+import os
+import sys
+from typing import Any
 
-from .core import TranslationMode
 from .cache import CachePolicy
-
+from .core import TranslationMode
 
 APP_FOLDER_NAME = "OfflineDocumentTranslator"
 CACHE_SUBDIR = "cache"
@@ -44,7 +43,7 @@ def get_cache_root_dir() -> str:
 
 def get_job_cache_path(
     output_path: str,
-    mode: Union[TranslationMode, str] = TranslationMode.FAST_NMT,
+    mode: TranslationMode | str = TranslationMode.FAST_NMT,
     cache_policy: CachePolicy = CachePolicy.ENCRYPTED_PERSISTENT,
 ) -> str:
     """
@@ -79,15 +78,10 @@ def is_owned_cache_file(filename: str) -> bool:
     valid_prefixes = ("cache_", ".translation_cache", "translation_cache")
     if not any(filename.startswith(p) for p in valid_prefixes):
         return False
-    return (
-        filename.endswith(".enc")
-        or filename.endswith(".json")
-        or ".bak" in filename
-        or filename.endswith(".tmp")
-    )
+    return filename.endswith(".enc") or filename.endswith(".json") or ".bak" in filename or filename.endswith(".tmp")
 
 
-def get_cache_stats() -> Dict[str, Any]:
+def get_cache_stats() -> dict[str, Any]:
     """
     Scans the application cache directory and returns truthful metrics:
     - cache_dir: directory path
@@ -100,7 +94,7 @@ def get_cache_stats() -> Dict[str, Any]:
     cache_dir = get_cache_root_dir()
     file_count = 0
     total_bytes = 0
-    owned_files: List[str] = []
+    owned_files: list[str] = []
 
     if os.path.exists(cache_dir):
         try:
@@ -125,7 +119,7 @@ def get_cache_stats() -> Dict[str, Any]:
     }
 
 
-def clear_all_caches() -> Dict[str, int]:
+def clear_all_caches() -> dict[str, int]:
     """
     Safely and atomically clears all application-owned cache files in the central directory.
     Never traverses or deletes files outside the application cache root.
@@ -174,14 +168,8 @@ def cleanup_legacy_cache_remnants(directory: str) -> int:
     deleted = 0
     try:
         for fname in os.listdir(directory):
-            if (
-                fname.startswith("translation_cache")
-                or fname.startswith(".translation_cache")
-            ) and (
-                fname.endswith(".json")
-                or fname.endswith(".enc")
-                or ".bak" in fname
-                or fname.endswith(".tmp")
+            if (fname.startswith("translation_cache") or fname.startswith(".translation_cache")) and (
+                fname.endswith(".json") or fname.endswith(".enc") or ".bak" in fname or fname.endswith(".tmp")
             ):
                 target = os.path.join(directory, fname)
                 try:
@@ -193,4 +181,3 @@ def cleanup_legacy_cache_remnants(directory: str) -> int:
     except OSError:
         pass
     return deleted
-

@@ -4,33 +4,37 @@ engine/run_job.py
 Shared translation job execution pipeline.
 Used by both CLI (main.py) and GUI (queue_manager.py).
 """
+
 import os
 import threading
-from typing import Dict, Optional, Callable, Any, Union
-from .core import TranslationEngine, TranslationMode
+from collections.abc import Callable
+from typing import Any
+
+from formats.registry import get_handler
+
 from .cache import CachePolicy
 from .cache_locations import get_job_cache_path
+from .core import TranslationEngine, TranslationMode
 from .errors import ErrorCode, TranslatorError
-from .preflight import run_preflight, run_nmt_preflight
 from .logging import TranslationLogger
-from formats.registry import get_handler
+from .preflight import run_nmt_preflight, run_preflight
 
 
 def execute_translation(
     input_path: str,
     output_path: str,
     direction: str,
-    mode: Union[TranslationMode, str],
+    mode: TranslationMode | str,
     model_name: str,
-    glossary: Dict[str, str],
-    progress_cb: Optional[Callable[[int, int, str], None]] = None,
-    log_cb: Optional[Callable[[str], None]] = None,
+    glossary: dict[str, str],
+    progress_cb: Callable[[int, int, str], None] | None = None,
+    log_cb: Callable[[str], None] | None = None,
     include_source_text: bool = False,
-    policy: Optional[Any] = None,
-    cancel_event: Optional[threading.Event] = None,
-    logger: Optional[TranslationLogger] = None,
-    cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
-) -> Dict[str, Any]:
+    policy: Any | None = None,
+    cancel_event: threading.Event | None = None,
+    logger: TranslationLogger | None = None,
+    cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
+) -> dict[str, Any]:
     """
     Runs the full translation pipeline: preflight -> engine -> handler -> translate.
     Returns stats dict: {"total", "translated", "reverted", "skipped"}.
@@ -49,7 +53,7 @@ def execute_translation(
     if cancel_event and cancel_event.is_set():
         raise TranslatorError(ErrorCode.E09, detail="Translation cancelled before execution.")
 
-    llm_available = (mode == TranslationMode.PURE_LLM)
+    llm_available = mode == TranslationMode.PURE_LLM
     review_log_path = f"{output_path}.needs_review.log"
 
     if logger is not None and log_cb is not None:
@@ -114,10 +118,7 @@ def execute_translation(
 
     # 4. Handler dispatch
     ext = os.path.splitext(input_path)[1].lower()
-    if policy is not None:
-        handler = get_handler(ext, engine, policy=policy)
-    else:
-        handler = get_handler(ext, engine)
+    handler = get_handler(ext, engine, policy=policy) if policy is not None else get_handler(ext, engine)
 
     # 5. Translate
     if effective_log_cb:
@@ -133,4 +134,3 @@ def execute_translation(
     )
 
     return stats
-

@@ -2,103 +2,104 @@
 engine package initialization.
 """
 
-from .errors import ErrorCode, TranslatorError, ERROR_MESSAGES
-from .preflight import (
-    check_ollama_status,
-    list_installed_models,
-    check_model_installed,
-    check_ram,
-    check_disk_space,
-    check_nmt_ready,
-    run_nmt_preflight,
-    run_preflight,
-)
+from .backend_base import TranslationBackend
+from .backend_llm import LLMBackend
 from .backend_nmt import (
     NMTBackend,
+    compute_file_sha256,
     load_trusted_packages,
     verify_package_archive,
-    compute_file_sha256,
 )
-from .backend_llm import LLMBackend
-from .backend_base import TranslationBackend
 from .cache import (
-    TranslationCache,
+    EncryptedFileCache,
     JSONFileCache,
     NullCache,
-    EncryptedFileCache,
-    derive_machine_key,
+    TranslationCache,
     derive_fernet_key,
+    derive_machine_key,
 )
-from .logging import TranslationLogger, TranslationLogEvent, get_logger
 from .core import (
-    DIRECTIONS,
     CACHE_TTL_DAYS,
+    DIRECTIONS,
+    TranslationEngine,
     TranslationMode,
+    TranslationResult,
     contains_japanese,
     contains_latin,
-    should_translate,
+    escape_xml,
+    hash_text,
+    mask_glossary_terms,
     mask_numbers,
-    verify_placeholders,
+    should_translate,
+    unescape_xml,
     unmask_numbers,
     unmask_protected_text,
-    escape_xml,
-    unescape_xml,
-    mask_glossary_terms,
-    hash_text,
-    TranslationEngine,
-    TranslationResult,
+    verify_placeholders,
+)
+from .errors import ERROR_MESSAGES, ErrorCode, TranslatorError
+from .logging import TranslationLogEvent, TranslationLogger, get_logger
+from .preflight import (
+    check_disk_space,
+    check_model_installed,
+    check_nmt_ready,
+    check_ollama_status,
+    check_ram,
+    list_installed_models,
+    run_nmt_preflight,
+    run_preflight,
 )
 
 
 def __getattr__(name: str):
     if name == "execute_translation":
         from .run_job import execute_translation
+
         return execute_translation
     raise AttributeError(f"module 'engine' has no attribute '{name}'")
 
+
 __all__ = [
-    "ErrorCode",
-    "TranslatorError",
+    "CACHE_TTL_DAYS",
+    "DIRECTIONS",
     "ERROR_MESSAGES",
-    "check_ollama_status",
-    "list_installed_models",
-    "check_model_installed",
-    "check_ram",
-    "check_disk_space",
-    "check_nmt_ready",
-    "run_nmt_preflight",
-    "run_preflight",
-    "NMTBackend",
-    "load_trusted_packages",
-    "verify_package_archive",
-    "compute_file_sha256",
+    "EncryptedFileCache",
+    "ErrorCode",
+    "JSONFileCache",
     "LLMBackend",
+    "NMTBackend",
+    "NullCache",
     "TranslationBackend",
     "TranslationCache",
-    "JSONFileCache",
-    "NullCache",
-    "EncryptedFileCache",
-    "derive_machine_key",
-    "derive_fernet_key",
-    "TranslationLogger",
+    "TranslationEngine",
     "TranslationLogEvent",
-    "get_logger",
-    "DIRECTIONS",
-    "CACHE_TTL_DAYS",
+    "TranslationLogger",
     "TranslationMode",
     "TranslationResult",
+    "TranslatorError",
+    "check_disk_space",
+    "check_model_installed",
+    "check_nmt_ready",
+    "check_ollama_status",
+    "check_ram",
+    "compute_file_sha256",
     "contains_japanese",
     "contains_latin",
-    "should_translate",
+    "derive_fernet_key",
+    "derive_machine_key",
+    "escape_xml",
+    "execute_translation",
+    "get_logger",
+    "hash_text",
+    "list_installed_models",
+    "load_trusted_packages",
+    "mask_glossary_terms",
     "mask_numbers",
-    "verify_placeholders",
+    "run_nmt_preflight",
+    "run_preflight",
+    "should_translate",
+    "unescape_xml",
     "unmask_numbers",
     "unmask_protected_text",
-    "escape_xml",
-    "unescape_xml",
-    "mask_glossary_terms",
-    "hash_text",
-    "TranslationEngine",
-    "execute_translation",
+    "verify_package_archive",
+    "verify_placeholders",
 ]
-

@@ -5,13 +5,12 @@ Ollama LLM backend supporting single-chunk translation and Macro-Batch Polishing
 with custom Glossary injection and automatic draft fallback.
 """
 
-import re
-import json
 import time
-import requests
-from typing import Dict, List, Tuple, Optional, Any, Callable
+from collections.abc import Callable
 
-from engine.core import verify_placeholders, clean_llm_response, build_prompts
+import requests
+
+from engine.core import build_prompts, clean_llm_response, verify_placeholders
 
 
 class LLMBackend:
@@ -19,13 +18,14 @@ class LLMBackend:
     Handles Ollama inference, single-prompt isomorphic retries,
     and multi-line Macro Polishing with Glossary enforcement.
     """
+
     name: str = "llm"
 
     def __init__(
         self,
         model_name: str = "gemma4:e2b-it-qat",
         ollama_url: str = "http://localhost:11434",
-        context_window: int = 2048
+        context_window: int = 2048,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -48,10 +48,10 @@ class LLMBackend:
         self,
         text: str,
         direction: str,
-        placeholder_map: Optional[Dict[str, str]] = None,
-        context: Optional[str] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-    ) -> Tuple[Optional[str], float]:
+        placeholder_map: dict[str, str] | None = None,
+        context: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
+    ) -> tuple[str | None, float]:
         """
         Unified TranslationBackend protocol method.
         Executes standard 2-attempt translation with isomorphic few-shot fallback.
@@ -67,11 +67,11 @@ class LLMBackend:
     def translate_single(
         self,
         masked_text: str,
-        number_map: Dict[str, str],
+        number_map: dict[str, str],
         direction: str,
-        context: Optional[str] = None,
-        log_cb: Optional[Callable[[str], None]] = None
-    ) -> Tuple[Optional[str], float]:
+        context: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
+    ) -> tuple[str | None, float]:
         """
         Executes standard 2-attempt translation with isomorphic few-shot fallback.
         Returns: (translated_masked_text, elapsed_seconds)

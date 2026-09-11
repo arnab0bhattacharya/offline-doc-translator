@@ -6,23 +6,24 @@ System diagnostics and AI engine status view.
 
 import os
 import threading
+from collections.abc import Callable
 from tkinter import messagebox
-from typing import Callable, List, Optional
+
 import customtkinter as ctk
 
 from engine.backend_nmt import NMTBackend
 from engine.cache_locations import (
-    get_cache_stats,
-    clear_all_caches,
     cleanup_legacy_cache_remnants,
+    clear_all_caches,
+    get_cache_stats,
 )
 from engine.preflight import (
-    check_ollama_status,
-    list_installed_models,
-    check_ram,
     check_disk_space,
+    check_ollama_status,
+    check_ram,
+    list_installed_models,
 )
-from gui.theme import THEME, GEMMA_PRESETS
+from gui.theme import THEME
 
 
 class SystemView(ctk.CTkFrame):
@@ -33,9 +34,9 @@ class SystemView(ctk.CTkFrame):
     def __init__(
         self,
         master,
-        nmt_backend: Optional[NMTBackend] = None,
-        on_ollama_status: Optional[Callable[[bool, List[str]], None]] = None,
-        on_argos_status: Optional[Callable[[bool, str], None]] = None,
+        nmt_backend: NMTBackend | None = None,
+        on_ollama_status: Callable[[bool, list[str]], None] | None = None,
+        on_argos_status: Callable[[bool, str], None] | None = None,
         **kwargs,
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -255,7 +256,7 @@ class SystemView(ctk.CTkFrame):
     def refresh_ollama_status(self) -> None:
         """Probes local Ollama instance and installed models."""
         alive = check_ollama_status()
-        models: List[str] = []
+        models: list[str] = []
         if alive:
             models = list_installed_models()
             self.sys_ollama_desc.configure(
@@ -333,6 +334,7 @@ class SystemView(ctk.CTkFrame):
 
         def worker():
             try:
+
                 def cb(msg):
                     self.after(0, self.sys_argos_msg.configure, {"text": msg, "text_color": THEME["primary"]})
 

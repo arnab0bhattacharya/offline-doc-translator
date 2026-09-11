@@ -7,21 +7,20 @@ Unit tests for installer scripts and package verification security.
 import os
 import sys
 import tempfile
-import zipfile
 import unittest
-from unittest.mock import patch, MagicMock
+import zipfile
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from installer.install_argos_packages import (
-    verify_package_archive,
-    install_pair,
     check_privileges,
+    install_pair,
+    verify_package_archive,
 )
 
 
 class TestInstallerSecurity(unittest.TestCase):
-
     def setUp(self):
         self.test_dir = tempfile.mkdtemp(prefix="test_installer_")
         self._orig_log_file = sys.modules["installer.install_argos_packages"].LOG_FILE
@@ -29,6 +28,7 @@ class TestInstallerSecurity(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         sys.modules["installer.install_argos_packages"].LOG_FILE = self._orig_log_file
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
@@ -47,7 +47,9 @@ class TestInstallerSecurity(unittest.TestCase):
         self.assertTrue(is_safe_match)
 
         # With mismatching expected_hash
-        is_safe_mismatch, _ = verify_package_archive(zip_path, expected_hash="0000000000000000000000000000000000000000000000000000000000000000")
+        is_safe_mismatch, _ = verify_package_archive(
+            zip_path, expected_hash="0000000000000000000000000000000000000000000000000000000000000000"
+        )
         self.assertFalse(is_safe_mismatch)
 
     def test_verify_package_archive_corrupt(self):

@@ -8,25 +8,23 @@ Unit tests for the modular TranslationCache subsystem:
 - TranslationEngine integration and pluggability
 """
 
-import os
 import json
-import time
+import os
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from engine.cache import (
-    TranslationCache,
+    CachePolicy,
+    EncryptedFileCache,
     JSONFileCache,
     NullCache,
-    EncryptedFileCache,
-    CachePolicy,
-    derive_machine_key,
+    TranslationCache,
     derive_fernet_key,
-    CACHE_TTL_DAYS,
-    HAS_CRYPTOGRAPHY,
+    derive_machine_key,
 )
-from engine.core import TranslationEngine, TranslationMode, TranslationResult
+from engine.core import TranslationEngine, TranslationMode
 
 
 class CustomMemoryCache(TranslationCache):
@@ -116,7 +114,7 @@ class TestJSONFileCache(unittest.TestCase):
             cache = JSONFileCache(cache_file=cache_file, ttl_days=10)
 
             now = time.time()
-            old_time = now - (15 * 86400)   # 15 days old (> 10 days)
+            old_time = now - (15 * 86400)  # 15 days old (> 10 days)
             fresh_time = now - (2 * 86400)  # 2 days old (< 10 days)
 
             cache.put("old_key", "ja2en", "fp1", "Old Translation", mode="fast_nmt")
@@ -166,10 +164,13 @@ class TestEngineCacheIntegration(unittest.TestCase):
     def test_engine_with_null_cache_bypasses_caching(self):
         class MockNMT:
             name = "nmt"
+
             def __init__(self):
                 self.calls = 0
+
             def is_ready(self, direction):
                 return True
+
             def translate(self, text, direction, **kwargs):
                 self.calls += 1
                 return f"[NMT {self.calls}: {text}]", 0.01
@@ -193,8 +194,10 @@ class TestEngineCacheIntegration(unittest.TestCase):
     def test_engine_with_custom_cache_implementation(self):
         class MockNMT:
             name = "nmt"
+
             def is_ready(self, direction):
                 return True
+
             def translate(self, text, direction, **kwargs):
                 return f"[CUSTOM_NMT: {text}]", 0.01
 
@@ -236,6 +239,7 @@ class TestKeyDerivation(unittest.TestCase):
 
     def test_derive_fernet_key_with_explicit_keys(self):
         from cryptography.fernet import Fernet
+
         # 1. Native 44-char urlsafe base64 Fernet key
         gen_key = Fernet.generate_key()
         derived = derive_fernet_key(gen_key)
@@ -296,6 +300,7 @@ class TestEncryptedFileCache(unittest.TestCase):
 
     def test_save_and_reload_with_explicit_key(self):
         from cryptography.fernet import Fernet
+
         key = Fernet.generate_key()
         with tempfile.TemporaryDirectory() as td:
             cache_file = os.path.join(td, "cache.enc")
@@ -321,6 +326,7 @@ class TestEncryptedFileCache(unittest.TestCase):
 
     def test_reload_with_wrong_key_fails_gracefully(self):
         from cryptography.fernet import Fernet
+
         key1 = Fernet.generate_key()
         key2 = Fernet.generate_key()
         with tempfile.TemporaryDirectory() as td:
@@ -352,13 +358,7 @@ class TestEncryptedFileCache(unittest.TestCase):
             # Write a plain JSON cache file
             plain_data = {
                 "_meta": {"last_prune": 0},
-                "fast_nmt": {
-                    "ja2en": {
-                        "fp_legacy": {
-                            "legacy_key": "Plain Legacy Translation"
-                        }
-                    }
-                }
+                "fast_nmt": {"ja2en": {"fp_legacy": {"legacy_key": "Plain Legacy Translation"}}},
             }
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(plain_data, f)
@@ -409,7 +409,7 @@ class TestEncryptedFileCache(unittest.TestCase):
                 cache.put("k", "ja2en", "fp", "Plain Fallback", mode="fast_nmt")
                 cache.save()
 
-                with open(cache_file, "r", encoding="utf-8") as f:
+                with open(cache_file, encoding="utf-8") as f:
                     content = json.load(f)
                 self.assertEqual(content["fast_nmt"]["ja2en"]["fp"]["k"], "Plain Fallback")
 
@@ -420,10 +420,13 @@ class TestEngineEncryptedCacheIntegration(unittest.TestCase):
     def test_engine_encrypted_cache_end_to_end(self):
         class MockNMT:
             name = "nmt"
+
             def __init__(self):
                 self.calls = 0
+
             def is_ready(self, direction):
                 return True
+
             def translate(self, text, direction, **kwargs):
                 self.calls += 1
                 return f"[NMT:{text}]", 0.01
@@ -490,13 +493,7 @@ class TestCachePolicyAndPrivacyDefaults(unittest.TestCase):
             # 1. Create a legacy plaintext JSON cache
             plain_data = {
                 "_meta": {"last_prune": 0},
-                "fast_nmt": {
-                    "ja2en": {
-                        "fp_legacy": {
-                            "legacy_hash": "Migrated Secret Text"
-                        }
-                    }
-                }
+                "fast_nmt": {"ja2en": {"fp_legacy": {"legacy_hash": "Migrated Secret Text"}}},
             }
             with open(legacy_json, "w", encoding="utf-8") as f:
                 json.dump(plain_data, f)
@@ -574,4 +571,3 @@ class TestCachePolicyAndPrivacyDefaults(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

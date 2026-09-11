@@ -5,8 +5,9 @@ Reusable widget for managing, browsing, and rendering staged translation documen
 """
 
 import os
+from collections.abc import Callable
 from tkinter import filedialog, messagebox
-from typing import List, Callable, Optional
+
 import customtkinter as ctk
 
 from formats.registry import SUPPORTED_EXTENSIONS
@@ -18,31 +19,33 @@ class StagedFileList(ctk.CTkFrame):
     Renders and manages the staged document list and batch selection dialogs.
     """
 
-    def __init__(
-        self,
-        master,
-        on_files_changed: Optional[Callable[[List[str]], None]] = None,
-        **kwargs
-    ):
+    def __init__(self, master, on_files_changed: Callable[[list[str]], None] | None = None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.on_files_changed = on_files_changed
-        self.selected_files: List[str] = []
+        self.selected_files: list[str] = []
 
         # ── Staged Header ──
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.header_frame.pack(fill="x", pady=(0, 6))
 
         self.count_label = ctk.CTkLabel(
-            self.header_frame, text="0 documents staged",
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["text_secondary"]
+            self.header_frame,
+            text="0 documents staged",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=THEME["text_secondary"],
         )
         self.count_label.pack(side="left")
 
         self.clear_btn = ctk.CTkButton(
-            self.header_frame, text="Clear All", width=70, height=22,
-            font=ctk.CTkFont(size=11), fg_color="transparent",
-            text_color=THEME["text_secondary"], hover_color=THEME["btn_secondary"],
-            command=self.clear
+            self.header_frame,
+            text="Clear All",
+            width=70,
+            height=22,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],
+            hover_color=THEME["btn_secondary"],
+            command=self.clear,
         )
         self.clear_btn.pack(side="right")
 
@@ -51,16 +54,19 @@ class StagedFileList(ctk.CTkFrame):
         self.list_frame.pack(fill="x")
 
         self.empty_label = ctk.CTkLabel(
-            self.list_frame, text="No documents selected yet.",
-            font=ctk.CTkFont(size=11, slant="italic"), text_color=THEME["text_secondary"], pady=12
+            self.list_frame,
+            text="No documents selected yet.",
+            font=ctk.CTkFont(size=11, slant="italic"),
+            text_color=THEME["text_secondary"],
+            pady=12,
         )
         self.empty_label.pack()
 
-    def get_files(self) -> List[str]:
+    def get_files(self) -> list[str]:
         """Returns a copy of staged file paths."""
         return list(self.selected_files)
 
-    def add_files(self, paths: List[str]) -> int:
+    def add_files(self, paths: list[str]) -> int:
         """Adds unique normalized file paths and updates the view."""
         added = 0
         for p in paths:
@@ -101,13 +107,13 @@ class StagedFileList(ctk.CTkFrame):
         if chosen:
             self.add_files(list(chosen))
 
-    def browse_folder(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def browse_folder(self, log_cb: Callable[[str], None] | None = None) -> None:
         """Opens folder dialog, scans for supported documents, and stages them."""
         folder = filedialog.askdirectory(title="Select Folder of Documents")
         if not folder:
             return
 
-        added_paths: List[str] = []
+        added_paths: list[str] = []
         for root_dir, _, files in os.walk(folder):
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
@@ -131,14 +137,15 @@ class StagedFileList(ctk.CTkFrame):
             widget.destroy()
 
         count = len(self.selected_files)
-        self.count_label.configure(
-            text=f"{count} document{'s' if count != 1 else ''} staged for translation"
-        )
+        self.count_label.configure(text=f"{count} document{'s' if count != 1 else ''} staged for translation")
 
         if count == 0:
             self.empty_label = ctk.CTkLabel(
-                self.list_frame, text="No documents selected yet.",
-                font=ctk.CTkFont(size=11, slant="italic"), text_color=THEME["text_secondary"], pady=12
+                self.list_frame,
+                text="No documents selected yet.",
+                font=ctk.CTkFont(size=11, slant="italic"),
+                text_color=THEME["text_secondary"],
+                pady=12,
             )
             self.empty_label.pack()
             return
@@ -152,8 +159,12 @@ class StagedFileList(ctk.CTkFrame):
 
             # Format badge
             ctk.CTkLabel(
-                chip, text=f" {ext} ", font=ctk.CTkFont(size=9, weight="bold"),
-                fg_color=bcolor, corner_radius=4, text_color="#FFFFFF"
+                chip,
+                text=f" {ext} ",
+                font=ctk.CTkFont(size=9, weight="bold"),
+                fg_color=bcolor,
+                corner_radius=4,
+                text_color="#FFFFFF",
             ).pack(side="left", padx=(8, 6), pady=6)
 
             # Name & size
@@ -165,14 +176,22 @@ class StagedFileList(ctk.CTkFrame):
                 sz_str = ""
 
             ctk.CTkLabel(
-                chip, text=f"{name}  ({sz_str})", font=ctk.CTkFont(size=11),
-                text_color=THEME["text_primary"], anchor="w"
+                chip,
+                text=f"{name}  ({sz_str})",
+                font=ctk.CTkFont(size=11),
+                text_color=THEME["text_primary"],
+                anchor="w",
             ).pack(side="left", fill="x", expand=True, padx=4)
 
             # Remove chip button
             ctk.CTkButton(
-                chip, text="✕", width=22, height=20, font=ctk.CTkFont(size=10),
-                fg_color="transparent", text_color=THEME["text_secondary"],
+                chip,
+                text="✕",
+                width=22,
+                height=20,
+                font=ctk.CTkFont(size=10),
+                fg_color="transparent",
+                text_color=THEME["text_secondary"],
                 hover_color=THEME["btn_secondary"],
-                command=lambda p=fpath: self.remove_file(p)
+                command=lambda p=fpath: self.remove_file(p),
             ).pack(side="right", padx=6)

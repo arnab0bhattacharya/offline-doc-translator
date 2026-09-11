@@ -14,12 +14,11 @@ from collections import namedtuple
 from unittest.mock import patch
 
 from engine.errors import ErrorCode, TranslatorError
-from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
+from engine.security_policy import DEFAULT_POLICY, DocumentSecurityPolicy
 from formats.base import BaseFormatHandler, ZipSecurityError
 
 
 class TestDiskAwareZipAdmission(unittest.TestCase):
-
     def setUp(self):
         self.test_dir = tempfile.mkdtemp(prefix="test_sec_policy_")
         self.extract_dir = os.path.join(self.test_dir, "extracted")

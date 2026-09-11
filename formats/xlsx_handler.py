@@ -13,30 +13,30 @@ import re
 import shutil
 import tempfile
 import threading
-from typing import Callable, Optional, Dict, Any, List, Tuple
+from collections.abc import Callable
+from typing import Any
 
-from formats.base import BaseFormatHandler, XML_TAG_ATTRS
-from formats.xml_utils import parse_xml_safely, create_inline_str_cell_dom
 from engine.core import (
-    escape_xml,
-    unescape_xml,
+    TranslationResult,
     hash_text,
     should_translate,
-    TranslationResult,
+    unescape_xml,
 )
 from engine.errors import ErrorCode, TranslatorError
+from formats.base import XML_TAG_ATTRS, BaseFormatHandler
+from formats.xml_utils import create_inline_str_cell_dom, parse_xml_safely
 
 
 class XLSXHandler(BaseFormatHandler):
     """Handles translation of Excel workbooks (.xlsx)."""
 
-    def _parse_shared_strings(self, shared_strings_path: str) -> List[str]:
+    def _parse_shared_strings(self, shared_strings_path: str) -> list[str]:
         """Loads all strings from xl/sharedStrings.xml into a 0-indexed list using lxml DOM."""
         if not os.path.exists(shared_strings_path):
             return []
 
         self.validate_xml_part_size(shared_strings_path)
-        with open(shared_strings_path, "r", encoding="utf-8") as f:
+        with open(shared_strings_path, encoding="utf-8") as f:
             xml_data = f.read()
 
         # Primary path: lxml secure DOM parsing (handles plain <t> and rich text <r><t>)
@@ -59,12 +59,7 @@ class XLSXHandler(BaseFormatHandler):
                 strings.append(unescape_xml("".join(t_pieces)))
             return strings
 
-    def _count_translatable_cells(
-        self,
-        sheets_dir: str,
-        shared_strings: List[str],
-        direction: str
-    ) -> int:
+    def _count_translatable_cells(self, sheets_dir: str, shared_strings: list[str], direction: str) -> int:
         """Fast pre-scan to calculate the exact total number of translatable text cells."""
         total_count = 0
         cell_pattern = re.compile(rf"<c(\b{XML_TAG_ATTRS}?)(?:>(.*?)</c>|/>)", re.DOTALL)
@@ -74,7 +69,7 @@ class XLSXHandler(BaseFormatHandler):
                 continue
             sheet_path = os.path.join(sheets_dir, filename)
             self.validate_xml_part_size(sheet_path)
-            with open(sheet_path, "r", encoding="utf-8") as f:
+            with open(sheet_path, encoding="utf-8") as f:
                 xml_data = f.read()
 
             for c_match in cell_pattern.finditer(xml_data):
@@ -106,14 +101,14 @@ class XLSXHandler(BaseFormatHandler):
         self,
         sheet_xml: str,
         sheet_name: str,
-        shared_strings: List[str],
+        shared_strings: list[str],
         direction: str,
-        review_log_path: Optional[str],
-        stats: Dict[str, int],
-        progress_state: Dict[str, Any],
-        progress_cb: Optional[Callable[[int, int, str], None]],
-        log_cb: Optional[Callable[[str], None]],
-        cancel_event: Optional[threading.Event] = None,
+        review_log_path: str | None,
+        stats: dict[str, int],
+        progress_state: dict[str, Any],
+        progress_cb: Callable[[int, int, str], None] | None,
+        log_cb: Callable[[str], None] | None,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         row_pattern = re.compile(rf"(<row\b{XML_TAG_ATTRS}>)(.*?)(</row>)", re.DOTALL)
         cell_pattern = re.compile(rf"<c(\b{XML_TAG_ATTRS}?)(?:>(.*?)</c>|/>)", re.DOTALL)
@@ -163,16 +158,18 @@ class XLSXHandler(BaseFormatHandler):
                 if is_text_cell and cell_text.strip():
                     row_texts.append(f"{cell_ref}: {cell_text.strip()}")
 
-                cells_data.append({
-                    "full_match": c_match.group(0),
-                    "start": c_match.start(),
-                    "end": c_match.end(),
-                    "ref": cell_ref,
-                    "type": cell_type,
-                    "style_attr": style_attr,
-                    "text": cell_text,
-                    "is_text": is_text_cell
-                })
+                cells_data.append(
+                    {
+                        "full_match": c_match.group(0),
+                        "start": c_match.start(),
+                        "end": c_match.end(),
+                        "ref": cell_ref,
+                        "type": cell_type,
+                        "style_attr": style_attr,
+                        "text": cell_text,
+                        "is_text": is_text_cell,
+                    }
+                )
 
             row_context_str = " | ".join(row_texts[:8]) if row_texts else None
 
@@ -184,7 +181,7 @@ class XLSXHandler(BaseFormatHandler):
                 if cancel_event and cancel_event.is_set():
                     raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
-                new_row_content += row_content[last_idx:cell["start"]]
+                new_row_content += row_content[last_idx : cell["start"]]
 
                 if cell["is_text"] and cell["text"].strip():
                     raw_text = cell["text"]
@@ -202,10 +199,14 @@ class XLSXHandler(BaseFormatHandler):
                             progress_cb(
                                 cur_idx,
                                 total_items,
-                                f"[{cur_idx}/{total_items}] {sheet_name}!{cell['ref']}: \"{raw_text[:20]}..\""
+                                f'[{cur_idx}/{total_items}] {sheet_name}!{cell["ref"]}: "{raw_text[:20]}.."',
                             )
 
-                        context = f"Sheet: {sheet_name} | Row context: {row_context_str}" if row_context_str else f"Sheet: {sheet_name}"
+                        context = (
+                            f"Sheet: {sheet_name} | Row context: {row_context_str}"
+                            if row_context_str
+                            else f"Sheet: {sheet_name}"
+                        )
                         chunk_id = f"{cell['ref']}_{hash_text(raw_text)[:6]}"
 
                         result = self.engine.translate_chunk(
@@ -215,7 +216,7 @@ class XLSXHandler(BaseFormatHandler):
                             location_id=f"{sheet_name}!{cell['ref']}",
                             chunk_id=chunk_id,
                             review_log_path=review_log_path,
-                            log_cb=log_cb
+                            log_cb=log_cb,
                         )
                         if isinstance(result, tuple):
                             result = TranslationResult(*result)
@@ -251,11 +252,11 @@ class XLSXHandler(BaseFormatHandler):
         input_path: str,
         output_path: str,
         direction: str,
-        review_log_path: Optional[str] = None,
-        progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-        cancel_event: Optional[threading.Event] = None,
-    ) -> Dict[str, Any]:
+        review_log_path: str | None = None,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        log_cb: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         self.validate_input_file(input_path)
         if cancel_event and cancel_event.is_set():
             raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
@@ -281,10 +282,7 @@ class XLSXHandler(BaseFormatHandler):
                 self.pack_zip(work_dir, output_path)
                 return stats
 
-            sheet_files = sorted([
-                f for f in os.listdir(sheets_dir)
-                if f.startswith("sheet") and f.endswith(".xml")
-            ])
+            sheet_files = sorted([f for f in os.listdir(sheets_dir) if f.startswith("sheet") and f.endswith(".xml")])
 
             if log_cb:
                 log_cb(f"[*] Scanning {len(sheet_files)} worksheet(s) for translatable cells...")
@@ -294,10 +292,7 @@ class XLSXHandler(BaseFormatHandler):
             if log_cb:
                 log_cb(f"[*] Found {total_translatable} cell(s) matching translation direction '{direction}'.")
 
-            progress_state = {
-                "current": 0,
-                "total": max(1, total_translatable)
-            }
+            progress_state = {"current": 0, "total": max(1, total_translatable)}
 
             # 2. Process worksheets with live cell updates
             for filename in sheet_files:
@@ -307,7 +302,7 @@ class XLSXHandler(BaseFormatHandler):
                 sheet_label = filename.replace(".xml", "")
 
                 self.validate_xml_part_size(sheet_path)
-                with open(sheet_path, "r", encoding="utf-8") as f:
+                with open(sheet_path, encoding="utf-8") as f:
                     xml_data = f.read()
 
                 # Security: check for XXE / prohibited entity or DTD declarations

@@ -5,11 +5,11 @@ Bridges UI events with the background TranslationQueue.
 """
 
 import os
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from collections.abc import Callable
 
-from engine.core import TranslationMode
 from engine.cache import CachePolicy
-from engine.queue_manager import TranslationQueue, TranslationJob
+from engine.core import TranslationMode
+from engine.queue_manager import TranslationJob, TranslationQueue
 
 
 class TranslationController:
@@ -19,8 +19,8 @@ class TranslationController:
 
     def __init__(
         self,
-        on_job_update: Optional[Callable[[TranslationJob], None]] = None,
-        on_log: Optional[Callable[[str, str], None]] = None,
+        on_job_update: Callable[[TranslationJob], None] | None = None,
+        on_log: Callable[[str, str], None] | None = None,
     ):
         self.on_job_update = on_job_update
         self.on_log = on_log
@@ -49,11 +49,11 @@ class TranslationController:
         input_path: str,
         output_path: str,
         direction: str,
-        mode: Union[TranslationMode, str],
+        mode: TranslationMode | str,
         model_name: str,
-        glossary: Dict[str, str],
+        glossary: dict[str, str],
         include_source_text: bool = False,
-        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
+        cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
     ) -> str:
         """Enqueues a single translation job."""
         return self.queue.add_job(
@@ -69,19 +69,19 @@ class TranslationController:
 
     def start_batch(
         self,
-        input_files: List[str],
+        input_files: list[str],
         direction: str,
-        mode: Union[TranslationMode, str],
+        mode: TranslationMode | str,
         model_name: str,
-        glossary: Dict[str, str],
+        glossary: dict[str, str],
         include_source_text: bool = False,
-        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
-    ) -> List[Tuple[str, str, str]]:
+        cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
+    ) -> list[tuple[str, str, str]]:
         """
         Calculates output paths and adds multiple documents to the queue.
         Returns list of (job_id, input_path, output_path).
         """
-        dispatched: List[Tuple[str, str, str]] = []
+        dispatched: list[tuple[str, str, str]] = []
         for input_path in input_files:
             if not os.path.exists(input_path):
                 continue
@@ -109,11 +109,11 @@ class TranslationController:
         """Removes completed and failed jobs from queue history."""
         self.queue.clear_completed()
 
-    def get_job(self, job_id: str) -> Optional[TranslationJob]:
+    def get_job(self, job_id: str) -> TranslationJob | None:
         """Returns a job by ID."""
         return self.queue.get_job(job_id)
 
-    def get_all_jobs(self) -> List[TranslationJob]:
+    def get_all_jobs(self) -> list[TranslationJob]:
         """Returns all jobs in order."""
         return self.queue.get_all_jobs()
 

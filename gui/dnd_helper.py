@@ -5,10 +5,9 @@ Windows ctypes and cross-platform drag-and-drop integration for CustomTkinter/Tk
 Enables receiving dropped files without external C extensions or binary wheels.
 """
 
-import os
-import sys
 import ctypes
-from typing import Callable, List, Optional
+import sys
+from collections.abc import Callable
 
 WM_DROPFILES = 0x0233
 GWLP_WNDPROC = -4
@@ -31,10 +30,10 @@ def is_point_in_widget(widget, screen_x: int, screen_y: int) -> bool:
 class WindowsDropHook:
     """Subclasses HWND window procedure to intercept WM_DROPFILES on Windows."""
 
-    def __init__(self, root_widget, on_drop_callback: Callable[[List[str], int, int], None]):
+    def __init__(self, root_widget, on_drop_callback: Callable[[list[str], int, int], None]):
         self.root_widget = root_widget
         self.on_drop_callback = on_drop_callback
-        self.hwnd: Optional[int] = None
+        self.hwnd: int | None = None
         self._orig_wndproc = None
         self._wndproc_cb = None
         self._is_hooked = False
@@ -97,7 +96,7 @@ class WindowsDropHook:
                     screen_x, screen_y = pt.x, pt.y
 
                     num_files = shell32.DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
-                    files: List[str] = []
+                    files: list[str] = []
                     for i in range(num_files):
                         length = shell32.DragQueryFileW(hdrop, i, None, 0)
                         buf = ctypes.create_unicode_buffer(length + 1)

@@ -6,24 +6,26 @@ Provides abstract TranslationCache interface, JSONFileCache with atomic writes a
 EncryptedFileCache for encrypted-at-rest persistence, and NullCache for ephemeral sessions.
 """
 
-from abc import ABC, abstractmethod
-import os
-import sys
-import json
-import time
-import uuid
 import base64
 import getpass
-import platform
+import json
 import logging
+import os
+import platform
+import sys
 import tempfile
+import time
+import uuid
+from abc import ABC, abstractmethod
+from collections.abc import Callable
 from enum import Enum
-from typing import Optional, Dict, Any, Callable, Union
+from typing import Any
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
     HAS_CRYPTOGRAPHY = True
 except ImportError:
     HAS_CRYPTOGRAPHY = False
@@ -38,12 +40,13 @@ CACHE_SALT_DEFAULT = b"offline-doc-translator-cache-salt-v1"
 
 class CachePolicy(str, Enum):
     """Explicit cache storage policy."""
+
     ENCRYPTED_PERSISTENT = "encrypted_persistent"
     MEMORY_ONLY = "memory_only"
     PLAINTEXT_PERSISTENT = "plaintext_persistent"
 
 
-def derive_machine_key(salt: Optional[bytes] = None) -> bytes:
+def derive_machine_key(salt: bytes | None = None) -> bytes:
     """
     Derives a deterministic, machine- and user-bound 32-byte urlsafe base64 Fernet key.
     Combines Windows MachineGuid (if on Windows), hardware node UUID, platform hostname,
@@ -56,6 +59,7 @@ def derive_machine_key(salt: Optional[bytes] = None) -> bytes:
     if sys.platform == "win32":
         try:
             import winreg
+
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as rk:
                 guid, _ = winreg.QueryValueEx(rk, "MachineGuid")
                 parts.append(str(guid))
@@ -83,8 +87,8 @@ def derive_machine_key(salt: Optional[bytes] = None) -> bytes:
 
 
 def derive_fernet_key(
-    key_material: Optional[Union[str, bytes]] = None,
-    salt: Optional[bytes] = None,
+    key_material: str | bytes | None = None,
+    salt: bytes | None = None,
 ) -> bytes:
     """
     Normalizes or derives a valid 32-byte urlsafe base64-encoded Fernet key.
@@ -129,7 +133,7 @@ class TranslationCache(ABC):
     """Abstract base class defining the contract for translation caches."""
 
     @abstractmethod
-    def get(self, key: str, direction: str, fingerprint: str, mode: str = "default") -> Optional[str]:
+    def get(self, key: str, direction: str, fingerprint: str, mode: str = "default") -> str | None:
         """Retrieves a cached translation by key, direction, configuration fingerprint, and mode."""
         pass
 
@@ -144,41 +148,36 @@ class TranslationCache(ABC):
         pass
 
     @abstractmethod
-    def save(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def save(self, log_cb: Callable[[str], None] | None = None) -> None:
         """Persists cache changes to storage if applicable."""
         pass
 
     @abstractmethod
-    def clear(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def clear(self, log_cb: Callable[[str], None] | None = None) -> None:
         """Wipes all cached entries."""
         pass
 
     @abstractmethod
-    def load(self, direction: Optional[str] = None) -> None:
+    def load(self, direction: str | None = None) -> None:
         """Loads cached entries from persistent storage."""
         pass
 
     @abstractmethod
     def record_access(
-        self,
-        key: str,
-        direction: str,
-        fingerprint: str,
-        mode: str = "default",
-        timestamp: Optional[float] = None
+        self, key: str, direction: str, fingerprint: str, mode: str = "default", timestamp: float | None = None
     ) -> None:
         """Records the last access time of an entry for TTL pruning."""
         pass
 
     @abstractmethod
-    def prune(self, now: Optional[float] = None) -> int:
+    def prune(self, now: float | None = None) -> int:
         """Removes expired entries according to TTL policy. Returns number of pruned entries."""
         pass
 
     @staticmethod
     def _cleanup_migrated_legacy_file(
         legacy_path: str,
-        log_cb: Optional[Callable[[str], None]] = None,
+        log_cb: Callable[[str], None] | None = None,
     ) -> None:
         """
         Safely deletes the migrated plaintext legacy cache file and any lingering
@@ -201,11 +200,10 @@ class TranslationCache(ABC):
             if os.path.exists(legacy_dir):
                 for fname in os.listdir(legacy_dir):
                     if (
-                        (fname.startswith(legacy_base + ".bak.") or
-                         fname.startswith(".translation_cache") or
-                         fname.startswith("translation_cache"))
-                        and ".bak" in fname
-                    ):
+                        fname.startswith(legacy_base + ".bak.")
+                        or fname.startswith(".translation_cache")
+                        or fname.startswith("translation_cache")
+                    ) and ".bak" in fname:
                         bak_path = os.path.join(legacy_dir, fname)
                         if os.path.isfile(bak_path):
                             try:
@@ -215,7 +213,6 @@ class TranslationCache(ABC):
                                 pass
         except Exception as e:
             logging.warning("Error cleaning lingering backup files in '%s': %s", legacy_path, e)
-
 
 
 class JSONFileCache(TranslationCache):
@@ -239,35 +236,35 @@ class JSONFileCache(TranslationCache):
         self,
         cache_file: str = "translation_cache.json",
         ttl_days: int = CACHE_TTL_DAYS,
-        legacy_candidates: Optional[List[str]] = None,
+        legacy_candidates: list[str] | None = None,
     ):
         self.cache_file = cache_file
         self.ttl_days = ttl_days
         self.legacy_candidates = list(legacy_candidates) if legacy_candidates else []
-        self._migrated_from_legacy: Optional[str] = None
-        self._data: Dict[str, Any] = {}
+        self._migrated_from_legacy: str | None = None
+        self._data: dict[str, Any] = {}
         self._loaded: bool = False
 
     @property
-    def data(self) -> Dict[str, Any]:
+    def data(self) -> dict[str, Any]:
         """Direct access to internal dict for backward compatibility."""
         return self._data
 
     @data.setter
-    def data(self, new_data: Dict[str, Any]) -> None:
+    def data(self, new_data: dict[str, Any]) -> None:
         self._data = new_data
         self._loaded = True
 
-    def load(self, direction: Optional[str] = None, legacy_candidates: Optional[List[str]] = None) -> None:
+    def load(self, direction: str | None = None, legacy_candidates: list[str] | None = None) -> None:
         """Loads cache file from disk, automatically triggering once-per-day TTL prune."""
         if os.path.exists(self.cache_file):
             try:
-                with open(self.cache_file, "r", encoding="utf-8") as f:
+                with open(self.cache_file, encoding="utf-8") as f:
                     self._data = json.load(f)
             except Exception:
                 self._data = {}
         else:
-            candidates: List[str] = []
+            candidates: list[str] = []
             if legacy_candidates:
                 candidates.extend(legacy_candidates)
             candidates.extend(self.legacy_candidates)
@@ -280,7 +277,7 @@ class JSONFileCache(TranslationCache):
                     and os.path.abspath(legacy_path) != os.path.abspath(self.cache_file)
                 ):
                     try:
-                        with open(legacy_path, "r", encoding="utf-8") as f:
+                        with open(legacy_path, encoding="utf-8") as f:
                             self._data = json.load(f)
                         self._migrated_from_legacy = legacy_path
                         migrated = True
@@ -301,13 +298,13 @@ class JSONFileCache(TranslationCache):
             if pruned > 0:
                 self.save()
 
-    def get_bucket(self, direction: str, fingerprint: str, mode: str = "default") -> Dict[str, str]:
+    def get_bucket(self, direction: str, fingerprint: str, mode: str = "default") -> dict[str, str]:
         """Returns the dictionary bucket corresponding to mode, direction, and fingerprint."""
         mode_cache = self._data.setdefault(mode, {})
         direction_cache = mode_cache.setdefault(direction, {})
         return direction_cache.setdefault(fingerprint, {})
 
-    def get(self, key: str, direction: str, fingerprint: str, mode: str = "default") -> Optional[str]:
+    def get(self, key: str, direction: str, fingerprint: str, mode: str = "default") -> str | None:
         bucket = self.get_bucket(direction, fingerprint, mode)
         return bucket.get(key)
 
@@ -327,18 +324,13 @@ class JSONFileCache(TranslationCache):
         return False
 
     def record_access(
-        self,
-        key: str,
-        direction: str,
-        fingerprint: str,
-        mode: str = "default",
-        timestamp: Optional[float] = None
+        self, key: str, direction: str, fingerprint: str, mode: str = "default", timestamp: float | None = None
     ) -> None:
         compound_key = f"{mode}|{direction}|{fingerprint}|{key}"
         timestamps = self._data.setdefault("_timestamps", {})
         timestamps[compound_key] = timestamp if timestamp is not None else time.time()
 
-    def prune(self, now: Optional[float] = None) -> int:
+    def prune(self, now: float | None = None) -> int:
         if now is None:
             now = time.time()
         cutoff = now - (self.ttl_days * 86400)
@@ -394,7 +386,7 @@ class JSONFileCache(TranslationCache):
 
         return pruned_count
 
-    def save(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def save(self, log_cb: Callable[[str], None] | None = None) -> None:
         cache_dir = os.path.dirname(os.path.abspath(self.cache_file))
         temp_file = None
         try:
@@ -407,12 +399,16 @@ class JSONFileCache(TranslationCache):
 
             # If this save was preceded by a legacy cache migration, delete the plaintext legacy file
             if self._migrated_from_legacy:
-                if os.path.exists(self._migrated_from_legacy) and os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
+                if os.path.exists(self._migrated_from_legacy) and os.path.abspath(
+                    self._migrated_from_legacy
+                ) != os.path.abspath(self.cache_file):
                     try:
                         if os.path.exists(self.cache_file) and os.path.getsize(self.cache_file) > 0:
                             self._cleanup_migrated_legacy_file(self._migrated_from_legacy, log_cb=log_cb)
                     except Exception as clean_err:
-                        logging.warning("Could not clean legacy cache file '%s': %s", self._migrated_from_legacy, clean_err)
+                        logging.warning(
+                            "Could not clean legacy cache file '%s': %s", self._migrated_from_legacy, clean_err
+                        )
                 self._migrated_from_legacy = None
         except Exception as e:
             if log_cb:
@@ -424,7 +420,7 @@ class JSONFileCache(TranslationCache):
                 except OSError:
                     pass
 
-    def clear(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def clear(self, log_cb: Callable[[str], None] | None = None) -> None:
         self._data = {}
         self.save(log_cb=log_cb)
 
@@ -432,7 +428,7 @@ class JSONFileCache(TranslationCache):
 class NullCache(TranslationCache):
     """No-op cache for privacy-sensitive environments or zero-persistence test runs."""
 
-    def get(self, key: str, direction: str, fingerprint: str, mode: str = "default") -> Optional[str]:
+    def get(self, key: str, direction: str, fingerprint: str, mode: str = "default") -> str | None:
         return None
 
     def put(self, key: str, direction: str, fingerprint: str, value: str, mode: str = "default") -> None:
@@ -441,29 +437,24 @@ class NullCache(TranslationCache):
     def delete(self, key: str, direction: str, fingerprint: str, mode: str = "default") -> bool:
         return False
 
-    def save(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def save(self, log_cb: Callable[[str], None] | None = None) -> None:
         pass
 
-    def clear(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def clear(self, log_cb: Callable[[str], None] | None = None) -> None:
         pass
 
-    def load(self, direction: Optional[str] = None) -> None:
+    def load(self, direction: str | None = None) -> None:
         pass
 
     def record_access(
-        self,
-        key: str,
-        direction: str,
-        fingerprint: str,
-        mode: str = "default",
-        timestamp: Optional[float] = None
+        self, key: str, direction: str, fingerprint: str, mode: str = "default", timestamp: float | None = None
     ) -> None:
         pass
 
-    def prune(self, now: Optional[float] = None) -> int:
+    def prune(self, now: float | None = None) -> int:
         return 0
 
-    def get_bucket(self, direction: str, fingerprint: str, mode: str = "default") -> Dict[str, str]:
+    def get_bucket(self, direction: str, fingerprint: str, mode: str = "default") -> dict[str, str]:
         return {}
 
 
@@ -478,17 +469,17 @@ class EncryptedFileCache(JSONFileCache):
     def __init__(
         self,
         cache_file: str = "translation_cache.enc",
-        key: Optional[Union[str, bytes]] = None,
+        key: str | bytes | None = None,
         ttl_days: int = CACHE_TTL_DAYS,
         fallback_to_plain: bool = False,
-        legacy_candidates: Optional[List[str]] = None,
+        legacy_candidates: list[str] | None = None,
     ):
         super().__init__(cache_file=cache_file, ttl_days=ttl_days, legacy_candidates=legacy_candidates)
         self.key = key
         self.fallback_to_plain = fallback_to_plain
-        self.fernet: Optional[Any] = None
+        self.fernet: Any | None = None
         self._crypto_available: bool = HAS_CRYPTOGRAPHY
-        self._migrated_from_legacy: Optional[str] = None
+        self._migrated_from_legacy: str | None = None
 
         if HAS_CRYPTOGRAPHY:
             try:
@@ -502,10 +493,14 @@ class EncryptedFileCache(JSONFileCache):
                 self.fernet = None
         else:
             if not fallback_to_plain:
-                raise RuntimeError("The 'cryptography' library is required for EncryptedFileCache but is not installed.")
-            logging.warning("[!] 'cryptography' library is not available; EncryptedFileCache operating in plaintext fallback mode.")
+                raise RuntimeError(
+                    "The 'cryptography' library is required for EncryptedFileCache but is not installed."
+                )
+            logging.warning(
+                "[!] 'cryptography' library is not available; EncryptedFileCache operating in plaintext fallback mode."
+            )
 
-    def load(self, direction: Optional[str] = None, legacy_candidates: Optional[List[str]] = None) -> None:
+    def load(self, direction: str | None = None, legacy_candidates: list[str] | None = None) -> None:
         """Loads and decrypts cache file from disk, automatically triggering once-per-day TTL prune."""
         if os.path.exists(self.cache_file):
             try:
@@ -538,7 +533,7 @@ class EncryptedFileCache(JSONFileCache):
                 self._data = {}
         else:
             # Check for legacy plaintext or document-adjacent cache files for migration
-            all_candidates: List[str] = []
+            all_candidates: list[str] = []
             if legacy_candidates:
                 all_candidates.extend(legacy_candidates)
             all_candidates.extend(self.legacy_candidates)
@@ -553,7 +548,7 @@ class EncryptedFileCache(JSONFileCache):
             all_candidates.append(os.path.join(cache_dir, "translation_cache.enc"))
 
             seen = set()
-            unique_candidates: List[str] = []
+            unique_candidates: list[str] = []
             for c in all_candidates:
                 if not c:
                     continue
@@ -583,7 +578,9 @@ class EncryptedFileCache(JSONFileCache):
                             continue
 
                         self._migrated_from_legacy = legacy_path
-                        logging.info("Discovered legacy cache '%s'; queued for migration to encrypted format.", legacy_path)
+                        logging.info(
+                            "Discovered legacy cache '%s'; queued for migration to encrypted format.", legacy_path
+                        )
                         migrated = True
                         break
                     except Exception as e:
@@ -604,7 +601,7 @@ class EncryptedFileCache(JSONFileCache):
             if pruned > 0:
                 self.save()
 
-    def save(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def save(self, log_cb: Callable[[str], None] | None = None) -> None:
         """Atomically persists encrypted cache payload to disk."""
         cache_dir = os.path.dirname(os.path.abspath(self.cache_file))
         temp_file = None
@@ -612,10 +609,7 @@ class EncryptedFileCache(JSONFileCache):
             os.makedirs(cache_dir, exist_ok=True)
             fd, temp_file = tempfile.mkstemp(prefix=".translation_cache_enc_", suffix=".tmp", dir=cache_dir)
             plaintext = json.dumps(self._data, ensure_ascii=False, indent=2).encode("utf-8")
-            if self.fernet is not None:
-                payload = self.fernet.encrypt(plaintext)
-            else:
-                payload = plaintext
+            payload = self.fernet.encrypt(plaintext) if self.fernet is not None else plaintext
 
             with os.fdopen(fd, "wb") as f:
                 f.write(payload)
@@ -624,12 +618,16 @@ class EncryptedFileCache(JSONFileCache):
 
             # If this save was preceded by a legacy cache migration, delete the plaintext legacy file
             if self._migrated_from_legacy:
-                if os.path.exists(self._migrated_from_legacy) and os.path.abspath(self._migrated_from_legacy) != os.path.abspath(self.cache_file):
+                if os.path.exists(self._migrated_from_legacy) and os.path.abspath(
+                    self._migrated_from_legacy
+                ) != os.path.abspath(self.cache_file):
                     try:
                         if os.path.exists(self.cache_file) and os.path.getsize(self.cache_file) > 0:
                             self._cleanup_migrated_legacy_file(self._migrated_from_legacy, log_cb=log_cb)
                     except Exception as clean_err:
-                        logging.warning("Could not clean legacy cache file '%s': %s", self._migrated_from_legacy, clean_err)
+                        logging.warning(
+                            "Could not clean legacy cache file '%s': %s", self._migrated_from_legacy, clean_err
+                        )
                 self._migrated_from_legacy = None
         except Exception as e:
             if log_cb:

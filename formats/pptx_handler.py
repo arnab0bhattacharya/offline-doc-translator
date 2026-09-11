@@ -12,18 +12,18 @@ import re
 import shutil
 import tempfile
 import threading
-from typing import Callable, Optional, Dict, Any, List
+from collections.abc import Callable
+from typing import Any
 
-from formats.base import BaseFormatHandler, XML_TAG_ATTRS
-from formats.xml_utils import parse_xml_safely
-from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
+from formats.base import XML_TAG_ATTRS, BaseFormatHandler
+from formats.xml_utils import parse_xml_safely
 
 
 class PPTXHandler(BaseFormatHandler):
     """Handles translation of PowerPoint presentations (.pptx)."""
 
-    def _extract_slide_title(self, xml_str: str) -> Optional[str]:
+    def _extract_slide_title(self, xml_str: str) -> str | None:
         """Heuristically extracts the first non-empty text paragraph (typically the title/heading)."""
         p_pattern = re.compile(rf"<a:p\b{XML_TAG_ATTRS}>(.*?)</a:p>", re.DOTALL)
         for p_match in p_pattern.finditer(xml_str):
@@ -44,7 +44,7 @@ class PPTXHandler(BaseFormatHandler):
                 continue
             slide_file = os.path.join(slides_path, f)
             self.validate_xml_part_size(slide_file)
-            with open(slide_file, "r", encoding="utf-8") as file:
+            with open(slide_file, encoding="utf-8") as file:
                 xml_str = file.read()
             total += self.count_translatable_paragraphs_in_xml(xml_str, tag_prefix="a", direction=direction)
         return total
@@ -54,18 +54,18 @@ class PPTXHandler(BaseFormatHandler):
         xml_str: str,
         slide_name: str,
         direction: str,
-        review_log_path: Optional[str],
-        stats: Dict[str, int],
-        slide_title: Optional[str],
-        progress_state: Dict[str, Any],
-        progress_cb: Optional[Callable[[int, int, str], None]],
-        log_cb: Optional[Callable[[str], None]],
-        cancel_event: Optional[threading.Event] = None,
-        extra_nsmap: Optional[Dict[str, str]] = None,
+        review_log_path: str | None,
+        stats: dict[str, int],
+        slide_title: str | None,
+        progress_state: dict[str, Any],
+        progress_cb: Callable[[int, int, str], None] | None,
+        log_cb: Callable[[str], None] | None,
+        cancel_event: threading.Event | None = None,
+        extra_nsmap: dict[str, str] | None = None,
     ) -> str:
         # 1. Protect <a:fld> blocks
         fld_pattern = re.compile(rf"<a:fld\b{XML_TAG_ATTRS}>.*?</a:fld>", re.DOTALL)
-        flds: Dict[str, str] = {}
+        flds: dict[str, str] = {}
 
         def fld_repl(m):
             key = f"__FLD_{len(flds)}__"
@@ -126,11 +126,11 @@ class PPTXHandler(BaseFormatHandler):
         input_path: str,
         output_path: str,
         direction: str,
-        review_log_path: Optional[str] = None,
-        progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-        cancel_event: Optional[threading.Event] = None,
-    ) -> Dict[str, Any]:
+        review_log_path: str | None = None,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        log_cb: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         self.validate_input_file(input_path)
         if cancel_event and cancel_event.is_set():
             raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
@@ -154,24 +154,21 @@ class PPTXHandler(BaseFormatHandler):
 
             slide_files = sorted(
                 [f for f in os.listdir(slides_path) if f.startswith("slide") and f.endswith(".xml")],
-                key=lambda x: int(re.search(r"\d+", x).group(0)) if re.search(r"\d+", x) else 0
+                key=lambda x: int(re.search(r"\d+", x).group(0)) if re.search(r"\d+", x) else 0,
             )
 
             total_translatable = self._count_translatable_paragraphs(slides_path, direction)
             if log_cb:
                 log_cb(f"[*] Found {total_translatable} translatable paragraph(s) across {len(slide_files)} slide(s).")
 
-            progress_state = {
-                "current": 0,
-                "total": max(1, total_translatable)
-            }
+            progress_state = {"current": 0, "total": max(1, total_translatable)}
 
             for idx, filename in enumerate(slide_files):
                 if cancel_event and cancel_event.is_set():
                     raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
                 file_path = os.path.join(slides_path, filename)
                 self.validate_xml_part_size(file_path)
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, encoding="utf-8") as f:
                     xml_data = f.read()
 
                 # Security: check for XXE / prohibited entity or DTD declarations and extract root nsmap

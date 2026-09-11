@@ -1,13 +1,10 @@
 import os
-import sys
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from gui.theme import (
-    parse_glossary_text,
-    format_glossary_text,
     MAX_GLOSSARY_ENTRIES,
-    MAX_TERM_LENGTH,
+    format_glossary_text,
+    parse_glossary_text,
 )
 from main import parse_cli_glossary
 
@@ -114,7 +111,6 @@ def test_documents_view_auto_load_and_persist(tmp_path, monkeypatch):
 
 
 def test_documents_view_load_glossary_file(tmp_path, monkeypatch):
-    import gui.views.documents_view as dv_mod
     from gui.views.documents_view import DocumentsView
 
     view = MagicMock(spec=DocumentsView)
@@ -138,8 +134,9 @@ def test_documents_view_load_glossary_file(tmp_path, monkeypatch):
 
 
 def test_documents_view_save_glossary_file(tmp_path, monkeypatch):
-    from gui.views.documents_view import DocumentsView
     from tkinter import filedialog
+
+    from gui.views.documents_view import DocumentsView
 
     view = MagicMock(spec=DocumentsView)
     view.glossary_text = MagicMock()
@@ -151,14 +148,14 @@ def test_documents_view_save_glossary_file(tmp_path, monkeypatch):
         DocumentsView._save_glossary_file(view)
 
     assert os.path.isfile(out_file)
-    with open(out_file, "r", encoding="utf-8") as f:
+    with open(out_file, encoding="utf-8") as f:
         assert "term1 -> trans1" in f.read()
     assert view.log.called
 
 
 def test_documents_view_drag_and_drop_routing():
-    from gui.views.documents_view import DocumentsView
     import gui.views.documents_view as dv_mod
+    from gui.views.documents_view import DocumentsView
 
     view = MagicMock(spec=DocumentsView)
     view.glossary_drawer = MagicMock()

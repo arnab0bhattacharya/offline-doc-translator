@@ -4,31 +4,29 @@ gui/theme.py
 Theme palette, language pairs, model presets, and shared GUI parsing utilities.
 """
 
-from typing import Dict
-
 # ── Color System (Dual Light/Dark Mode Tuples) ────────────────────
 THEME = {
-    "bg":            ("gray94", "#0F172A"),
-    "sidebar_bg":    ("gray90", "#0B1120"),
-    "card_bg":       ("white",  "#1E293B"),
-    "card_border":   ("gray80", "#334155"),
-    "staging_bg":    ("gray96", "#0F172A"),
-    "text_primary":  ("gray10", "#F8FAFC"),
-    "text_secondary":("gray45", "#94A3B8"),
-    "primary":       ("#2563EB", "#3B82F6"),
+    "bg": ("gray94", "#0F172A"),
+    "sidebar_bg": ("gray90", "#0B1120"),
+    "card_bg": ("white", "#1E293B"),
+    "card_border": ("gray80", "#334155"),
+    "staging_bg": ("gray96", "#0F172A"),
+    "text_primary": ("gray10", "#F8FAFC"),
+    "text_secondary": ("gray45", "#94A3B8"),
+    "primary": ("#2563EB", "#3B82F6"),
     "primary_hover": ("#1D4ED8", "#2563EB"),
-    "success":       ("#16A34A", "#22C55E"),
-    "warning":       ("#D97706", "#F59E0B"),
-    "error":         ("#DC2626", "#EF4444"),
+    "success": ("#16A34A", "#22C55E"),
+    "warning": ("#D97706", "#F59E0B"),
+    "error": ("#DC2626", "#EF4444"),
     "btn_secondary": ("gray85", "#334155"),
     "btn_sec_hover": ("gray75", "#475569"),
-    "log_bg":        ("gray96", "#090D16"),
-    "log_fg":        ("gray20", "#CBD5E1"),
+    "log_bg": ("gray96", "#090D16"),
+    "log_fg": ("gray20", "#CBD5E1"),
     # Badges
-    "badge_pptx":    "#EA580C",
-    "badge_xlsx":    "#16A34A",
-    "badge_docx":    "#2563EB",
-    "badge_pdf":     "#DC2626",
+    "badge_pptx": "#EA580C",
+    "badge_xlsx": "#16A34A",
+    "badge_docx": "#2563EB",
+    "badge_pdf": "#DC2626",
 }
 
 LANGUAGE_PAIRS = [
@@ -43,7 +41,7 @@ GEMMA_PRESETS = [
 ]
 
 import logging
-from typing import Dict, Optional, Callable
+from collections.abc import Callable
 
 logger = logging.getLogger("offline_translator.glossary")
 
@@ -53,8 +51,8 @@ MAX_TERM_LENGTH: int = 200
 
 def parse_glossary_text(
     text: str,
-    on_warning: Optional[Callable[[str], None]] = None,
-) -> Dict[str, str]:
+    on_warning: Callable[[str], None] | None = None,
+) -> dict[str, str]:
     """
     Parses key-value glossary lines supporting ->, :, or = delimiters.
     Enforces security & performance limits from Codex Finding 3:
@@ -62,7 +60,7 @@ def parse_glossary_text(
       - Max 200 characters per term (source or target)
       - Logs warning when limits are exceeded.
     """
-    glossary: Dict[str, str] = {}
+    glossary: dict[str, str] = {}
     skipped_length = 0
     limit_reached = False
 
@@ -107,7 +105,7 @@ def parse_glossary_text(
     return glossary
 
 
-def format_glossary_text(glossary: Dict[str, str]) -> str:
+def format_glossary_text(glossary: dict[str, str]) -> str:
     """Formats a dictionary back to standard glossary text representation."""
     lines = ["# Term -> Translation (one per line)"]
     for k, v in glossary.items():

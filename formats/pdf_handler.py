@@ -11,14 +11,14 @@ Executes a 3-phase pipeline with live block-by-block progress and telemetry:
 
 import os
 import re
-import shutil
 import tempfile
 import threading
-from typing import Callable, Optional, Dict, Any, List, Tuple
+from collections.abc import Callable
+from typing import Any
 
-from formats.base import BaseFormatHandler
-from engine.core import hash_text, should_translate, TranslationResult
+from engine.core import TranslationResult, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
+from formats.base import BaseFormatHandler
 
 HAS_CJK = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]")
 
@@ -26,7 +26,7 @@ HAS_CJK = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]")
 class PDFHandler(BaseFormatHandler):
     """Handles translation of digitally-born PDF documents."""
 
-    def _sample_background_color(self, page, rect) -> Tuple[float, float, float]:
+    def _sample_background_color(self, page, rect) -> tuple[float, float, float]:
         """
         Samples the corner pixel near the bounding box to match background color
         (e.g., white, light gray, shaded table row). Defaults to white on failure.
@@ -48,11 +48,11 @@ class PDFHandler(BaseFormatHandler):
         input_path: str,
         output_path: str,
         direction: str,
-        review_log_path: Optional[str] = None,
-        progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-        cancel_event: Optional[threading.Event] = None,
-    ) -> Dict[str, Any]:
+        review_log_path: str | None = None,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        log_cb: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         self.validate_input_file(input_path)
         if cancel_event and cancel_event.is_set():
             raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
@@ -64,8 +64,8 @@ class PDFHandler(BaseFormatHandler):
             raise TranslatorError(
                 ErrorCode.E04,
                 detail="PyMuPDF library is not installed. Run 'pip install PyMuPDF'.",
-                original_exc=e
-            )
+                original_exc=e,
+            ) from e
 
         try:
             if log_cb:
@@ -75,8 +75,8 @@ class PDFHandler(BaseFormatHandler):
             raise TranslatorError(
                 ErrorCode.E04,
                 detail=f"Could not open PDF file '{input_path}'. It may be encrypted or corrupted.",
-                original_exc=e
-            )
+                original_exc=e,
+            ) from e
 
         total_pages = len(doc)
         if total_pages == 0:
@@ -90,7 +90,7 @@ class PDFHandler(BaseFormatHandler):
                 detail=(
                     f"PDF '{os.path.basename(input_path)}' ({total_pages} pages) "
                     f"exceeds maximum page limit ({self.policy.max_pdf_pages} pages)."
-                )
+                ),
             )
 
         try:
@@ -110,10 +110,7 @@ class PDFHandler(BaseFormatHandler):
                     if clean_text and should_translate(clean_text, direction):
                         total_translatable += 1
 
-            has_selectable_text = any(
-                any(b[4].strip() for b in page_blocks)
-                for page_blocks in all_page_blocks
-            )
+            has_selectable_text = any(any(b[4].strip() for b in page_blocks) for page_blocks in all_page_blocks)
             if not has_selectable_text:
                 raise TranslatorError(
                     ErrorCode.E04,
@@ -122,16 +119,13 @@ class PDFHandler(BaseFormatHandler):
                         "To translate scanned PDFs, first run OCR using Adobe Acrobat's 'Recognize Text' feature, "
                         "or free tools like NAPS2 (naps2.com) or ocrmypdf (pip install ocrmypdf), "
                         "then re-open the OCR'd PDF here."
-                    )
+                    ),
                 )
 
             if log_cb:
                 log_cb(f"[*] Found {total_translatable} translatable block(s) across {total_pages} page(s).")
 
-            progress_state = {
-                "current": 0,
-                "total": max(1, total_translatable)
-            }
+            progress_state = {"current": 0, "total": max(1, total_translatable)}
 
             # 2. Process page by page
             for page_idx in range(total_pages):
@@ -174,7 +168,7 @@ class PDFHandler(BaseFormatHandler):
                         progress_cb(
                             cur_idx,
                             total_items,
-                            f"[{cur_idx}/{total_items}] Page {page_num} Block {block_no}: \"{clean_text[:20]}..\""
+                            f'[{cur_idx}/{total_items}] Page {page_num} Block {block_no}: "{clean_text[:20]}.."',
                         )
 
                     chunk_id = f"p{page_num}_b{block_no}_{hash_text(clean_text)[:6]}"
@@ -186,7 +180,7 @@ class PDFHandler(BaseFormatHandler):
                         location_id=f"Page {page_num} Block {block_no}",
                         chunk_id=chunk_id,
                         review_log_path=review_log_path,
-                        log_cb=log_cb
+                        log_cb=log_cb,
                     )
                     if isinstance(result, tuple):
                         result = TranslationResult(*result)
@@ -200,12 +194,14 @@ class PDFHandler(BaseFormatHandler):
 
                     if result.was_translated:
                         stats["translated"] += 1
-                        translated_blocks.append({
-                            "rect": fitz.Rect(x0, y0, x1, y1),
-                            "text": result.text,
-                            "original": clean_text,
-                            "block_no": block_no
-                        })
+                        translated_blocks.append(
+                            {
+                                "rect": fitz.Rect(x0, y0, x1, y1),
+                                "text": result.text,
+                                "original": clean_text,
+                                "block_no": block_no,
+                            }
+                        )
 
                 if cancel_event and cancel_event.is_set():
                     raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
@@ -216,12 +212,11 @@ class PDFHandler(BaseFormatHandler):
                     rect = item["rect"]
                     trans_text = item["text"]
 
-                    if direction == "en2ja" or HAS_CJK.search(trans_text):
-                        effective_font = "japan"
-                    else:
-                        effective_font = "helv"
+                    effective_font = "japan" if direction == "en2ja" or HAS_CJK.search(trans_text) else "helv"
 
-                    estimated_fontsize = max(8.0, min(14.0, (rect.height / max(1, len(trans_text.splitlines()))) * 0.85))
+                    estimated_fontsize = max(
+                        8.0, min(14.0, (rect.height / max(1, len(trans_text.splitlines()))) * 0.85)
+                    )
                     font_floor = max(6.0, estimated_fontsize * 0.70)
                     cur_size = estimated_fontsize
                     fitted = False
@@ -239,7 +234,7 @@ class PDFHandler(BaseFormatHandler):
                                 fontsize=cur_size,
                                 fontname=effective_font,
                                 color=(0, 0, 0),
-                                align=fitz.TEXT_ALIGN_LEFT
+                                align=fitz.TEXT_ALIGN_LEFT,
                             )
                             if rc >= 0:
                                 fitted = True
@@ -258,7 +253,7 @@ class PDFHandler(BaseFormatHandler):
                                 f"PDF Page {page_num}",
                                 f"Overflow_b{item['block_no']}",
                                 item["original"],
-                                hash_text(item["original"])
+                                hash_text(item["original"]),
                             )
                         continue
 
@@ -287,7 +282,7 @@ class PDFHandler(BaseFormatHandler):
                             fontsize=item["fitted_size"],
                             fontname=item["fontname"],
                             color=(0, 0, 0),
-                            align=fitz.TEXT_ALIGN_LEFT
+                            align=fitz.TEXT_ALIGN_LEFT,
                         )
 
                 self.engine.save_cache_atomically(log_cb=log_cb)

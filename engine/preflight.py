@@ -7,9 +7,10 @@ Detects Ollama connectivity, model availability, RAM, and disk constraints.
 
 import os
 import shutil
+
 import psutil
 import requests
-from typing import List, Tuple, Optional
+
 from .errors import ErrorCode, TranslatorError
 
 
@@ -22,7 +23,7 @@ def check_ollama_status(ollama_url: str = "http://localhost:11434") -> bool:
         return False
 
 
-def list_installed_models(ollama_url: str = "http://localhost:11434") -> List[str]:
+def list_installed_models(ollama_url: str = "http://localhost:11434") -> list[str]:
     """Retrieves all locally pulled models from Ollama."""
     try:
         res = requests.get(f"{ollama_url.rstrip('/')}/api/tags", timeout=3)
@@ -40,13 +41,10 @@ def check_model_installed(model_name: str, ollama_url: str = "http://localhost:1
     if not models:
         return False
     # Check exact match or base name match (e.g., 'gemma4:e2b-it-qat' or 'gemma4:e2b-it-qat:latest')
-    for m in models:
-        if m == model_name or m.startswith(f"{model_name}:") or model_name.startswith(f"{m}:"):
-            return True
-    return False
+    return any(m == model_name or m.startswith(f"{model_name}:") or model_name.startswith(f"{m}:") for m in models)
 
 
-def check_ram(min_free_mb: int = 150) -> Tuple[bool, float]:
+def check_ram(min_free_mb: int = 150) -> tuple[bool, float]:
     """Checks if available system RAM clears the minimum safe operating floor."""
     try:
         available_mb = psutil.virtual_memory().available / (1024 * 1024)
@@ -55,13 +53,13 @@ def check_ram(min_free_mb: int = 150) -> Tuple[bool, float]:
         return (True, 9999.0)
 
 
-def check_disk_space(path: str = ".", min_free_mb: int = 500) -> Tuple[bool, float]:
+def check_disk_space(path: str = ".", min_free_mb: int = 500) -> tuple[bool, float]:
     """Checks if free disk space on the given drive/path clears the minimum threshold."""
     try:
         target_dir = os.path.abspath(path)
         if not os.path.exists(target_dir):
             target_dir = os.path.dirname(target_dir) or "."
-        total, used, free = shutil.disk_usage(target_dir)
+        _total, _used, free = shutil.disk_usage(target_dir)
         free_mb = free / (1024 * 1024)
         return (free_mb >= min_free_mb, free_mb)
     except Exception:
@@ -72,6 +70,7 @@ def check_nmt_ready(direction: str) -> bool:
     """Checks that the Argos runtime and requested local language package are usable."""
     try:
         from .backend_nmt import NMTBackend
+
         return NMTBackend().is_ready(direction)
     except Exception:
         return False
@@ -80,18 +79,13 @@ def check_nmt_ready(direction: str) -> bool:
 def run_nmt_preflight(direction: str) -> None:
     """Raises a user-facing error when strict Fast NMT mode cannot run locally."""
     if not check_nmt_ready(direction):
-        raise TranslatorError(
-            ErrorCode.E08,
-            detail=f"No usable local Argos package was found for {direction}."
-        )
-
-
+        raise TranslatorError(ErrorCode.E08, detail=f"No usable local Argos package was found for {direction}.")
 
 
 def run_preflight(
     model_name: str,
-    input_path: Optional[str] = None,
-    output_path: Optional[str] = None,
+    input_path: str | None = None,
+    output_path: str | None = None,
     ollama_url: str = "http://localhost:11434",
     min_free_ram_mb: int = 150,
     min_free_disk_mb: int = 500,
@@ -110,8 +104,7 @@ def run_preflight(
         ext = os.path.splitext(input_path)[1].lower()
         if ext not in valid_exts:
             raise TranslatorError(
-                ErrorCode.E04,
-                detail=f"Unsupported format '{ext}'. Supported: {', '.join(sorted(valid_exts))}"
+                ErrorCode.E04, detail=f"Unsupported format '{ext}'. Supported: {', '.join(sorted(valid_exts))}"
             )
 
     if output_path is not None and os.path.exists(output_path):
@@ -122,15 +115,14 @@ def run_preflight(
             raise TranslatorError(
                 ErrorCode.E05,
                 detail=f"Output file '{output_path}' is locked by another program.",
-                original_exc=pe
-            )
+                original_exc=pe,
+            ) from pe
 
     # 2. Check RAM (E03)
     has_ram, ram_mb = check_ram(min_free_ram_mb)
     if not has_ram:
         raise TranslatorError(
-            ErrorCode.E03,
-            detail=f"Only {ram_mb:.0f} MB available (minimum safety floor is {min_free_ram_mb} MB)."
+            ErrorCode.E03, detail=f"Only {ram_mb:.0f} MB available (minimum safety floor is {min_free_ram_mb} MB)."
         )
 
     # 3. Check Disk Space (E07)
@@ -138,8 +130,7 @@ def run_preflight(
     has_disk, disk_mb = check_disk_space(target_check_dir, min_free_disk_mb)
     if not has_disk:
         raise TranslatorError(
-            ErrorCode.E07,
-            detail=f"Only {disk_mb:.0f} MB free disk space (minimum required is {min_free_disk_mb} MB)."
+            ErrorCode.E07, detail=f"Only {disk_mb:.0f} MB free disk space (minimum required is {min_free_disk_mb} MB)."
         )
 
     # 4. Check Ollama server availability (E01)
@@ -152,5 +143,5 @@ def run_preflight(
         available_str = ", ".join(available) if available else "None found"
         raise TranslatorError(
             ErrorCode.E02,
-            detail=f"Model '{model_name}' is not in local Ollama inventory. Available models: [{available_str}]"
+            detail=f"Model '{model_name}' is not in local Ollama inventory. Available models: [{available_str}]",
         )

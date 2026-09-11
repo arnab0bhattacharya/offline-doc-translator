@@ -5,36 +5,35 @@ Format handlers test suite using mock engines and synthetic archives.
 Validates round-trip archive extraction, XML parsing, replacement, and re-packing.
 """
 
-import unittest
 import os
+import shutil
 import sys
 import tempfile
+import unittest
 import zipfile
-import shutil
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from unittest.mock import patch
-from engine.core import TranslationEngine, hash_text, TranslationResult
+
+from engine.core import TranslationEngine, TranslationResult, hash_text
 from engine.errors import ErrorCode, TranslatorError
-from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
+from engine.security_policy import DocumentSecurityPolicy
 from formats.base import (
-    BaseFormatHandler,
-    MAX_EXTRACTED_BYTES,
     MAX_ARCHIVE_ENTRIES,
     MAX_SINGLE_ENTRY_BYTES,
+    BaseFormatHandler,
 )
-from formats.pptx_handler import PPTXHandler
-from formats.xlsx_handler import XLSXHandler
 from formats.docx_handler import DOCXHandler
 from formats.pdf_handler import PDFHandler
-from formats.registry import get_handler, SUPPORTED_EXTENSIONS
+from formats.pptx_handler import PPTXHandler
+from formats.registry import SUPPORTED_EXTENSIONS, get_handler
+from formats.xlsx_handler import XLSXHandler
 
 try:
     import fitz
 except ImportError:
     fitz = None
-
 
 
 class MockTranslationEngine(TranslationEngine):
@@ -43,7 +42,17 @@ class MockTranslationEngine(TranslationEngine):
     def __init__(self):
         super().__init__(model_name="mock_model")
 
-    def translate_chunk(self, text, direction, context=None, location_id="doc", chunk_id="0", review_log_path=None, log_cb=None, **kwargs):
+    def translate_chunk(
+        self,
+        text,
+        direction,
+        context=None,
+        location_id="doc",
+        chunk_id="0",
+        review_log_path=None,
+        log_cb=None,
+        **kwargs,
+    ):
         if log_cb:
             log_cb(f"Mock translating: {text[:20]}")
         if direction == "ja2en":
@@ -54,7 +63,6 @@ class MockTranslationEngine(TranslationEngine):
 
 
 class TestFormatHandlers(unittest.TestCase):
-
     def setUp(self):
         self.test_dir = tempfile.mkdtemp(prefix="test_handlers_")
         self.mock_engine = MockTranslationEngine()
@@ -70,17 +78,19 @@ class TestFormatHandlers(unittest.TestCase):
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
             'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
-            '<p:cSld><p:spTree>'
-            '<p:sp><p:txBody>'
-            '<a:p><a:r><a:t>これはプレゼンのタイトルです。</a:t></a:r></a:p>'
-            '<a:p><a:r><a:t>売上高は </a:t></a:r><a:r><a:t>15% 増加しました。</a:t></a:r></a:p>'
-            '</p:txBody></p:sp>'
-            '</p:spTree></p:cSld></p:sld>'
+            "<p:cSld><p:spTree>"
+            "<p:sp><p:txBody>"
+            "<a:p><a:r><a:t>これはプレゼンのタイトルです。</a:t></a:r></a:p>"
+            "<a:p><a:r><a:t>売上高は </a:t></a:r><a:r><a:t>15% 増加しました。</a:t></a:r></a:p>"
+            "</p:txBody></p:sp>"
+            "</p:spTree></p:cSld></p:sld>"
         )
 
         with zipfile.ZipFile(pptx_path, "w") as z:
             z.writestr("ppt/slides/slide1.xml", slide_xml)
-            z.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+            z.writestr(
+                "[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'
+            )
 
         handler = PPTXHandler(self.mock_engine)
         stats = handler.translate(pptx_path, out_pptx_path, "ja2en")
@@ -100,31 +110,33 @@ class TestFormatHandlers(unittest.TestCase):
         shared_strings_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">'
-            '<si><t>営業収益</t></si>'
-            '<si><t>純利益</t></si>'
-            '</sst>'
+            "<si><t>営業収益</t></si>"
+            "<si><t>純利益</t></si>"
+            "</sst>"
         )
 
         sheet1_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-            '<sheetData>'
+            "<sheetData>"
             '<row r="1">'
             '<c r="A1" t="s"><v>0</v></c>'
             '<c r="B1"><v>5000</v></c>'
-            '</row>'
+            "</row>"
             '<row r="2">'
             '<c r="A2" t="s"><v>1</v></c>'
             '<c r="B2"><f>SUM(B1:B10)</f><v>5000</v></c>'
-            '</row>'
-            '</sheetData>'
-            '</worksheet>'
+            "</row>"
+            "</sheetData>"
+            "</worksheet>"
         )
 
         with zipfile.ZipFile(xlsx_path, "w") as z:
             z.writestr("xl/sharedStrings.xml", shared_strings_xml)
             z.writestr("xl/worksheets/sheet1.xml", sheet1_xml)
-            z.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+            z.writestr(
+                "[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'
+            )
 
         handler = XLSXHandler(self.mock_engine)
         stats = handler.translate(xlsx_path, out_xlsx_path, "ja2en")
@@ -135,9 +147,9 @@ class TestFormatHandlers(unittest.TestCase):
         with zipfile.ZipFile(out_xlsx_path, "r") as z:
             trans_xml = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
             self.assertIn('t="inlineStr"', trans_xml)
-            self.assertIn('[EN: 営業収益]', trans_xml)
-            self.assertIn('[EN: 純利益]', trans_xml)
-            self.assertIn('<f>SUM(B1:B10)</f>', trans_xml)
+            self.assertIn("[EN: 営業収益]", trans_xml)
+            self.assertIn("[EN: 純利益]", trans_xml)
+            self.assertIn("<f>SUM(B1:B10)</f>", trans_xml)
             self.assertIn('<c r="B1"><v>5000</v></c>', trans_xml)
 
     def test_docx_handler(self):
@@ -147,24 +159,26 @@ class TestFormatHandlers(unittest.TestCase):
         document_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            '<w:body>'
-            '<w:p><w:r><w:t>第1章：事業の概況について</w:t></w:r></w:p>'
-            '<w:p><w:r><w:t>当四半期は </w:t></w:r><w:r><w:t>堅調に推移しました。</w:t></w:r></w:p>'
-            '</w:body>'
-            '</w:document>'
+            "<w:body>"
+            "<w:p><w:r><w:t>第1章：事業の概況について</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>当四半期は </w:t></w:r><w:r><w:t>堅調に推移しました。</w:t></w:r></w:p>"
+            "</w:body>"
+            "</w:document>"
         )
 
         header_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            '<w:p><w:r><w:t>社外秘 &amp; 2024年度報告書</w:t></w:r></w:p>'
-            '</w:hdr>'
+            "<w:p><w:r><w:t>社外秘 &amp; 2024年度報告書</w:t></w:r></w:p>"
+            "</w:hdr>"
         )
 
         with zipfile.ZipFile(docx_path, "w") as z:
             z.writestr("word/document.xml", document_xml)
             z.writestr("word/header1.xml", header_xml)
-            z.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+            z.writestr(
+                "[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'
+            )
 
         handler = DOCXHandler(self.mock_engine)
         stats = handler.translate(docx_path, out_docx_path, "ja2en")
@@ -182,7 +196,6 @@ class TestFormatHandlers(unittest.TestCase):
 
 
 class TestFormatRegistry(unittest.TestCase):
-
     def test_get_handler_valid(self):
         engine = MockTranslationEngine()
         self.assertIsInstance(get_handler(".pptx", engine), PPTXHandler)
@@ -193,7 +206,8 @@ class TestFormatRegistry(unittest.TestCase):
 
     def test_get_handler_unsupported(self):
         engine = MockTranslationEngine()
-        from engine.errors import TranslatorError, ErrorCode
+        from engine.errors import ErrorCode, TranslatorError
+
         with self.assertRaises(TranslatorError) as ctx:
             get_handler(".txt", engine)
         self.assertEqual(ctx.exception.code, ErrorCode.E04)
@@ -203,7 +217,6 @@ class TestFormatRegistry(unittest.TestCase):
 
 
 class TestZipExtractionSecurity(unittest.TestCase):
-
     def setUp(self):
         self.test_dir = tempfile.mkdtemp(prefix="test_zip_sec_")
         self.dummy_zip = os.path.join(self.test_dir, "test.zip")
@@ -263,7 +276,6 @@ class TestZipExtractionSecurity(unittest.TestCase):
 
 @unittest.skipIf(fitz is None, "PyMuPDF (fitz) is not installed")
 class TestPDFHandler(unittest.TestCase):
-
     def setUp(self):
         self.test_dir = tempfile.mkdtemp(prefix="test_pdf_handler_")
         self.mock_engine = MockTranslationEngine()
@@ -386,7 +398,7 @@ class TestPDFHandler(unittest.TestCase):
             self.assertEqual(stats["translated"], 0)
             self.assertTrue(os.path.exists(output_path))
             self.assertTrue(os.path.exists(review_log))
-            with open(review_log, "r", encoding="utf-8") as f:
+            with open(review_log, encoding="utf-8") as f:
                 log_content = f.read()
                 self.assertIn("Overflow_b", log_content)
 
@@ -397,9 +409,15 @@ class TestPDFHandler(unittest.TestCase):
     def test_pdf_batch_redaction_single_call_per_page(self):
         doc = fitz.open()
         page = doc.new_page(width=600, height=600)
-        page.insert_textbox(fitz.Rect(50, 50, 450, 100), "ブロック一の日本語テキストです。", fontsize=14, fontname="japan")
-        page.insert_textbox(fitz.Rect(50, 150, 450, 200), "ブロック二の日本語テキストです。", fontsize=14, fontname="japan")
-        page.insert_textbox(fitz.Rect(50, 250, 450, 300), "ブロック三の日本語テキストです。", fontsize=14, fontname="japan")
+        page.insert_textbox(
+            fitz.Rect(50, 50, 450, 100), "ブロック一の日本語テキストです。", fontsize=14, fontname="japan"
+        )
+        page.insert_textbox(
+            fitz.Rect(50, 150, 450, 200), "ブロック二の日本語テキストです。", fontsize=14, fontname="japan"
+        )
+        page.insert_textbox(
+            fitz.Rect(50, 250, 450, 300), "ブロック三の日本語テキストです。", fontsize=14, fontname="japan"
+        )
         input_path = os.path.join(self.test_dir, "multi_block.pdf")
         doc.save(input_path)
         doc.close()
@@ -487,7 +505,9 @@ class TestPDFHandler(unittest.TestCase):
     def test_pdf_mixed_script_ja2en_font_fallback(self):
         doc = fitz.open()
         page = doc.new_page(width=600, height=300)
-        page.insert_textbox(fitz.Rect(50, 50, 450, 120), "元の会社名と住所の日本語テキストです。", fontsize=14, fontname="japan")
+        page.insert_textbox(
+            fitz.Rect(50, 50, 450, 120), "元の会社名と住所の日本語テキストです。", fontsize=14, fontname="japan"
+        )
         input_path = os.path.join(self.test_dir, "mixed_input.pdf")
         doc.save(input_path)
         doc.close()
@@ -525,7 +545,9 @@ class TestPDFHandler(unittest.TestCase):
     def test_pdf_pure_english_ja2en_uses_helv(self):
         doc = fitz.open()
         page = doc.new_page(width=600, height=300)
-        page.insert_textbox(fitz.Rect(50, 50, 450, 120), "元の会社名と住所の日本語テキストです。", fontsize=14, fontname="japan")
+        page.insert_textbox(
+            fitz.Rect(50, 50, 450, 120), "元の会社名と住所の日本語テキストです。", fontsize=14, fontname="japan"
+        )
         input_path = os.path.join(self.test_dir, "english_input.pdf")
         doc.save(input_path)
         doc.close()
@@ -601,7 +623,7 @@ class TestPDFHandler(unittest.TestCase):
 
         self.assertIsNotNone(new_p)
         self.assertIn('<w:t xml:space="preserve">[EN: パート1 &amp; パート2]</w:t>', new_p)
-        self.assertIn('<w:t></w:t>', new_p)
+        self.assertIn("<w:t></w:t>", new_p)
         self.assertEqual(stats["translated"], 1)
         self.assertEqual(recent, ["[EN: パート1 & パート2]"])
 
@@ -714,10 +736,13 @@ class TestDocumentSecurityPolicy(unittest.TestCase):
 
     def test_docx_cancellation(self):
         import threading
+
         docx_path = os.path.join(self.test_dir, "cancel_sample.docx")
         out_docx_path = os.path.join(self.test_dir, "cancel_translated.docx")
         with zipfile.ZipFile(docx_path, "w") as docx:
-            docx.writestr("word/document.xml", "<w:document><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body></w:document>")
+            docx.writestr(
+                "word/document.xml", "<w:document><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body></w:document>"
+            )
 
         handler = DOCXHandler(self.mock_engine)
         evt = threading.Event()
@@ -729,6 +754,7 @@ class TestDocumentSecurityPolicy(unittest.TestCase):
 
     def test_text_nodes_cancellation(self):
         import threading
+
         handler = DOCXHandler(self.mock_engine)
         evt = threading.Event()
         evt.set()
@@ -754,7 +780,9 @@ class TestDocumentSecurityPolicy(unittest.TestCase):
     def test_registry_type_hints_evaluable(self):
         """Ensures formats.registry type annotations resolve at runtime without NameError."""
         import typing
+
         import formats.registry as reg
+
         hints_func = typing.get_type_hints(reg.get_handler)
         self.assertEqual(hints_func["return"], BaseFormatHandler)
         self.assertEqual(hints_func["policy"], typing.Optional[DocumentSecurityPolicy])
@@ -766,5 +794,3 @@ class TestDocumentSecurityPolicy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

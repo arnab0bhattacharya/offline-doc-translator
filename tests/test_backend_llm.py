@@ -1,7 +1,7 @@
-import unittest
-from unittest.mock import patch, MagicMock
 import os
 import sys
+import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -10,7 +10,6 @@ from engine.core import mask_numbers, unmask_numbers
 
 
 class TestLLMBackend(unittest.TestCase):
-
     def setUp(self):
         self.backend = LLMBackend(model_name="mock_model")
 
@@ -22,11 +21,7 @@ class TestLLMBackend(unittest.TestCase):
 
     def test_custom_url_and_context(self):
         """Verify custom ollama_url and context_window are stored."""
-        backend = LLMBackend(
-            model_name="test_model",
-            ollama_url="http://192.168.1.10:11434",
-            context_window=4096
-        )
+        backend = LLMBackend(model_name="test_model", ollama_url="http://192.168.1.10:11434", context_window=4096)
         self.assertEqual(backend.ollama_url, "http://192.168.1.10:11434")
         self.assertEqual(backend.context_window, 4096)
 
@@ -90,4 +85,3 @@ class TestLLMBackend(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -7,18 +7,19 @@ and backward compatibility.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
-from typing import Optional, Dict, Tuple, Callable
+from collections.abc import Callable
+from unittest.mock import patch
 
 from engine.backend_base import TranslationBackend
-from engine.backend_nmt import NMTBackend
 from engine.backend_llm import LLMBackend
+from engine.backend_nmt import NMTBackend
 from engine.core import TranslationEngine, TranslationMode, TranslationResult
-from engine.errors import TranslatorError, ErrorCode
+from engine.errors import ErrorCode, TranslatorError
 
 
 class MockCustomBackend:
     """A valid implementation of TranslationBackend."""
+
     name: str = "custom_mock"
 
     def __init__(self, ready: bool = True):
@@ -35,10 +36,10 @@ class MockCustomBackend:
         self,
         text: str,
         direction: str,
-        placeholder_map: Optional[Dict[str, str]] = None,
-        context: Optional[str] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-    ) -> Tuple[Optional[str], float]:
+        placeholder_map: dict[str, str] | None = None,
+        context: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
+    ) -> tuple[str | None, float]:
         self.call_history.append((text, direction, placeholder_map, context))
         if log_cb:
             log_cb(f"MockCustomBackend translated: {text}")
@@ -47,6 +48,7 @@ class MockCustomBackend:
 
 class IncompleteBackend:
     """Missing translate method - must not satisfy TranslationBackend."""
+
     name: str = "incomplete"
 
     def is_available(self) -> bool:
@@ -93,11 +95,7 @@ class TestTranslationBackendProtocol(unittest.TestCase):
         backend = NMTBackend()
         logs = []
         with patch.object(backend, "translate_single", side_effect=RuntimeError("Engine failure")):
-            res, elapsed = backend.translate(
-                "Failed text",
-                "ja2en",
-                log_cb=logs.append
-            )
+            res, elapsed = backend.translate("Failed text", "ja2en", log_cb=logs.append)
             self.assertIsNone(res)
             self.assertGreaterEqual(elapsed, 0.0)
             self.assertTrue(any("NMT backend error" in log for log in logs))
@@ -167,6 +165,7 @@ class TestEnginePolymorphicDispatch(unittest.TestCase):
     def test_translate_chunk_unready_nmt_raises_error(self):
         class UnreadyBackend(MockCustomBackend):
             name = "nmt"
+
             def is_ready(self, direction: str) -> bool:
                 return False
 
@@ -178,6 +177,7 @@ class TestEnginePolymorphicDispatch(unittest.TestCase):
     def test_translate_chunk_backend_exception_triggers_graceful_revert(self):
         class ExplodingBackend(MockCustomBackend):
             name = "exploding"
+
             def translate(self, *args, **kwargs):
                 raise RuntimeError("Boom!")
 

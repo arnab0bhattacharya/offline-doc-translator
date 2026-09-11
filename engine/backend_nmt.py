@@ -5,17 +5,16 @@ Fast Neural Machine Translation (NMT) backend powered by Argos Translate / CTran
 Executes batch translations in 10ms - 50ms per item on CPU with zero external server dependencies.
 """
 
-import re
-import os
-import time
-import json
-import zipfile
 import hashlib
-from typing import List, Optional, Tuple, Dict, Any, Callable
+import json
+import os
+import re
+import time
+import zipfile
+from collections.abc import Callable
+from typing import Any
 
-DEFAULT_TRUSTED_PACKAGES_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "trusted_packages.json"
-)
+DEFAULT_TRUSTED_PACKAGES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trusted_packages.json")
 
 # Language code mapping
 LANG_MAP = {
@@ -24,7 +23,7 @@ LANG_MAP = {
 }
 
 
-def load_trusted_packages(manifest_path: Optional[str] = None) -> Dict[str, Any]:
+def load_trusted_packages(manifest_path: str | None = None) -> dict[str, Any]:
     """
     Loads known-good Argos language model package metadata and pinned SHA-256 hashes.
     Falls back to built-in verified hashes if the JSON manifest is missing or unreadable.
@@ -32,7 +31,7 @@ def load_trusted_packages(manifest_path: Optional[str] = None) -> Dict[str, Any]
     path = manifest_path or DEFAULT_TRUSTED_PACKAGES_PATH
     if os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
                 return {k: v for k, v in data.items() if not k.startswith("_")}
         except Exception:
@@ -67,9 +66,9 @@ def compute_file_sha256(file_path: str, chunk_size: int = 65536) -> str:
 
 def verify_package_archive(
     archive_path: str,
-    expected_hash: Optional[str] = None,
-    log_cb: Optional[Callable[[str], None]] = None,
-) -> Tuple[bool, str]:
+    expected_hash: str | None = None,
+    log_cb: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
     """
     Validates a downloaded .argosmodel package archive:
     1. Computes SHA-256 digest and compares with expected_hash (if provided).
@@ -122,16 +121,13 @@ def normalize_nmt_placeholders(text: str) -> str:
     Cleans up any potential whitespace separation that subword tokenizers (SentencePiece/BPE)
     may introduce around [[N0]] placeholders (e.g., '[ [ N0 ] ]' -> '[[N0]]').
     """
+
     def repl(match):
         prefix = match.group(1)
         digits = match.group(2) or ""
         return f"[[{prefix}{digits}]]"
 
-    return re.sub(
-        r"\[\s*\[\s*([A-Z][A-Z_]*)(?:\s*(\d+))?\s*\]\s*\]",
-        repl,
-        text
-    )
+    return re.sub(r"\[\s*\[\s*([A-Z][A-Z_]*)(?:\s*(\d+))?\s*\]\s*\]", repl, text)
 
 
 class NMTBackend:
@@ -139,11 +135,12 @@ class NMTBackend:
     Manages CTranslate2 / Argos Translate models, translation lifecycle,
     and automated offline package loading.
     """
+
     name: str = "nmt"
 
     def __init__(
         self,
-        trusted_manifest_path: Optional[str] = None,
+        trusted_manifest_path: str | None = None,
         strict_pinning: bool = True,
     ):
         self.trusted_manifest_path = trusted_manifest_path
@@ -155,8 +152,9 @@ class NMTBackend:
 
     def _check_availability(self) -> None:
         try:
-            import argostranslate.translate
             import argostranslate.package
+            import argostranslate.translate  # noqa: F401
+
             self._argos_available = True
             self._scan_installed_packages()
         except ImportError:
@@ -171,6 +169,7 @@ class NMTBackend:
             return
         try:
             import argostranslate.package
+
             installed = argostranslate.package.get_installed_packages()
             for pkg in installed:
                 self._installed_pairs.add((pkg.from_code, pkg.to_code))
@@ -186,7 +185,7 @@ class NMTBackend:
         pair = LANG_MAP.get(direction)
         return bool(pair and self._argos_available and self.has_language_pair(*pair))
 
-    def get_expected_hash(self, from_code: str, to_code: str) -> Optional[str]:
+    def get_expected_hash(self, from_code: str, to_code: str) -> str | None:
         """Returns the pinned SHA-256 hash for a language pair if defined in trusted manifest."""
         keys = [
             f"{from_code}-{to_code}",
@@ -208,7 +207,7 @@ class NMTBackend:
         self,
         from_code: str,
         to_code: str,
-        log_cb: Optional[Callable[[str], None]] = None,
+        log_cb: Callable[[str], None] | None = None,
         verify_hash: bool = True,
     ) -> bool:
         """
@@ -233,6 +232,7 @@ class NMTBackend:
 
         try:
             import argostranslate.package
+
             if log_cb:
                 log_cb(f"[*] Updating Argos package index for {from_code} -> {to_code}...")
             argostranslate.package.update_package_index()
@@ -255,9 +255,7 @@ class NMTBackend:
 
             # Cryptographic SHA-256 & zip safety verification
             if verify_hash:
-                is_valid, digest = verify_package_archive(
-                    download_path, expected_hash=expected_hash, log_cb=log_cb
-                )
+                is_valid, digest = verify_package_archive(download_path, expected_hash=expected_hash, log_cb=log_cb)
                 if not is_valid:
                     if log_cb:
                         log_cb("[!] Security Error: Package failed verification! Aborting install.")
@@ -284,10 +282,10 @@ class NMTBackend:
         self,
         text: str,
         direction: str,
-        placeholder_map: Optional[Dict[str, str]] = None,
-        context: Optional[str] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-    ) -> Tuple[Optional[str], float]:
+        placeholder_map: dict[str, str] | None = None,
+        context: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
+    ) -> tuple[str | None, float]:
         """
         Unified TranslationBackend protocol method.
         Translates a single text unit using CTranslate2/Argos and returns (result, elapsed).
@@ -313,7 +311,7 @@ class NMTBackend:
         translated = argostranslate.translate.translate(text, from_code, to_code)
         return normalize_nmt_placeholders(translated.strip())
 
-    def translate_batch(self, texts: List[str], direction: str) -> List[str]:
+    def translate_batch(self, texts: list[str], direction: str) -> list[str]:
         """Translates a batch of strings."""
         if not self._argos_available:
             raise RuntimeError("Argos Translate / CTranslate2 is not installed.")

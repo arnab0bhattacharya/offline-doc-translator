@@ -7,9 +7,8 @@ Thin orchestration shell coordinating Views, Widgets, and Controllers.
 
 import os
 import sys
-import tkinter as tk
-from tkinter import messagebox, filedialog
-from typing import Optional, Dict, List, Any
+import time
+from tkinter import messagebox
 
 import customtkinter as ctk
 
@@ -23,18 +22,16 @@ if PROJECT_ROOT not in sys.path:
 if sys.platform == "win32":
     try:
         import ctypes
+
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("offline.document.translator.v2")
     except Exception:
         pass
 
-from engine.errors import ErrorCode, TranslatorError
 from engine.backend_nmt import NMTBackend
-from engine.core import TranslationMode
-from engine.queue_manager import TranslationQueue, TranslationJob, JobStatus
-from gui.theme import THEME, LANGUAGE_PAIRS, GEMMA_PRESETS, parse_glossary_text
+from engine.queue_manager import JobStatus, TranslationJob
 from gui.controllers import TranslationController
+from gui.theme import THEME
 from gui.views import DocumentsView, QuickView, SystemView
-from gui.widgets import JobRow, StagedFileList
 
 
 class TranslatorApp:
@@ -69,30 +66,30 @@ class TranslatorApp:
         self.root.after(100, self.system_view.refresh_status)
 
     @property
-    def selected_files(self) -> List[str]:
+    def selected_files(self) -> list[str]:
         if hasattr(self, "docs_view"):
             return self.docs_view.selected_files
         return []
 
     @property
-    def _last_output_path(self) -> Optional[str]:
+    def _last_output_path(self) -> str | None:
         if hasattr(self, "docs_view"):
             return self.docs_view._last_output_path
         return None
 
     @_last_output_path.setter
-    def _last_output_path(self, val: Optional[str]):
+    def _last_output_path(self, val: str | None):
         if hasattr(self, "docs_view"):
             self.docs_view._last_output_path = val
 
     @property
-    def _last_review_log(self) -> Optional[str]:
+    def _last_review_log(self) -> str | None:
         if hasattr(self, "docs_view"):
             return self.docs_view._last_review_log
         return None
 
     @_last_review_log.setter
-    def _last_review_log(self, val: Optional[str]):
+    def _last_review_log(self, val: str | None):
         if hasattr(self, "docs_view"):
             self.docs_view._last_review_log = val
 
@@ -127,7 +124,8 @@ class TranslatorApp:
             png = os.path.join(d, "icon.png") if not d.endswith("icon.png") else d
             if os.path.isfile(png):
                 try:
-                    from PIL import ImageTk, Image
+                    from PIL import Image, ImageTk
+
                     img = ImageTk.PhotoImage(Image.open(png))
                     self.root.iconphoto(True, img)
                     break
@@ -152,7 +150,7 @@ class TranslatorApp:
         self.content_area.pack(side="left", fill="both", expand=True, padx=(0, 16), pady=16)
 
         # View Instances
-        self.tab_frames: Dict[str, ctk.CTkFrame] = {}
+        self.tab_frames: dict[str, ctk.CTkFrame] = {}
 
         self.docs_view = DocumentsView(self.content_area, controller=self.controller)
         self.quick_view = QuickView(self.content_area)
@@ -173,10 +171,7 @@ class TranslatorApp:
         self._switch_tab("docs")
 
     def _build_sidebar(self):
-        self.sidebar = ctk.CTkFrame(
-            self.main_container, width=230, corner_radius=0,
-            fg_color=THEME["sidebar_bg"]
-        )
+        self.sidebar = ctk.CTkFrame(self.main_container, width=230, corner_radius=0, fg_color=THEME["sidebar_bg"])
         self.sidebar.pack(side="left", fill="y", padx=0, pady=0)
         self.sidebar.pack_propagate(False)
 
@@ -185,22 +180,27 @@ class TranslatorApp:
         brand_frame.pack(fill="x", padx=16, pady=(20, 24))
 
         ctk.CTkLabel(
-            brand_frame, text="🌐  DocTranslator",
+            brand_frame,
+            text="🌐  DocTranslator",
             font=ctk.CTkFont(size=17, weight="bold"),
-            text_color=THEME["text_primary"], anchor="w"
+            text_color=THEME["text_primary"],
+            anchor="w",
         ).pack(anchor="w")
 
         ctk.CTkLabel(
-            brand_frame, text="Offline Neural & Local LLM",
-            font=ctk.CTkFont(size=11), text_color=THEME["text_secondary"], anchor="w"
+            brand_frame,
+            text="Offline Neural & Local LLM",
+            font=ctk.CTkFont(size=11),
+            text_color=THEME["text_secondary"],
+            anchor="w",
         ).pack(anchor="w", pady=(2, 0))
 
         # ── Navigation Buttons ──
         self.nav_buttons = {}
         nav_items = [
-            ("docs",   "📄  Documents",        "Batch translate PPTX, XLSX, DOCX, PDF"),
-            ("quick",  "⚡  Quick Translate",  "Instant side-by-side text lookup"),
-            ("system", "⚙  System & AI",       "Engines, models, and diagnostics"),
+            ("docs", "📄  Documents", "Batch translate PPTX, XLSX, DOCX, PDF"),
+            ("quick", "⚡  Quick Translate", "Instant side-by-side text lookup"),
+            ("system", "⚙  System & AI", "Engines, models, and diagnostics"),
         ]
 
         nav_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
@@ -208,13 +208,16 @@ class TranslatorApp:
 
         for tab_id, label, _ in nav_items:
             btn = ctk.CTkButton(
-                nav_frame, text=f"  {label}", height=42, anchor="w",
+                nav_frame,
+                text=f"  {label}",
+                height=42,
+                anchor="w",
                 font=ctk.CTkFont(size=13, weight="bold"),
                 corner_radius=8,
                 fg_color="transparent",
                 text_color=THEME["text_secondary"],
                 hover_color=THEME["btn_secondary"],
-                command=lambda t=tab_id: self._switch_tab(t)
+                command=lambda t=tab_id: self._switch_tab(t),
             )
             btn.pack(fill="x", pady=4)
             self.nav_buttons[tab_id] = btn
@@ -227,22 +230,35 @@ class TranslatorApp:
         status_card.pack(fill="x", padx=12, pady=(0, 12))
 
         ctk.CTkLabel(
-            status_card, text="AI Engine Status",
-            font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME["text_secondary"]
+            status_card,
+            text="AI Engine Status",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
         ).pack(anchor="w", padx=10, pady=(8, 4))
 
         self.side_argos_btn = ctk.CTkButton(
-            status_card, text="● Argos: Checking...", height=24, anchor="w",
-            font=ctk.CTkFont(size=11), fg_color="transparent", text_color=THEME["warning"],
-            hover_color=THEME["btn_secondary"], command=lambda: self._switch_tab("system")
+            status_card,
+            text="● Argos: Checking...",
+            height=24,
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["warning"],
+            hover_color=THEME["btn_secondary"],
+            command=lambda: self._switch_tab("system"),
         )
         self.side_argos_btn.pack(fill="x", padx=6, pady=2)
 
         self.side_ollama_btn = ctk.CTkButton(
-            status_card, text="● Ollama: Checking...", height=24, anchor="w",
-            font=ctk.CTkFont(size=11), fg_color="transparent", text_color=THEME["warning"],
+            status_card,
+            text="● Ollama: Checking...",
+            height=24,
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["warning"],
             hover_color=THEME["btn_secondary"],
-            command=lambda: self.system_view.refresh_ollama_status()
+            command=lambda: self.system_view.refresh_ollama_status(),
         )
         self.side_ollama_btn.pack(fill="x", padx=6, pady=(0, 6))
 
@@ -251,8 +267,7 @@ class TranslatorApp:
         footer.pack(fill="x", padx=14, pady=(0, 16))
 
         self.theme_switch = ctk.CTkSwitch(
-            footer, text="Dark Theme", font=ctk.CTkFont(size=11),
-            command=self._toggle_theme
+            footer, text="Dark Theme", font=ctk.CTkFont(size=11), command=self._toggle_theme
         )
         self.theme_switch.select()
         self.theme_switch.pack(side="left")
@@ -283,26 +298,17 @@ class TranslatorApp:
     #  DIAGNOSTICS & STATUS SYNC
     # ══════════════════════════════════════════════════════════════
 
-    def _on_ollama_status(self, alive: bool, models: List[str]):
+    def _on_ollama_status(self, alive: bool, models: list[str]):
         if alive:
-            self.side_ollama_btn.configure(
-                text=f"● Ollama: Online ({len(models)})",
-                text_color=THEME["success"]
-            )
+            self.side_ollama_btn.configure(text=f"● Ollama: Online ({len(models)})", text_color=THEME["success"])
             if models:
                 self.docs_view.update_model_choices(models)
                 self.quick_view.update_models(models)
         else:
-            self.side_ollama_btn.configure(
-                text="● Ollama: Offline",
-                text_color=THEME["error"]
-            )
+            self.side_ollama_btn.configure(text="● Ollama: Offline", text_color=THEME["error"])
 
     def _on_argos_status(self, ready: bool, summary: str):
-        self.side_argos_btn.configure(
-            text=summary,
-            text_color=THEME["success"] if ready else THEME["warning"]
-        )
+        self.side_argos_btn.configure(text=summary, text_color=THEME["success"] if ready else THEME["warning"])
 
     # ══════════════════════════════════════════════════════════════
     #  EVENT DISPATCH & QUEUE UPDATES
@@ -339,6 +345,7 @@ class TranslatorApp:
                 eta_str = getattr(job, "eta_str", "")
                 if not eta_str and job.started_at and job.progress > 0 and job.progress < 100.0:
                     from engine.queue_manager import format_eta
+
                     elapsed = max(0.0, time.time() - job.started_at)
                     rem = elapsed * (100.0 - job.progress) / job.progress
                     eta_str = format_eta(rem)
@@ -410,9 +417,9 @@ class TranslatorApp:
                 st_label.unbind("<Button-1>")
 
         if "cancel_btn" in w:
-            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
-                w["cancel_btn"].configure(state="disabled")
-            elif job.status == JobStatus.RUNNING and getattr(job, "cancel_event", None) and job.cancel_event.is_set():
+            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED) or (
+                job.status == JobStatus.RUNNING and getattr(job, "cancel_event", None) and job.cancel_event.is_set()
+            ):
                 w["cancel_btn"].configure(state="disabled")
 
     def _log(self, message: str):

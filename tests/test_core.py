@@ -5,39 +5,36 @@ Unit tests for the translation engine, number masking, bidirectional gates,
 and XML-anchored prompt construction.
 """
 
-import unittest
+import json
 import os
 import sys
 import tempfile
-import json
 import time
+import unittest
 
 # Ensure parent directory is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from engine.core import (
-    contains_japanese,
-    contains_latin,
-    should_translate,
-    mask_numbers,
-    mask_glossary_terms,
-    verify_placeholders,
-    unmask_numbers,
-    unmask_protected_text,
-    escape_xml,
-    clean_llm_response,
-    build_prompts,
     TranslationEngine,
     TranslationMode,
     TranslationResult,
-    CACHE_TTL_DAYS,
+    build_prompts,
+    clean_llm_response,
+    contains_japanese,
+    contains_latin,
+    escape_xml,
+    mask_glossary_terms,
+    mask_numbers,
+    should_translate,
+    unmask_numbers,
+    unmask_protected_text,
+    verify_placeholders,
 )
-
 from engine.errors import ErrorCode, TranslatorError
 
 
 class TestCoreEngine(unittest.TestCase):
-
     def test_language_detection(self):
         # Japanese script detection
         self.assertTrue(contains_japanese("これはテストです。"))
@@ -91,26 +88,19 @@ class TestCoreEngine(unittest.TestCase):
         masked, glossary_map = mask_glossary_terms(text, {"Contract": "契約書"})
         self.assertEqual(masked.count("[[GLOSSARY_A]]"), 2)
         self.assertEqual(glossary_map, {"[[GLOSSARY_A]]": "契約書"})
-        self.assertEqual(
-            unmask_protected_text("[[GLOSSARY_A]] 条件", {}, glossary_map),
-            "契約書 条件"
-        )
+        self.assertEqual(unmask_protected_text("[[GLOSSARY_A]] 条件", {}, glossary_map), "契約書 条件")
 
     def test_pure_llm_restores_glossary_terms_deterministically(self):
         class FakeLLM:
             def translate_single(self, **kwargs):
                 return "[[GLOSSARY_A]] 条件", 0.0
 
-        engine = TranslationEngine(
-            mode=TranslationMode.PURE_LLM,
-            glossary={"Contract": "契約書"}
-        )
+        engine = TranslationEngine(mode=TranslationMode.PURE_LLM, glossary={"Contract": "契約書"})
         engine._llm_backend = FakeLLM()
         translated, was_translated, was_reverted = engine.translate_chunk("Contract terms", "en2ja")
         self.assertEqual(translated, "契約書 条件")
         self.assertTrue(was_translated)
         self.assertFalse(was_reverted)
-
 
     def test_placeholder_validation_requires_exact_counts(self):
         masked = "[[N0]] compared with [[N0]] and [[N1]]"
@@ -175,14 +165,8 @@ class TestCoreEngine(unittest.TestCase):
 
     def test_clean_llm_response(self):
         self.assertEqual(clean_llm_response("  Hello World  "), "Hello World")
-        self.assertEqual(
-            clean_llm_response("<target>\nTranslated text here\n</target>"),
-            "Translated text here"
-        )
-        self.assertEqual(
-            clean_llm_response("```json\nTranslated content\n```"),
-            "Translated content"
-        )
+        self.assertEqual(clean_llm_response("<target>\nTranslated text here\n</target>"), "Translated text here")
+        self.assertEqual(clean_llm_response("```json\nTranslated content\n```"), "Translated content")
 
     def test_prompt_construction(self):
         masked = "Total revenue was [[N0]]% higher."
@@ -212,7 +196,7 @@ class TestCoreEngine(unittest.TestCase):
             )
 
             self.assertTrue(os.path.exists(log_path))
-            with open(log_path, "r", encoding="utf-8") as f:
+            with open(log_path, encoding="utf-8") as f:
                 content = f.read()
 
             # Metadata must be present
@@ -238,7 +222,7 @@ class TestCoreEngine(unittest.TestCase):
                 key=key,
             )
 
-            with open(log_path, "r", encoding="utf-8") as f:
+            with open(log_path, encoding="utf-8") as f:
                 content = f.read()
 
             self.assertIn("Location: Page 1 | Chunk ID: p_1", content)
@@ -255,7 +239,7 @@ class TestCoreEngine(unittest.TestCase):
             engine.log_needs_review(log_path, "Section A", "1", text, key)
             engine.log_needs_review(log_path, "Section B", "2", text, key)
 
-            with open(log_path, "r", encoding="utf-8") as f:
+            with open(log_path, encoding="utf-8") as f:
                 content = f.read()
 
             self.assertIn("Location: Section A | Chunk ID: 1", content)
@@ -301,13 +285,7 @@ class TestCoreEngine(unittest.TestCase):
             cache_data = {
                 "_meta": {"last_prune": now - 100000},
                 "_timestamps": {ck: stale_time},
-                "fast_nmt": {
-                    "ja2en": {
-                        fp: {
-                            "stale_key": "Old Translated Text"
-                        }
-                    }
-                }
+                "fast_nmt": {"ja2en": {fp: {"stale_key": "Old Translated Text"}}},
             }
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(cache_data, f)
@@ -341,11 +319,7 @@ class TestCoreEngine(unittest.TestCase):
     def test_translation_result_dataclass_properties(self):
         """Validates TranslationResult attributes, indexing, and unpacking."""
         res = TranslationResult(
-            text="Translated Text",
-            was_translated=True,
-            was_reverted=False,
-            elapsed=0.42,
-            source_backend="nmt"
+            text="Translated Text", was_translated=True, was_reverted=False, elapsed=0.42, source_backend="nmt"
         )
         self.assertEqual(res.text, "Translated Text")
         self.assertTrue(res.was_translated)
@@ -366,9 +340,11 @@ class TestCoreEngine(unittest.TestCase):
 
     def test_translate_chunk_returns_translation_result(self):
         """Verifies translate_chunk returns a TranslationResult instance with source_backend and telemetry."""
+
         class FakeNMT:
             def is_ready(self, direction):
                 return True
+
             def translate_single(self, text, direction):
                 return f"[NMT: {text}]"
 
@@ -407,5 +383,3 @@ class TestCoreEngine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

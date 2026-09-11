@@ -8,25 +8,25 @@ Orchestrates two translation modes:
   - Unified atomic caching, single-pass number masking, and bidirectional gates.
 """
 
-import os
-import re
-import json
-import time
 import hashlib
-import tempfile
 import html
+import json
 import logging
+import re
+import time
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
+
 import psutil
 import requests
-from enum import Enum
-from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, Any, List, Callable, Union
 
-from .errors import ErrorCode, TranslatorError
 from .backend_base import TranslationBackend
-from .cache import TranslationCache, JSONFileCache, NullCache, EncryptedFileCache, CachePolicy, CACHE_TTL_DAYS
-from .logging import TranslationLogger, TranslationLogEvent, get_logger
+from .cache import CACHE_TTL_DAYS, CachePolicy, EncryptedFileCache, JSONFileCache, NullCache, TranslationCache
+from .errors import ErrorCode, TranslatorError
+from .logging import TranslationLogger, get_logger
 
 # Supported translation directions
 DIRECTIONS = ("ja2en", "en2ja")
@@ -36,6 +36,7 @@ PLACEHOLDER_PATTERN = re.compile(r"\[\[[A-Z][A-Z_0-9]*\]\]")
 @dataclass
 class TranslationResult:
     """Encapsulates the result and telemetry of translating a text chunk."""
+
     text: str
     was_translated: bool
     was_reverted: bool
@@ -81,15 +82,15 @@ def should_translate(text: str, direction: str) -> bool:
     raise ValueError(f"Unknown translation direction: {direction}")
 
 
-def mask_numbers(text: str) -> Tuple[str, Dict[str, str]]:
+def mask_numbers(text: str) -> tuple[str, dict[str, str]]:
     """
     Masks numbers, floats, percentages, and basic formulas into placeholders [[N0]], [[N1]].
     Uses a single-pass regex replacement to guarantee placeholders are never recursively nested.
     Identical numbers in the same string share the same placeholder to preserve structure.
     """
     pattern = re.compile(r"(\d+(?:\.\d+)?(?:[,\s]*[+\-xX*/%][\s]*\d+(?:\.\d+)?)*%?)")
-    number_map: Dict[str, str] = {}
-    val_to_placeholder: Dict[str, str] = {}
+    number_map: dict[str, str] = {}
+    val_to_placeholder: dict[str, str] = {}
     placeholder_counter = 0
 
     def repl(match):
@@ -120,7 +121,7 @@ def _alphabetic_id(index: int) -> str:
         index -= 1
 
 
-def mask_glossary_terms(text: str, glossary: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
+def mask_glossary_terms(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
     """Replaces source glossary terms with stable placeholders before translation."""
     terms = [term for term in glossary if term]
     if not terms:
@@ -128,8 +129,8 @@ def mask_glossary_terms(text: str, glossary: Dict[str, str]) -> Tuple[str, Dict[
 
     # Longest-first matching prevents a shorter glossary term from consuming a longer one.
     pattern = re.compile("|".join(re.escape(term) for term in sorted(terms, key=len, reverse=True)))
-    term_placeholders: Dict[str, str] = {}
-    glossary_map: Dict[str, str] = {}
+    term_placeholders: dict[str, str] = {}
+    glossary_map: dict[str, str] = {}
 
     def repl(match):
         term = match.group(0)
@@ -143,9 +144,7 @@ def mask_glossary_terms(text: str, glossary: Dict[str, str]) -> Tuple[str, Dict[
 
 
 def verify_placeholders(
-    translated_text: str,
-    placeholder_map: Dict[str, str],
-    masked_source: Optional[str] = None
+    translated_text: str, placeholder_map: dict[str, str], masked_source: str | None = None
 ) -> bool:
     """Checks that the exact placeholder multiset survived translation uncorrupted."""
     expected_text = masked_source if masked_source is not None else " ".join(placeholder_map.keys())
@@ -154,18 +153,14 @@ def verify_placeholders(
     return actual == expected
 
 
-def unmask_numbers(text: str, number_map: Dict[str, str]) -> str:
+def unmask_numbers(text: str, number_map: dict[str, str]) -> str:
     """Replaces placeholders [[N#]] back with their original numerical values."""
     for placeholder, original in number_map.items():
         text = text.replace(placeholder, original)
     return text
 
 
-def unmask_protected_text(
-    text: str,
-    number_map: Dict[str, str],
-    glossary_map: Dict[str, str]
-) -> str:
+def unmask_protected_text(text: str, number_map: dict[str, str], glossary_map: dict[str, str]) -> str:
     """Restores numeric values and deterministic glossary values after translation."""
     text = unmask_numbers(text, number_map)
     for placeholder, target_term in glossary_map.items():
@@ -181,10 +176,10 @@ def escape_xml(text: str) -> str:
     text = _XML_ILLEGAL_CHARS.sub("", text)
     return (
         text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&apos;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
     )
 
 
@@ -199,11 +194,8 @@ def hash_text(text: str) -> str:
 
 
 def build_prompts(
-    direction: str,
-    masked_text: str,
-    placeholder_map: Dict[str, str],
-    context: Optional[str] = None
-) -> Tuple[str, str]:
+    direction: str, masked_text: str, placeholder_map: dict[str, str], context: str | None = None
+) -> tuple[str, str]:
     """Constructs prompt pairs using JSON-encoded untrusted document text."""
     keys_list = list(placeholder_map.keys())
     keys_str = " ".join(keys_list)
@@ -283,20 +275,20 @@ class TranslationEngine:
         model_name: str = "gemma4:e2b-it-qat",
         ollama_url: str = "http://localhost:11434",
         mode: TranslationMode = TranslationMode.FAST_NMT,
-        glossary: Optional[Dict[str, str]] = None,
+        glossary: dict[str, str] | None = None,
         min_free_ram_mb: int = 150,
         context_window: int = 2048,
-        cache_file: Optional[str] = None,
-        allow_llm: Optional[bool] = None,
+        cache_file: str | None = None,
+        allow_llm: bool | None = None,
         include_source_text: bool = False,
         cache_ttl_days: int = CACHE_TTL_DAYS,
-        backend: Optional[TranslationBackend] = None,
-        cache: Optional[TranslationCache] = None,
-        logger: Optional[TranslationLogger] = None,
-        cache_policy: Union[CachePolicy, str] = CachePolicy.ENCRYPTED_PERSISTENT,
-        encrypted_cache: Optional[bool] = None,
-        cache_key: Optional[Union[str, bytes]] = None,
-        legacy_cache_candidates: Optional[List[str]] = None,
+        backend: TranslationBackend | None = None,
+        cache: TranslationCache | None = None,
+        logger: TranslationLogger | None = None,
+        cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
+        encrypted_cache: bool | None = None,
+        cache_key: str | bytes | None = None,
+        legacy_cache_candidates: list[str] | None = None,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
@@ -372,14 +364,14 @@ class TranslationEngine:
         return self._cache_mgr
 
     @property
-    def cache(self) -> Dict[str, Any]:
+    def cache(self) -> dict[str, Any]:
         """Provides access to raw cache dict for backward compatibility."""
         if hasattr(self._cache_mgr, "data"):
             return self._cache_mgr.data
         return {}
 
     @cache.setter
-    def cache(self, value: Dict[str, Any]) -> None:
+    def cache(self, value: dict[str, Any]) -> None:
         if hasattr(self._cache_mgr, "data"):
             self._cache_mgr.data = value
 
@@ -387,6 +379,7 @@ class TranslationEngine:
     def nmt_backend(self):
         if self._nmt_backend is None:
             from engine.backend_nmt import NMTBackend
+
             self._nmt_backend = NMTBackend()
         return self._nmt_backend
 
@@ -394,14 +387,13 @@ class TranslationEngine:
     def llm_backend(self):
         if self._llm_backend is None:
             from engine.backend_llm import LLMBackend
+
             self._llm_backend = LLMBackend(
-                model_name=self.model_name,
-                ollama_url=self.ollama_url,
-                context_window=self.context_window
+                model_name=self.model_name, ollama_url=self.ollama_url, context_window=self.context_window
             )
         return self._llm_backend
 
-    def get_backend(self, mode: Optional[TranslationMode] = None) -> TranslationBackend:
+    def get_backend(self, mode: TranslationMode | None = None) -> TranslationBackend:
         """Returns the active or requested translation backend instance."""
         if mode is None and self._custom_backend is not None:
             return self._custom_backend
@@ -410,7 +402,7 @@ class TranslationEngine:
             return self.nmt_backend
         return self.llm_backend
 
-    def set_backend(self, backend: TranslationBackend, mode: Optional[TranslationMode] = None) -> None:
+    def set_backend(self, backend: TranslationBackend, mode: TranslationMode | None = None) -> None:
         """Registers a custom or replacement translation backend."""
         if mode is None:
             self._custom_backend = backend
@@ -425,32 +417,22 @@ class TranslationEngine:
         self._get_direction_cache(direction)
 
     def _record_cache_access(
-        self,
-        direction: str,
-        context: Optional[str],
-        key: str,
-        timestamp: Optional[float] = None
+        self, direction: str, context: str | None, key: str, timestamp: float | None = None
     ) -> None:
         """Records last accessed timestamp for a cache entry."""
         mode_str = self.mode.value if isinstance(self.mode, TranslationMode) else str(self.mode)
         fp = self._cache_fingerprint(context)
-        self._cache_mgr.record_access(
-            key=key,
-            direction=direction,
-            fingerprint=fp,
-            mode=mode_str,
-            timestamp=timestamp
-        )
+        self._cache_mgr.record_access(key=key, direction=direction, fingerprint=fp, mode=mode_str, timestamp=timestamp)
 
-    def _prune_cache(self, now: Optional[float] = None) -> int:
+    def _prune_cache(self, now: float | None = None) -> int:
         """Removes cache entries older than cache_ttl_days. Returns number of pruned entries."""
         return self._cache_mgr.prune(now)
 
-    def clear_cache(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def clear_cache(self, log_cb: Callable[[str], None] | None = None) -> None:
         """Wipes the entire cache and saves an empty cache file."""
         self._cache_mgr.clear(log_cb=log_cb)
 
-    def _cache_fingerprint(self, context: Optional[str] = None) -> str:
+    def _cache_fingerprint(self, context: str | None = None) -> str:
         """Prevents reuse across models, glossaries, and context-sensitive translations."""
         payload = {
             "schema": 3,
@@ -462,7 +444,7 @@ class TranslationEngine:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
-    def _get_direction_cache(self, direction: str, context: Optional[str] = None) -> Dict[str, str]:
+    def _get_direction_cache(self, direction: str, context: str | None = None) -> dict[str, str]:
         """Returns the cache bucket for one fully specified translation configuration."""
         mode_str = self.mode.value if isinstance(self.mode, TranslationMode) else str(self.mode)
         fp = self._cache_fingerprint(context)
@@ -470,12 +452,11 @@ class TranslationEngine:
             return self._cache_mgr.get_bucket(direction=direction, fingerprint=fp, mode=mode_str)
         return {}
 
-    def save_cache_atomically(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def save_cache_atomically(self, log_cb: Callable[[str], None] | None = None) -> None:
         """Saves cache via .tmp file replacement to prevent corruption on crash."""
         self._cache_mgr.save(log_cb=log_cb)
 
-
-    def check_and_clear_memory(self, log_cb: Optional[Callable[[str], None]] = None) -> None:
+    def check_and_clear_memory(self, log_cb: Callable[[str], None] | None = None) -> None:
         """Flushes Ollama KV/model if available system RAM falls below threshold."""
         try:
             free_ram_mb = psutil.virtual_memory().available / (1024 * 1024)
@@ -483,9 +464,7 @@ class TranslationEngine:
                 if log_cb:
                     log_cb(f"[!] Low RAM ({free_ram_mb:.0f} MB). Flushing memory...")
                 requests.post(
-                    f"{self.ollama_url}/api/generate",
-                    json={"model": self.model_name, "keep_alive": 0},
-                    timeout=5
+                    f"{self.ollama_url}/api/generate", json={"model": self.model_name, "keep_alive": 0}, timeout=5
                 )
                 time.sleep(3)
         except Exception:
@@ -497,9 +476,7 @@ class TranslationEngine:
             return
         try:
             requests.post(
-                f"{self.ollama_url}/api/generate",
-                json={"model": self.model_name, "keep_alive": 0},
-                timeout=5
+                f"{self.ollama_url}/api/generate", json={"model": self.model_name, "keep_alive": 0}, timeout=5
             )
         except Exception:
             pass
@@ -511,7 +488,7 @@ class TranslationEngine:
         chunk_id: str,
         original_text: str,
         key: str,
-        include_source_text: Optional[bool] = None,
+        include_source_text: bool | None = None,
     ) -> None:
         """Logs translation failures to audit log. Source text omitted by default for privacy."""
         if not review_log_path:
@@ -530,9 +507,7 @@ class TranslationEngine:
         text_hash = hashlib.sha256(original_text.encode("utf-8")).hexdigest()[:16]
 
         should_include = (
-            include_source_text
-            if include_source_text is not None
-            else getattr(self, "include_source_text", False)
+            include_source_text if include_source_text is not None else getattr(self, "include_source_text", False)
         )
 
         try:
@@ -547,16 +522,15 @@ class TranslationEngine:
         except Exception:
             pass
 
-
     def translate_chunk(
         self,
         text: str,
         direction: str,
-        context: Optional[str] = None,
+        context: str | None = None,
         location_id: str = "doc",
         chunk_id: str = "0",
-        review_log_path: Optional[str] = None,
-        log_cb: Optional[Callable[[str], None]] = None
+        review_log_path: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
     ) -> TranslationResult:
         """
         Translates a single piece of text according to the selected TranslationMode.
@@ -593,7 +567,7 @@ class TranslationEngine:
                         elapsed=0.0,
                     )
                 if log_cb:
-                    log_cb(f"  [⚡ Cache] {location_id}: \"{preview_src}\" => \"{preview_res}\"")
+                    log_cb(f'  [⚡ Cache] {location_id}: "{preview_src}" => "{preview_res}"')
                 return TranslationResult(
                     text=final_cached,
                     was_translated=True,
@@ -629,7 +603,7 @@ class TranslationEngine:
             if not backend.is_ready(direction):
                 raise TranslatorError(
                     ErrorCode.E08,
-                    detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed."
+                    detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed.",
                 )
         else:
             if self.allow_llm is not False:
@@ -637,7 +611,7 @@ class TranslationEngine:
 
             if log_cb:
                 path_label = "🤖 Pure LLM"
-                log_cb(f"  [{path_label}] {location_id}: \"{preview_src}\"...")
+                log_cb(f'  [{path_label}] {location_id}: "{preview_src}"...')
 
             if self.allow_llm is False:
                 if self.logger:
@@ -711,7 +685,9 @@ class TranslationEngine:
         # 5. Output validation & placeholder verification
         if translated_masked:
             if verify_placeholders(translated_masked, placeholder_map, masked_text):
-                self._cache_mgr.put(key=key, direction=direction, fingerprint=fp, value=translated_masked, mode=mode_str)
+                self._cache_mgr.put(
+                    key=key, direction=direction, fingerprint=fp, value=translated_masked, mode=mode_str
+                )
                 dir_cache[key] = translated_masked
                 self._record_cache_access(direction, context, key)
                 final_trans = unmask_protected_text(translated_masked, number_map, glossary_map)
@@ -727,9 +703,9 @@ class TranslationEngine:
                 if log_cb:
                     if self.mode == TranslationMode.FAST_NMT:
                         path_tag = "⚡ Fast NMT"
-                        log_cb(f"  [{path_tag} in {elapsed:.2f}s] {location_id}: \"{preview_src}\" => \"{preview_res}\"")
+                        log_cb(f'  [{path_tag} in {elapsed:.2f}s] {location_id}: "{preview_src}" => "{preview_res}"')
                     else:
-                        log_cb(f"  [✓ Done in {elapsed:.1f}s] \"{preview_src}\" => \"{preview_res}\"")
+                        log_cb(f'  [✓ Done in {elapsed:.1f}s] "{preview_src}" => "{preview_res}"')
                 return TranslationResult(
                     text=final_trans,
                     was_translated=True,
@@ -747,7 +723,9 @@ class TranslationEngine:
                         elapsed=elapsed,
                     )
                 if log_cb:
-                    log_cb(f"  [⚠ Skipped] {location_id}: {backend_name.upper()} output dropped placeholder(s). Original kept.")
+                    log_cb(
+                        f"  [⚠ Skipped] {location_id}: {backend_name.upper()} output dropped placeholder(s). Original kept."
+                    )
                 if review_log_path:
                     self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
                 return TranslationResult(
@@ -779,5 +757,3 @@ class TranslationEngine:
             elapsed=elapsed,
             source_backend=backend_name,
         )
-
-

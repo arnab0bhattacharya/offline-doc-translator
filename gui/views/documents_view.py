@@ -5,27 +5,26 @@ Main workspace view for multi-document batch translation, staging, and queue mon
 """
 
 import os
+import subprocess
 import sys
 import time
-import subprocess
-from tkinter import messagebox, filedialog
-from typing import Callable, Dict, List, Optional, Union, Any
+from collections.abc import Callable
+from tkinter import filedialog, messagebox
+from typing import Any
+
 import customtkinter as ctk
 
-from engine.core import TranslationMode
 from engine.cache import CachePolicy
+from engine.core import TranslationMode
 from engine.preflight import check_ollama_status
-from engine.queue_manager import TranslationJob, JobStatus, format_eta
+from engine.queue_manager import JobStatus, TranslationJob, format_eta
 from gui.controllers.translation_controller import TranslationController
 from gui.dnd_helper import WindowsDropHook, is_point_in_widget
 from gui.theme import (
-    THEME,
-    LANGUAGE_PAIRS,
     GEMMA_PRESETS,
+    LANGUAGE_PAIRS,
+    THEME,
     parse_glossary_text,
-    format_glossary_text,
-    MAX_GLOSSARY_ENTRIES,
-    MAX_TERM_LENGTH,
 )
 from gui.widgets.job_row import JobRow
 from gui.widgets.staged_file_list import StagedFileList
@@ -49,22 +48,22 @@ class DocumentsView(ctk.CTkFrame):
     def __init__(
         self,
         master,
-        controller: Optional[TranslationController] = None,
-        on_log: Optional[Callable[[str], None]] = None,
+        controller: TranslationController | None = None,
+        on_log: Callable[[str], None] | None = None,
         **kwargs,
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.controller = controller or TranslationController()
         self.on_log_cb = on_log
 
-        self._job_widgets: Dict[str, Union[JobRow, Dict]] = {}
-        self._completed_outputs: List[str] = []
-        self._completed_review_logs: List[str] = []
-        self._last_output_path: Optional[str] = None
-        self._last_review_log: Optional[str] = None
+        self._job_widgets: dict[str, JobRow | dict] = {}
+        self._completed_outputs: list[str] = []
+        self._completed_review_logs: list[str] = []
+        self._last_output_path: str | None = None
+        self._last_review_log: str | None = None
         self._glossary_open = False
         self._log_open = False
-        self._drop_hook: Optional[WindowsDropHook] = None
+        self._drop_hook: WindowsDropHook | None = None
 
         self._build_ui()
 
@@ -478,7 +477,7 @@ class DocumentsView(ctk.CTkFrame):
     # ── Properties & Staged List Integration ──
 
     @property
-    def selected_files(self) -> List[str]:
+    def selected_files(self) -> list[str]:
         return self.staged_list.selected_files
 
     def _browse_multi_files(self):
@@ -487,7 +486,7 @@ class DocumentsView(ctk.CTkFrame):
     def _browse_folder(self):
         self.staged_list.browse_folder(log_cb=self.log)
 
-    def _on_staged_files_changed(self, files: List[str]):
+    def _on_staged_files_changed(self, files: list[str]):
         count = len(files)
         if count > 0:
             self.start_btn.configure(text=f"▶   Start Translation ({count})")
@@ -533,7 +532,7 @@ class DocumentsView(ctk.CTkFrame):
         """Auto-loads last-used glossary from ~/.offline-translator/last_glossary.txt on startup."""
         try:
             if os.path.isfile(LAST_GLOSSARY_PATH):
-                with open(LAST_GLOSSARY_PATH, "r", encoding="utf-8") as f:
+                with open(LAST_GLOSSARY_PATH, encoding="utf-8") as f:
                     content = f.read()
                 if content.strip():
                     self.glossary_text.delete("0.0", "end")
@@ -551,7 +550,7 @@ class DocumentsView(ctk.CTkFrame):
         except Exception:
             pass
 
-    def _load_glossary_file(self, file_path: Optional[str] = None):
+    def _load_glossary_file(self, file_path: str | None = None):
         """Loads a glossary text/csv file into the glossary drawer."""
         if not file_path:
             file_path = filedialog.askopenfilename(
@@ -568,13 +567,13 @@ class DocumentsView(ctk.CTkFrame):
 
         try:
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, encoding="utf-8") as f:
                     content = f.read()
             except UnicodeDecodeError:
-                with open(file_path, "r", encoding="latin-1") as f:
+                with open(file_path, encoding="latin-1") as f:
                     content = f.read()
 
-            warnings: List[str] = []
+            warnings: list[str] = []
             parsed = parse_glossary_text(content, on_warning=lambda w: warnings.append(w))
 
             self.glossary_text.delete("0.0", "end")
@@ -642,7 +641,7 @@ class DocumentsView(ctk.CTkFrame):
             self._drop_hook.unhook()
             self._drop_hook = None
 
-    def _on_window_drop(self, files: List[str], screen_x: int, screen_y: int):
+    def _on_window_drop(self, files: list[str], screen_x: int, screen_y: int):
         """Handles dropped files from Windows Explorer."""
         if not files:
             return
@@ -651,9 +650,7 @@ class DocumentsView(ctk.CTkFrame):
             self.glossary_text, screen_x, screen_y
         )
         txt_files = [f for f in files if f.lower().endswith((".txt", ".csv"))]
-        doc_files = [
-            f for f in files if os.path.splitext(f.lower())[1] in [".docx", ".pptx", ".xlsx", ".pdf"]
-        ]
+        doc_files = [f for f in files if os.path.splitext(f.lower())[1] in [".docx", ".pptx", ".xlsx", ".pdf"]]
 
         if hit_glossary or (txt_files and not doc_files):
             target = txt_files[0] if txt_files else files[0]
@@ -694,7 +691,7 @@ class DocumentsView(ctk.CTkFrame):
             self.log_drawer_btn.configure(text="Activity Log ▼")
             self._log_open = True
 
-    def update_model_choices(self, models: List[str]):
+    def update_model_choices(self, models: list[str]):
         if models:
             all_models = list(dict.fromkeys(GEMMA_PRESETS + models))
             self.model_combo.configure(values=all_models)
@@ -713,7 +710,7 @@ class DocumentsView(ctk.CTkFrame):
         mode = TranslationMode(self.mode_var.get())
         model = self.model_var.get().strip() or GEMMA_PRESETS[0]
         raw_glossary = self.glossary_text.get("0.0", "end")
-        glossary_warnings: List[str] = []
+        glossary_warnings: list[str] = []
         glossary = parse_glossary_text(raw_glossary, on_warning=lambda w: glossary_warnings.append(w))
         if glossary_warnings:
             self.log(f"[Glossary Warning] {'; '.join(glossary_warnings)}")
@@ -824,20 +821,29 @@ class DocumentsView(ctk.CTkFrame):
 
                     st_lbl.configure(text=status_text, text_color=THEME["success"], cursor="")
                 elif job.status == JobStatus.FAILED:
-                    err_msg = job.error.title if (job.error and hasattr(job.error, "title")) else (job.error_message or "Failed")
+                    err_msg = (
+                        job.error.title
+                        if (job.error and hasattr(job.error, "title"))
+                        else (job.error_message or "Failed")
+                    )
                     st_lbl.configure(text=f"❌ {err_msg}", text_color=THEME["error"], cursor="hand2")
                     if job.error and hasattr(job.error, "format_user_dialog"):
                         eo = job.error
-                        st_lbl.bind("<Button-1>", lambda e, err=eo: messagebox.showerror(f"Translation Error [{err.code.value}]", err.format_user_dialog()))
+                        st_lbl.bind(
+                            "<Button-1>",
+                            lambda e, err=eo: messagebox.showerror(
+                                f"Translation Error [{err.code.value}]", err.format_user_dialog()
+                            ),
+                        )
                     elif job.error_message:
                         em = job.error_message
                         st_lbl.bind("<Button-1>", lambda e, msg=em: messagebox.showerror("Translation Error", msg))
                 elif job.status == JobStatus.CANCELLED:
                     st_lbl.configure(text="⛔ Cancelled", text_color=THEME["text_secondary"], cursor="")
             if "cancel_btn" in w:
-                if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
-                    w["cancel_btn"].configure(state="disabled")
-                elif job.status == JobStatus.RUNNING and getattr(job, "cancel_event", None) and job.cancel_event.is_set():
+                if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED) or (
+                    job.status == JobStatus.RUNNING and getattr(job, "cancel_event", None) and job.cancel_event.is_set()
+                ):
                     w["cancel_btn"].configure(state="disabled")
 
         if job.status == JobStatus.COMPLETED:
@@ -871,7 +877,11 @@ class DocumentsView(ctk.CTkFrame):
 
         num_rev = len(self._completed_review_logs)
         if num_rev == 0:
-            if self._last_review_log and os.path.exists(self._last_review_log) and os.path.getsize(self._last_review_log) > 0:
+            if (
+                self._last_review_log
+                and os.path.exists(self._last_review_log)
+                and os.path.getsize(self._last_review_log) > 0
+            ):
                 self.review_btn.configure(text="⚠  Review Log", state="normal")
             else:
                 self.review_btn.configure(text="⚠  Review Log", state="disabled")

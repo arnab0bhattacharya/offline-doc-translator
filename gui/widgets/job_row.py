@@ -8,11 +8,12 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from tkinter import messagebox
-from typing import Callable, Optional
+
 import customtkinter as ctk
 
-from engine.queue_manager import TranslationJob, JobStatus, format_eta
+from engine.queue_manager import JobStatus, TranslationJob, format_eta
 from gui.theme import THEME
 
 
@@ -20,25 +21,20 @@ class JobRow(ctk.CTkFrame):
     """
     Renders and manages a single job row in the translation queue.
     """
+
     _output_path: str = ""
     _review_log_path: str = ""
-    open_file_button: Optional[ctk.CTkButton] = None
-    open_folder_button: Optional[ctk.CTkButton] = None
-    review_button: Optional[ctk.CTkButton] = None
-    cancel_button: Optional[ctk.CTkButton] = None
-    actions_frame: Optional[ctk.CTkFrame] = None
-    st_label: Optional[ctk.CTkLabel] = None
-    progress_bar: Optional[ctk.CTkProgressBar] = None
-    name_label: Optional[ctk.CTkLabel] = None
-    badge_label: Optional[ctk.CTkLabel] = None
+    open_file_button: ctk.CTkButton | None = None
+    open_folder_button: ctk.CTkButton | None = None
+    review_button: ctk.CTkButton | None = None
+    cancel_button: ctk.CTkButton | None = None
+    actions_frame: ctk.CTkFrame | None = None
+    st_label: ctk.CTkLabel | None = None
+    progress_bar: ctk.CTkProgressBar | None = None
+    name_label: ctk.CTkLabel | None = None
+    badge_label: ctk.CTkLabel | None = None
 
-    def __init__(
-        self,
-        master,
-        job: TranslationJob,
-        on_cancel: Optional[Callable[[str], None]] = None,
-        **kwargs
-    ):
+    def __init__(self, master, job: TranslationJob, on_cancel: Callable[[str], None] | None = None, **kwargs):
         super().__init__(master, fg_color=THEME["staging_bg"], corner_radius=8, **kwargs)
         self.job_id = job.id
         self.on_cancel = on_cancel
@@ -50,16 +46,24 @@ class JobRow(ctk.CTkFrame):
 
         # Format Badge
         self.badge_label = ctk.CTkLabel(
-            self, text=f" {ext} ", font=ctk.CTkFont(size=9, weight="bold"),
-            fg_color=bcolor, corner_radius=4, text_color="#FFFFFF"
+            self,
+            text=f" {ext} ",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            fg_color=bcolor,
+            corner_radius=4,
+            text_color="#FFFFFF",
         )
         self.badge_label.pack(side="left", padx=(8, 6), pady=6)
 
         # File Name
         name = os.path.basename(job.input_path)
         self.name_label = ctk.CTkLabel(
-            self, text=name, font=ctk.CTkFont(size=11, weight="bold"),
-            width=170, anchor="w", text_color=THEME["text_primary"]
+            self,
+            text=name,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=170,
+            anchor="w",
+            text_color=THEME["text_primary"],
         )
         self.name_label.pack(side="left", padx=4)
 
@@ -70,8 +74,7 @@ class JobRow(ctk.CTkFrame):
 
         # Status Label
         self.st_label = ctk.CTkLabel(
-            self, text="Queued", font=ctk.CTkFont(size=10),
-            width=130, anchor="w", text_color=THEME["text_secondary"]
+            self, text="Queued", font=ctk.CTkFont(size=10), width=130, anchor="w", text_color=THEME["text_secondary"]
         )
         self.st_label.pack(side="left", padx=4)
 
@@ -81,29 +84,49 @@ class JobRow(ctk.CTkFrame):
 
         # Cancel Button
         self.cancel_button = ctk.CTkButton(
-            self.actions_frame, text="✕", width=24, height=22, font=ctk.CTkFont(size=10),
-            fg_color=THEME["error"], hover_color="#991B1B",
-            command=self._handle_cancel
+            self.actions_frame,
+            text="✕",
+            width=24,
+            height=22,
+            font=ctk.CTkFont(size=10),
+            fg_color=THEME["error"],
+            hover_color="#991B1B",
+            command=self._handle_cancel,
         )
         self.cancel_button.pack(side="right")
 
         # Micro Action Buttons (displayed after job completion)
         self.open_file_button = ctk.CTkButton(
-            self.actions_frame, text="📄", width=24, height=22, font=ctk.CTkFont(size=11),
-            fg_color=THEME["btn_secondary"], hover_color=THEME["btn_sec_hover"],
-            command=self._handle_open_file
+            self.actions_frame,
+            text="📄",
+            width=24,
+            height=22,
+            font=ctk.CTkFont(size=11),
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            command=self._handle_open_file,
         )
 
         self.open_folder_button = ctk.CTkButton(
-            self.actions_frame, text="📁", width=24, height=22, font=ctk.CTkFont(size=11),
-            fg_color=THEME["btn_secondary"], hover_color=THEME["btn_sec_hover"],
-            command=self._handle_open_folder
+            self.actions_frame,
+            text="📁",
+            width=24,
+            height=22,
+            font=ctk.CTkFont(size=11),
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            command=self._handle_open_folder,
         )
 
         self.review_button = ctk.CTkButton(
-            self.actions_frame, text="⚠", width=24, height=22, font=ctk.CTkFont(size=11),
-            fg_color=THEME["warning"], hover_color="#B45309",
-            command=self._handle_open_review
+            self.actions_frame,
+            text="⚠",
+            width=24,
+            height=22,
+            font=ctk.CTkFont(size=11),
+            fg_color=THEME["warning"],
+            hover_color="#B45309",
+            command=self._handle_open_review,
         )
 
         # Aliases for dictionary-style compatibility
@@ -262,7 +285,11 @@ class JobRow(ctk.CTkFrame):
             if hasattr(self, "open_file_button"):
                 self.open_file_button.pack(side="left", padx=2)
                 self.open_folder_button.pack(side="left", padx=2)
-                if self._review_log_path and os.path.exists(self._review_log_path) and os.path.getsize(self._review_log_path) > 0:
+                if (
+                    self._review_log_path
+                    and os.path.exists(self._review_log_path)
+                    and os.path.getsize(self._review_log_path) > 0
+                ):
                     self.review_button.pack(side="left", padx=2)
                 else:
                     self.review_button.pack_forget()

@@ -9,18 +9,15 @@ Unit tests for the structured logging subsystem:
 - execute_translation logger integration
 """
 
-import json
 import unittest
-from unittest.mock import MagicMock, patch
 
+from engine.core import TranslationEngine, TranslationMode
 from engine.logging import (
     TranslationLogEvent,
     TranslationLogger,
     get_logger,
     set_default_logger,
 )
-from engine.core import TranslationEngine, TranslationMode
-from engine.run_job import execute_translation
 
 
 class TestTranslationLogEvent(unittest.TestCase):
@@ -199,8 +196,10 @@ class TestEngineStructuredLoggingIntegration(unittest.TestCase):
     def test_engine_emits_structured_events_on_translate(self):
         class MockNMT:
             name = "nmt"
+
             def is_ready(self, direction):
                 return True
+
             def translate(self, text, direction, **kwargs):
                 return f"[NMT: {text}]", 0.05
 
@@ -235,8 +234,10 @@ class TestEngineStructuredLoggingIntegration(unittest.TestCase):
     def test_engine_emits_warning_on_dropped_placeholder(self):
         class DroppingBackend:
             name = "nmt"
+
             def is_ready(self, direction):
                 return True
+
             def translate(self, text, direction, **kwargs):
                 return "Dropped placeholder output", 0.02
 

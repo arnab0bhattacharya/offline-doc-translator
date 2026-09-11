@@ -1,13 +1,15 @@
 import os
 import sys
 import time
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from engine.queue_manager import TranslationQueue, JobStatus, TranslationJob
-from engine.errors import ErrorCode, TranslatorError
-from engine.core import TranslationMode
+import pytest
+
 from engine.cache import CachePolicy
+from engine.core import TranslationMode
+from engine.errors import ErrorCode, TranslatorError
+from engine.queue_manager import JobStatus, TranslationJob, TranslationQueue
+
 
 @pytest.fixture
 def queue_mgr():
@@ -15,10 +17,13 @@ def queue_mgr():
     yield qm
     qm.shutdown()
 
-@patch('engine.queue_manager.execute_translation')
+
+@patch("engine.queue_manager.execute_translation")
 def test_job_creation_and_processing(mock_execute, queue_mgr):
     # Setup mocks
-    def fake_execute(input_path, output_path, direction, mode, model_name, glossary, progress_cb=None, log_cb=None, **kwargs):
+    def fake_execute(
+        input_path, output_path, direction, mode, model_name, glossary, progress_cb=None, log_cb=None, **kwargs
+    ):
         if progress_cb:
             progress_cb(1, 2, "Halfway")
             time.sleep(0.1)
@@ -27,38 +32,37 @@ def test_job_creation_and_processing(mock_execute, queue_mgr):
 
     mock_execute.side_effect = fake_execute
 
-
-    
     updates = []
+
     def on_update(job: TranslationJob):
         updates.append((job.status, job.progress))
-        
+
     queue_mgr.on_job_update = on_update
-    
+
     job_id = queue_mgr.add_job(
         input_path="test.docx",
         output_path="test_en.docx",
         direction="ja2en",
         mode="fast_nmt",
         model_name="test-model",
-        glossary={}
+        glossary={},
     )
-    
+
     assert job_id is not None
     job = queue_mgr.get_job(job_id)
     assert job is not None
     assert job.status in [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.COMPLETED]
-    
+
     # Wait for completion
     timeout = time.time() + 2.0
     while job.status not in (JobStatus.COMPLETED, JobStatus.FAILED) and time.time() < timeout:
         time.sleep(0.05)
-        
+
     assert job.status == JobStatus.COMPLETED
     assert job.progress == 100.0
     assert job.progress_message == "Completed"
     assert job.result == {"total": 2, "translated": 2, "reverted": 0, "skipped": 0}
-    
+
     # Verify updates were sent
     assert len(updates) > 0
     statuses = [u[0] for u in updates]
@@ -66,22 +70,25 @@ def test_job_creation_and_processing(mock_execute, queue_mgr):
     assert JobStatus.RUNNING in statuses
     assert JobStatus.COMPLETED in statuses
 
+
 def test_cancel_queued_job(queue_mgr):
     # Suspend the worker temporarily by adding a slow job
-    with patch('engine.queue_manager.TranslationQueue._process_job') as mock_process:
+    with patch("engine.queue_manager.TranslationQueue._process_job") as mock_process:
+
         def slow_process(job):
             time.sleep(0.5)
+
         mock_process.side_effect = slow_process
-        
+
         # Add first job which will block the worker
         queue_mgr.add_job("test1.docx", "out1.docx", "ja2en", "fast_nmt", "test", {})
-        
+
         # Add second job which will stay in QUEUED state
         job_id = queue_mgr.add_job("test2.docx", "out2.docx", "ja2en", "fast_nmt", "test", {})
         job = queue_mgr.get_job(job_id)
-        
+
         assert job.status == JobStatus.QUEUED
-        
+
         # Cancel the second job
         success = queue_mgr.cancel_job(job_id)
         assert success is True
@@ -90,7 +97,8 @@ def test_cancel_queued_job(queue_mgr):
 
 def test_cancel_running_job(queue_mgr):
     started_evt = time.time()
-    with patch('engine.queue_manager.execute_translation') as mock_exec:
+    with patch("engine.queue_manager.execute_translation") as mock_exec:
+
         def fake_exec(*args, cancel_event=None, **kwargs):
             # Wait until cancelled or timed out
             if cancel_event:
@@ -127,7 +135,7 @@ def test_cancel_running_job(queue_mgr):
 
 
 def test_cancel_running_job_cooperative_e09(queue_mgr):
-    with patch('engine.queue_manager.execute_translation') as mock_exec:
+    with patch("engine.queue_manager.execute_translation") as mock_exec:
         mock_exec.side_effect = TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
         job_id = queue_mgr.add_job("coop.docx", "out_coop.docx", "ja2en", "fast_nmt", "test", {})
@@ -143,51 +151,57 @@ def test_cancel_running_job_cooperative_e09(queue_mgr):
 
 
 def test_sequential_processing(queue_mgr):
-    with patch('engine.queue_manager.TranslationQueue._process_job') as mock_process:
+    with patch("engine.queue_manager.TranslationQueue._process_job") as mock_process:
         processed_order = []
+
         def track_process(job):
             processed_order.append(job.id)
             time.sleep(0.1)
-            
+
         mock_process.side_effect = track_process
-        
+
         id1 = queue_mgr.add_job("1.docx", "o1.docx", "ja2en", "fast_nmt", "test", {})
         id2 = queue_mgr.add_job("2.docx", "o2.docx", "ja2en", "fast_nmt", "test", {})
-        
+
         # Wait for both to complete
         timeout = time.time() + 2.0
         while len(processed_order) < 2 and time.time() < timeout:
             time.sleep(0.05)
-            
+
         assert processed_order == [id1, id2]
-        
+
+
 def test_clear_completed(queue_mgr):
-    with patch('engine.queue_manager.TranslationQueue._process_job'):
+    with patch("engine.queue_manager.TranslationQueue._process_job"):
         id1 = queue_mgr.add_job("1.docx", "o1.docx", "ja2en", "fast_nmt", "test", {})
         id2 = queue_mgr.add_job("2.docx", "o2.docx", "ja2en", "fast_nmt", "test", {})
-        
+
         timeout = time.time() + 2.0
         while len(queue_mgr.get_all_jobs()) < 2:
             time.sleep(0.05)
-            
+
         # wait until completed
-        while any(j.status not in (JobStatus.COMPLETED, JobStatus.FAILED) for j in queue_mgr.get_all_jobs()) and time.time() < timeout:
+        while (
+            any(j.status not in (JobStatus.COMPLETED, JobStatus.FAILED) for j in queue_mgr.get_all_jobs())
+            and time.time() < timeout
+        ):
             time.sleep(0.05)
-            
+
         queue_mgr.clear_completed()
         assert len(queue_mgr.get_all_jobs()) == 0
+
 
 def test_shutdown_stops_worker():
     qm = TranslationQueue()
     assert qm._worker_thread.is_alive()
     qm.shutdown()
-    
+
     # Allow time for thread to exit
     time.sleep(0.1)
     assert not qm._worker_thread.is_alive()
 
 
-@patch('engine.queue_manager.execute_translation')
+@patch("engine.queue_manager.execute_translation")
 def test_job_failure_with_translator_error(mock_execute, queue_mgr):
     err = TranslatorError(ErrorCode.E01, detail="Ollama connection refused")
     mock_execute.side_effect = err
@@ -198,7 +212,7 @@ def test_job_failure_with_translator_error(mock_execute, queue_mgr):
         direction="ja2en",
         mode=TranslationMode.PURE_LLM,
         model_name="gemma4:e2b-it-qat",
-        glossary={}
+        glossary={},
     )
     job = queue_mgr.get_job(job_id)
     assert job is not None
@@ -216,7 +230,7 @@ def test_job_failure_with_translator_error(mock_execute, queue_mgr):
     assert "E01" in job.error.format_user_dialog()
 
 
-@patch('engine.queue_manager.execute_translation')
+@patch("engine.queue_manager.execute_translation")
 def test_job_failure_with_generic_exception(mock_execute, queue_mgr):
     mock_execute.side_effect = RuntimeError("Unexpected disk error")
 
@@ -226,7 +240,7 @@ def test_job_failure_with_generic_exception(mock_execute, queue_mgr):
         direction="ja2en",
         mode=TranslationMode.FAST_NMT,
         model_name="argos",
-        glossary={}
+        glossary={},
     )
     job = queue_mgr.get_job(job_id)
     assert job is not None
@@ -243,6 +257,7 @@ def test_job_failure_with_generic_exception(mock_execute, queue_mgr):
 
 def test_gui_widget_update_failed_structured_error():
     from gui.app import TranslatorApp
+
     app = MagicMock()
     st_lbl = MagicMock()
     app._job_widgets = {
@@ -275,7 +290,7 @@ def test_gui_widget_update_failed_structured_error():
     click_seq, callback = st_lbl.bind.call_args[0]
     assert click_seq == "<Button-1>"
 
-    with patch('gui.app.messagebox.showerror') as mock_showerror:
+    with patch("gui.app.messagebox.showerror") as mock_showerror:
         callback(None)
         assert mock_showerror.called
         title_arg, msg_arg = mock_showerror.call_args[0]
@@ -285,6 +300,7 @@ def test_gui_widget_update_failed_structured_error():
 
 def test_gui_widget_update_failed_generic_error():
     from gui.app import TranslatorApp
+
     app = MagicMock()
     st_lbl = MagicMock()
     app._job_widgets = {
@@ -316,7 +332,7 @@ def test_gui_widget_update_failed_generic_error():
     click_seq, callback = st_lbl.bind.call_args[0]
     assert click_seq == "<Button-1>"
 
-    with patch('gui.app.messagebox.showerror') as mock_showerror:
+    with patch("gui.app.messagebox.showerror") as mock_showerror:
         callback(None)
         assert mock_showerror.called
         title_arg, msg_arg = mock_showerror.call_args[0]
@@ -325,7 +341,7 @@ def test_gui_widget_update_failed_generic_error():
 
 
 def test_job_cache_policy_forwarding(queue_mgr):
-    with patch('engine.queue_manager.execute_translation') as mock_exec:
+    with patch("engine.queue_manager.execute_translation") as mock_exec:
         mock_exec.return_value = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
 
         # 1. Default job has CachePolicy.ENCRYPTED_PERSISTENT
@@ -334,17 +350,16 @@ def test_job_cache_policy_forwarding(queue_mgr):
         assert job1.cache_policy == CachePolicy.ENCRYPTED_PERSISTENT
 
         # 2. Custom job with string/enum cache policy
-        jid2 = queue_mgr.add_job(
-            "f2.docx", "o2.docx", "ja2en", "fast_nmt", "model", {},
-            cache_policy="memory_only"
-        )
+        jid2 = queue_mgr.add_job("f2.docx", "o2.docx", "ja2en", "fast_nmt", "model", {}, cache_policy="memory_only")
         job2 = queue_mgr.get_job(jid2)
         assert job2.cache_policy == CachePolicy.MEMORY_ONLY
 
         # Wait for job2 to finish processing
         timeout = time.time() + 2.0
-        while (job1.status not in (JobStatus.COMPLETED, JobStatus.FAILED) or
-               job2.status not in (JobStatus.COMPLETED, JobStatus.FAILED)) and time.time() < timeout:
+        while (
+            job1.status not in (JobStatus.COMPLETED, JobStatus.FAILED)
+            or job2.status not in (JobStatus.COMPLETED, JobStatus.FAILED)
+        ) and time.time() < timeout:
             time.sleep(0.05)
 
         # Assert execute_translation was called with each job's cache_policy
@@ -356,6 +371,7 @@ def test_job_cache_policy_forwarding(queue_mgr):
 
 def test_job_row_update_job_completed_with_stats():
     from gui.widgets.job_row import JobRow
+
     st_lbl = MagicMock()
     progress_bar = MagicMock()
     cancel_btn = MagicMock()
@@ -398,6 +414,7 @@ def test_job_row_update_job_completed_with_stats():
 
 def test_job_row_update_job_completed_clean_stats():
     from gui.widgets.job_row import JobRow
+
     st_lbl = MagicMock()
     progress_bar = MagicMock()
     cancel_btn = MagicMock()
@@ -431,6 +448,7 @@ def test_job_row_update_job_completed_clean_stats():
 
 def test_job_row_update_job_completed_without_result():
     from gui.widgets.job_row import JobRow
+
     st_lbl = MagicMock()
     progress_bar = MagicMock()
     cancel_btn = MagicMock()
@@ -464,6 +482,7 @@ def test_job_row_update_job_completed_without_result():
 
 def test_gui_widget_update_completed_stats():
     from gui.app import TranslatorApp
+
     app = MagicMock()
     st_lbl = MagicMock()
     app._job_widgets = {
@@ -500,6 +519,7 @@ def test_gui_widget_update_completed_stats():
 
 def test_format_eta():
     from engine.queue_manager import format_eta
+
     assert format_eta(None) == ""
     assert format_eta(0) == ""
     assert format_eta(-10) == ""
@@ -542,7 +562,8 @@ def test_job_eta_str_property():
 
 
 def test_queue_manager_progress_cb_calculates_eta(queue_mgr):
-    with patch('engine.queue_manager.execute_translation') as mock_execute:
+    with patch("engine.queue_manager.execute_translation") as mock_execute:
+
         def fake_execute(*args, progress_cb=None, **kwargs):
             if progress_cb:
                 progress_cb(1, 4, "Chunk 1")
@@ -567,6 +588,7 @@ def test_queue_manager_progress_cb_calculates_eta(queue_mgr):
 
 def test_job_row_update_job_running_with_eta():
     from gui.widgets.job_row import JobRow
+
     st_lbl = MagicMock()
     progress_bar = MagicMock()
     cancel_btn = MagicMock()
@@ -606,6 +628,7 @@ def test_job_row_update_job_running_with_eta():
 
 def test_job_row_update_job_running_without_eta():
     from gui.widgets.job_row import JobRow
+
     st_lbl = MagicMock()
     progress_bar = MagicMock()
     cancel_btn = MagicMock()
@@ -638,6 +661,7 @@ def test_job_row_update_job_running_without_eta():
 
 def test_gui_widget_update_running_eta():
     from gui.app import TranslatorApp
+
     app = MagicMock()
     st_lbl = MagicMock()
     app._job_widgets = {
@@ -672,6 +696,7 @@ def test_gui_widget_update_running_eta():
 
 def test_job_row_completed_micro_actions_without_review_log(tmp_path):
     from gui.widgets.job_row import JobRow
+
     st_lbl = MagicMock()
     progress_bar = MagicMock()
     cancel_btn = MagicMock()
@@ -721,6 +746,7 @@ def test_job_row_completed_micro_actions_without_review_log(tmp_path):
 
 def test_job_row_completed_micro_actions_with_review_log(tmp_path):
     from gui.widgets.job_row import JobRow
+
     st_lbl = MagicMock()
     progress_bar = MagicMock()
     cancel_btn = MagicMock()
@@ -786,28 +812,27 @@ def test_job_row_open_action_handlers(tmp_path):
     row._output_path = out_file
     row._review_log_path = rev_file
 
-    with patch("os.startfile", create=True) as mock_startfile:
-        with patch("subprocess.Popen") as mock_popen:
-            # 1. Open output file
-            JobRow._handle_open_file(row)
-            if sys.platform == "win32":
-                mock_startfile.assert_called_with(out_file)
-            else:
-                assert mock_popen.called
+    with patch("os.startfile", create=True) as mock_startfile, patch("subprocess.Popen") as mock_popen:
+        # 1. Open output file
+        JobRow._handle_open_file(row)
+        if sys.platform == "win32":
+            mock_startfile.assert_called_with(out_file)
+        else:
+            assert mock_popen.called
 
-            # 2. Open containing folder (selects file on Windows)
-            JobRow._handle_open_folder(row)
-            if sys.platform == "win32":
-                mock_popen.assert_called_with(["explorer", "/select,", os.path.abspath(out_file)])
-            else:
-                assert mock_popen.called
+        # 2. Open containing folder (selects file on Windows)
+        JobRow._handle_open_folder(row)
+        if sys.platform == "win32":
+            mock_popen.assert_called_with(["explorer", "/select,", os.path.abspath(out_file)])
+        else:
+            assert mock_popen.called
 
-            # 3. Open review log
-            JobRow._handle_open_review(row)
-            if sys.platform == "win32":
-                mock_startfile.assert_called_with(rev_file)
-            else:
-                assert mock_popen.called
+        # 3. Open review log
+        JobRow._handle_open_review(row)
+        if sys.platform == "win32":
+            mock_startfile.assert_called_with(rev_file)
+        else:
+            assert mock_popen.called
 
 
 def test_documents_view_multi_job_post_action_summary(tmp_path):
@@ -825,23 +850,40 @@ def test_documents_view_multi_job_post_action_summary(tmp_path):
     view._update_post_action_buttons = lambda: DocumentsView._update_post_action_buttons(view)
 
     out1 = str(tmp_path / "doc1.docx")
-    with open(out1, "w") as f: f.write("1")
+    with open(out1, "w") as f:
+        f.write("1")
     out2 = str(tmp_path / "doc2.docx")
-    with open(out2, "w") as f: f.write("2")
+    with open(out2, "w") as f:
+        f.write("2")
 
     job1 = TranslationJob(
-        id="j1", input_path="d1.docx", output_path=out1, direction="ja2en",
-        mode=TranslationMode.FAST_NMT, model_name="m", glossary={},
-        status=JobStatus.COMPLETED, progress=100.0, progress_message="Done",
+        id="j1",
+        input_path="d1.docx",
+        output_path=out1,
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="m",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Done",
         review_log_path="",
     )
     job2 = TranslationJob(
-        id="j2", input_path="d2.docx", output_path=out2, direction="ja2en",
-        mode=TranslationMode.FAST_NMT, model_name="m", glossary={},
-        status=JobStatus.COMPLETED, progress=100.0, progress_message="Done",
+        id="j2",
+        input_path="d2.docx",
+        output_path=out2,
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="m",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Done",
         review_log_path=str(tmp_path / "rev.log"),
     )
-    with open(str(tmp_path / "rev.log"), "w") as f: f.write("review log")
+    with open(str(tmp_path / "rev.log"), "w") as f:
+        f.write("review log")
 
     # 1. Complete job 1: single output summary
     view._job_widgets = {job1.id: MagicMock(spec=JobRow), job2.id: MagicMock(spec=JobRow)}
@@ -861,14 +903,9 @@ def test_documents_view_multi_job_post_action_summary(tmp_path):
     assert view.review_btn.configure.call_args.kwargs["state"] == "normal"
 
     # 3. Test open_last_output opens all completed outputs
-    with patch("os.startfile", create=True) as mock_startfile:
-        with patch("subprocess.Popen") as mock_popen:
-            DocumentsView.open_last_output(view)
-            if sys.platform == "win32":
-                assert mock_startfile.call_count == 2
-            else:
-                assert mock_popen.call_count == 2
-
-
-
-
+    with patch("os.startfile", create=True) as mock_startfile, patch("subprocess.Popen") as mock_popen:
+        DocumentsView.open_last_output(view)
+        if sys.platform == "win32":
+            assert mock_startfile.call_count == 2
+        else:
+            assert mock_popen.call_count == 2

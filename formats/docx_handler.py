@@ -12,23 +12,23 @@ import re
 import shutil
 import tempfile
 import threading
-from typing import Callable, Optional, Dict, Any, List, Tuple
+from collections.abc import Callable
+from typing import Any
 
-from formats.base import BaseFormatHandler, XML_TAG_ATTRS
-from formats.xml_utils import parse_xml_safely
-from engine.core import escape_xml, unescape_xml, hash_text, should_translate
 from engine.errors import ErrorCode, TranslatorError
+from formats.base import XML_TAG_ATTRS, BaseFormatHandler
+from formats.xml_utils import parse_xml_safely
 
 
 class DOCXHandler(BaseFormatHandler):
     """Handles translation of Microsoft Word documents (.docx)."""
 
-    def _count_translatable_paragraphs(self, target_files: List[Tuple[str, str]], direction: str) -> int:
+    def _count_translatable_paragraphs(self, target_files: list[tuple[str, str]], direction: str) -> int:
         """Counts total translatable paragraphs across all Word XML parts."""
         total = 0
         for _, file_path in target_files:
             self.validate_xml_part_size(file_path)
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 xml_str = f.read()
             total += self.count_translatable_paragraphs_in_xml(xml_str, tag_prefix="w", direction=direction)
         return total
@@ -38,16 +38,16 @@ class DOCXHandler(BaseFormatHandler):
         xml_str: str,
         part_name: str,
         direction: str,
-        review_log_path: Optional[str],
-        stats: Dict[str, int],
-        progress_state: Dict[str, Any],
-        progress_cb: Optional[Callable[[int, int, str], None]],
-        log_cb: Optional[Callable[[str], None]],
-        cancel_event: Optional[threading.Event] = None,
-        extra_nsmap: Optional[Dict[str, str]] = None,
+        review_log_path: str | None,
+        stats: dict[str, int],
+        progress_state: dict[str, Any],
+        progress_cb: Callable[[int, int, str], None] | None,
+        log_cb: Callable[[str], None] | None,
+        cancel_event: threading.Event | None = None,
+        extra_nsmap: dict[str, str] | None = None,
     ) -> str:
         p_pattern = re.compile(rf"(<w:p\b{XML_TAG_ATTRS}>)(.*?)(</w:p>)", re.DOTALL)
-        recent_paragraphs: List[str] = []
+        recent_paragraphs: list[str] = []
 
         def p_repl(match):
             if cancel_event and cancel_event.is_set():
@@ -92,11 +92,11 @@ class DOCXHandler(BaseFormatHandler):
         input_path: str,
         output_path: str,
         direction: str,
-        review_log_path: Optional[str] = None,
-        progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-        cancel_event: Optional[threading.Event] = None,
-    ) -> Dict[str, Any]:
+        review_log_path: str | None = None,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        log_cb: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         self.validate_input_file(input_path)
         if cancel_event and cancel_event.is_set():
             raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
@@ -122,29 +122,31 @@ class DOCXHandler(BaseFormatHandler):
             if os.path.exists(doc_xml):
                 target_files.append(("document.xml", doc_xml))
 
-            for f in os.listdir(word_dir):
-                if f.endswith(".xml") and (
-                    f.startswith("header") or
-                    f.startswith("footer") or
-                    f.startswith("footnotes") or
-                    f.startswith("endnotes")
-                ):
-                    target_files.append((f, os.path.join(word_dir, f)))
+            target_files.extend(
+                (f, os.path.join(word_dir, f))
+                for f in os.listdir(word_dir)
+                if f.endswith(".xml")
+                and (
+                    f.startswith("header")
+                    or f.startswith("footer")
+                    or f.startswith("footnotes")
+                    or f.startswith("endnotes")
+                )
+            )
 
             total_translatable = self._count_translatable_paragraphs(target_files, direction)
             if log_cb:
-                log_cb(f"[*] Found {total_translatable} translatable paragraph(s) across {len(target_files)} document part(s).")
+                log_cb(
+                    f"[*] Found {total_translatable} translatable paragraph(s) across {len(target_files)} document part(s)."
+                )
 
-            progress_state = {
-                "current": 0,
-                "total": max(1, total_translatable)
-            }
+            progress_state = {"current": 0, "total": max(1, total_translatable)}
 
             for label, file_path in target_files:
                 if cancel_event and cancel_event.is_set():
                     raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
                 self.validate_xml_part_size(file_path)
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, encoding="utf-8") as f:
                     xml_data = f.read()
 
                 # Security: check for XXE / prohibited entity or DTD declarations and extract root nsmap

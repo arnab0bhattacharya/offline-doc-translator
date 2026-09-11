@@ -7,11 +7,11 @@ supporting subscriber registration, level filtering, CLI/GUI formatters,
 and seamless bridging to legacy string callbacks.
 """
 
-import time
 import json
-import logging
-from dataclasses import dataclass, field, asdict
-from typing import Optional, Dict, Any, Callable, List
+import time
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 # Standard log levels
 LOG_LEVELS = ("debug", "info", "warning", "error")
@@ -25,15 +25,16 @@ class TranslationLogEvent:
     """
     Typed event payload representing a single logging or telemetry occurrence.
     """
+
     level: str  # "debug", "info", "warning", "error"
     category: str  # "system", "cache", "translation", "preflight", "format", "backend"
     message: str
-    location: Optional[str] = None
-    elapsed: Optional[float] = None
-    details: Optional[Dict[str, Any]] = None
+    location: str | None = None
+    elapsed: float | None = None
+    details: dict[str, Any] | None = None
     timestamp: float = field(default_factory=time.time)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def to_json(self) -> str:
@@ -74,7 +75,7 @@ class TranslationLogger:
     def __init__(self, name: str = "translator", min_level: str = "info"):
         self.name = name
         self.min_level = min_level
-        self._subscribers: List[Callable[[TranslationLogEvent], None]] = []
+        self._subscribers: list[Callable[[TranslationLogEvent], None]] = []
 
     def subscribe(self, callback: Callable[[TranslationLogEvent], None]) -> None:
         """Registers a listener for structured log events."""
@@ -103,9 +104,9 @@ class TranslationLogger:
         level: str,
         category: str,
         message: str,
-        location: Optional[str] = None,
-        elapsed: Optional[float] = None,
-        details: Optional[Dict[str, Any]] = None,
+        location: str | None = None,
+        elapsed: float | None = None,
+        details: dict[str, Any] | None = None,
     ) -> TranslationLogEvent:
         event = TranslationLogEvent(
             level=level,
@@ -122,9 +123,9 @@ class TranslationLogger:
         self,
         message: str,
         category: str = "system",
-        location: Optional[str] = None,
-        elapsed: Optional[float] = None,
-        details: Optional[Dict[str, Any]] = None
+        location: str | None = None,
+        elapsed: float | None = None,
+        details: dict[str, Any] | None = None,
     ) -> TranslationLogEvent:
         return self.log("info", category, message, location=location, elapsed=elapsed, details=details)
 
@@ -132,9 +133,9 @@ class TranslationLogger:
         self,
         message: str,
         category: str = "system",
-        location: Optional[str] = None,
-        elapsed: Optional[float] = None,
-        details: Optional[Dict[str, Any]] = None
+        location: str | None = None,
+        elapsed: float | None = None,
+        details: dict[str, Any] | None = None,
     ) -> TranslationLogEvent:
         return self.log("warning", category, message, location=location, elapsed=elapsed, details=details)
 
@@ -142,9 +143,9 @@ class TranslationLogger:
         self,
         message: str,
         category: str = "system",
-        location: Optional[str] = None,
-        elapsed: Optional[float] = None,
-        details: Optional[Dict[str, Any]] = None
+        location: str | None = None,
+        elapsed: float | None = None,
+        details: dict[str, Any] | None = None,
     ) -> TranslationLogEvent:
         return self.log("error", category, message, location=location, elapsed=elapsed, details=details)
 
@@ -152,20 +153,23 @@ class TranslationLogger:
         self,
         message: str,
         category: str = "system",
-        location: Optional[str] = None,
-        elapsed: Optional[float] = None,
-        details: Optional[Dict[str, Any]] = None
+        location: str | None = None,
+        elapsed: float | None = None,
+        details: dict[str, Any] | None = None,
     ) -> TranslationLogEvent:
         return self.log("debug", category, message, location=location, elapsed=elapsed, details=details)
 
     def add_legacy_callback(self, cb: Callable[[str], None]) -> None:
         """Bridges a legacy string callback function(msg) by subscribing a formatter wrapper."""
+
         def adapter(event: TranslationLogEvent):
             cb(event.to_cli_string())
+
         self.subscribe(adapter)
 
     def as_log_cb(self, category: str = "system") -> Callable[[str], None]:
         """Returns a legacy log_cb(str) function that converts raw strings into structured events."""
+
         def legacy_cb(raw_msg: str):
             msg = raw_msg.strip()
             level = "info"
@@ -179,16 +183,19 @@ class TranslationLogger:
             elif "[*]" in msg:
                 level = "info"
 
-            self.emit(TranslationLogEvent(
-                level=level,
-                category=cat,
-                message=raw_msg,
-            ))
+            self.emit(
+                TranslationLogEvent(
+                    level=level,
+                    category=cat,
+                    message=raw_msg,
+                )
+            )
+
         return legacy_cb
 
 
 # Global default logger instance
-_default_logger: Optional[TranslationLogger] = None
+_default_logger: TranslationLogger | None = None
 
 
 def get_logger(name: str = "translator") -> TranslationLogger:

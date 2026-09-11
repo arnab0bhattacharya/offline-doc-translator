@@ -4,24 +4,24 @@ formats/base.py
 Abstract base class defining the contract for all document format handlers.
 """
 
-from abc import ABC, abstractmethod
-from typing import Callable, Optional, Dict, Any, List, Tuple, Union, TYPE_CHECKING
 import os
 import re
 import shutil
-import zipfile
 import tempfile
 import threading
+import zipfile
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from engine.core import (
-    escape_xml,
-    unescape_xml,
+    TranslationResult,
     hash_text,
     should_translate,
-    TranslationResult,
+    unescape_xml,
 )
 from engine.errors import ErrorCode, TranslatorError
-from engine.security_policy import DocumentSecurityPolicy, DEFAULT_POLICY
+from engine.security_policy import DEFAULT_POLICY, DocumentSecurityPolicy
 from formats.xml_utils import mutate_paragraph_text_nodes_lxml
 
 if TYPE_CHECKING:
@@ -43,7 +43,7 @@ class ZipSecurityError(TranslatorError, zipfile.BadZipFile):
         self,
         detail: str = "",
         code: ErrorCode = ErrorCode.E04,
-        original_exc: Optional[Exception] = None,
+        original_exc: Exception | None = None,
     ):
         super().__init__(code=code, detail=detail, original_exc=original_exc)
 
@@ -54,7 +54,7 @@ class BaseFormatHandler(ABC):
     def __init__(
         self,
         engine: "TranslationEngine",
-        policy: Optional[DocumentSecurityPolicy] = None,
+        policy: DocumentSecurityPolicy | None = None,
     ):
         self.engine = engine
         self.policy = policy or DEFAULT_POLICY
@@ -65,14 +65,14 @@ class BaseFormatHandler(ABC):
         input_path: str,
         output_path: str,
         direction: str,
-        review_log_path: Optional[str] = None,
-        progress_cb: Optional[Callable[[int, int, str], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
-        cancel_event: Optional[threading.Event] = None,
-    ) -> Dict[str, Any]:
+        review_log_path: str | None = None,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        log_cb: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         """
         Translates the document from input_path to output_path.
-        
+
         Args:
             input_path: Absolute or relative path to source document.
             output_path: Path where translated document should be saved.
@@ -81,7 +81,7 @@ class BaseFormatHandler(ABC):
             progress_cb: Optional callback func(current_step, total_steps, message).
             log_cb: Optional callback func(log_message).
             cancel_event: Optional threading.Event to signal cooperative cancellation.
-            
+
         Returns:
             Dict with statistics: {"total": int, "translated": int, "reverted": int, "skipped": int}
         """
@@ -90,10 +90,7 @@ class BaseFormatHandler(ABC):
     def validate_input_file(self, input_path: str) -> None:
         """Validates that input file exists and does not exceed policy maximum input size."""
         if not os.path.exists(input_path):
-            raise TranslatorError(
-                ErrorCode.E04,
-                detail=f"Input file not found: '{input_path}'."
-            )
+            raise TranslatorError(ErrorCode.E04, detail=f"Input file not found: '{input_path}'.")
         file_size = os.path.getsize(input_path)
         if file_size > self.policy.max_input_bytes:
             raise TranslatorError(
@@ -101,7 +98,7 @@ class BaseFormatHandler(ABC):
                 detail=(
                     f"Input file '{os.path.basename(input_path)}' ({file_size / 1024 / 1024:.1f} MB) "
                     f"exceeds maximum allowed size ({self.policy.max_input_bytes / 1024 / 1024:.0f} MB)."
-                )
+                ),
             )
 
     def validate_xml_part_size(self, file_path: str) -> None:
@@ -114,14 +111,14 @@ class BaseFormatHandler(ABC):
                     detail=(
                         f"XML part '{os.path.basename(file_path)}' ({part_size / 1024 / 1024:.1f} MB) "
                         f"exceeds maximum allowed size ({self.policy.max_xml_part_bytes / 1024 / 1024:.0f} MB)."
-                    )
+                    ),
                 )
 
     @staticmethod
     def extract_zip(
         archive_path: str,
         target_dir: str,
-        policy: Optional[DocumentSecurityPolicy] = None,
+        policy: DocumentSecurityPolicy | None = None,
     ) -> None:
         """Extracts an OOXML archive with disk-aware decompression-bomb protection."""
         pol = policy or DEFAULT_POLICY
@@ -220,7 +217,7 @@ class BaseFormatHandler(ABC):
                 detail=f"Corrupted or invalid zip archive '{os.path.basename(archive_path)}': {bzf}",
                 code=ErrorCode.E04,
                 original_exc=bzf,
-            )
+            ) from bzf
         except Exception:
             if os.path.exists(target_root):
                 shutil.rmtree(target_root, ignore_errors=True)
@@ -279,7 +276,7 @@ class BaseFormatHandler(ABC):
     def extract_paragraph_text_nodes(
         p_content: str,
         tag_prefix: str,
-    ) -> Tuple[str, List[Any]]:
+    ) -> tuple[str, list[Any]]:
         """
         Extracts unescaped aggregated text and regex match objects for <prefix:t> nodes.
         tag_prefix is 'w' for Word (.docx) or 'a' for PowerPoint (.pptx).
@@ -294,21 +291,21 @@ class BaseFormatHandler(ABC):
     def _translate_and_replace_text_nodes(
         self,
         full_text: str,
-        t_matches: List[Any],
+        t_matches: list[Any],
         p_content: str,
         direction: str,
-        context: Optional[Union[str, Callable[[str], Optional[str]]]],
+        context: str | Callable[[str], str | None] | None,
         part_name: str,
-        review_log_path: Optional[str],
-        stats: Dict[str, int],
-        progress_state: Dict[str, Any],
-        progress_cb: Optional[Callable[[int, int, str], None]],
-        log_cb: Optional[Callable[[str], None]],
+        review_log_path: str | None,
+        stats: dict[str, int],
+        progress_state: dict[str, Any],
+        progress_cb: Callable[[int, int, str], None] | None,
+        log_cb: Callable[[str], None] | None,
         tag_prefix: str,
-        recent_paragraphs: Optional[List[str]] = None,
-        cancel_event: Optional[threading.Event] = None,
-        extra_nsmap: Optional[Dict[str, str]] = None,
-    ) -> Optional[str]:
+        recent_paragraphs: list[str] | None = None,
+        cancel_event: threading.Event | None = None,
+        extra_nsmap: dict[str, str] | None = None,
+    ) -> str | None:
         """
         Shared logic for translating and replacing text units within an OOXML paragraph:
         1. Validates text and checks should_translate.
@@ -333,7 +330,7 @@ class BaseFormatHandler(ABC):
                 detail=(
                     f"Text chunk length ({len(full_text)} chars) exceeds maximum allowed limit "
                     f"({self.policy.max_text_chunk_chars} chars)."
-                )
+                ),
             )
 
         stats["total"] += 1
@@ -354,11 +351,7 @@ class BaseFormatHandler(ABC):
         total_items = progress_state["total"]
 
         if progress_cb:
-            progress_cb(
-                cur_idx,
-                total_items,
-                f"[{cur_idx}/{total_items}] {part_name}: \"{full_text[:20]}..\""
-            )
+            progress_cb(cur_idx, total_items, f'[{cur_idx}/{total_items}] {part_name}: "{full_text[:20]}.."')
 
         context_str = context(full_text) if callable(context) else context
         chunk_id = hash_text(full_text)[:8]
@@ -405,9 +398,7 @@ class BaseFormatHandler(ABC):
                 return dom_mutated
 
             raise TranslatorError(
-                ErrorCode.E04,
-                detail=f"Failed DOM mutation for text unit in {part_name}: no valid text nodes found."
+                ErrorCode.E04, detail=f"Failed DOM mutation for text unit in {part_name}: no valid text nodes found."
             )
 
         return None
-

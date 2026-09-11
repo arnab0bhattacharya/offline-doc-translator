@@ -5,6 +5,8 @@ Reusable widget representing a single active, queued, or completed translation j
 """
 
 import os
+import subprocess
+import sys
 import time
 from tkinter import messagebox
 from typing import Callable, Optional
@@ -18,6 +20,17 @@ class JobRow(ctk.CTkFrame):
     """
     Renders and manages a single job row in the translation queue.
     """
+    _output_path: str = ""
+    _review_log_path: str = ""
+    open_file_button: Optional[ctk.CTkButton] = None
+    open_folder_button: Optional[ctk.CTkButton] = None
+    review_button: Optional[ctk.CTkButton] = None
+    cancel_button: Optional[ctk.CTkButton] = None
+    actions_frame: Optional[ctk.CTkFrame] = None
+    st_label: Optional[ctk.CTkLabel] = None
+    progress_bar: Optional[ctk.CTkProgressBar] = None
+    name_label: Optional[ctk.CTkLabel] = None
+    badge_label: Optional[ctk.CTkLabel] = None
 
     def __init__(
         self,
@@ -29,6 +42,8 @@ class JobRow(ctk.CTkFrame):
         super().__init__(master, fg_color=THEME["staging_bg"], corner_radius=8, **kwargs)
         self.job_id = job.id
         self.on_cancel = on_cancel
+        self._output_path = getattr(job, "output_path", "")
+        self._review_log_path = getattr(job, "review_log_path", "")
 
         ext = os.path.splitext(job.input_path)[1].lower().replace(".", "").upper()
         bcolor = THEME.get(f"badge_{ext.lower()}", THEME["primary"])
@@ -60,19 +75,45 @@ class JobRow(ctk.CTkFrame):
         )
         self.st_label.pack(side="left", padx=4)
 
+        # Actions Container Frame (right side)
+        self.actions_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.actions_frame.pack(side="right", padx=6)
+
         # Cancel Button
         self.cancel_button = ctk.CTkButton(
-            self, text="✕", width=24, height=22, font=ctk.CTkFont(size=10),
+            self.actions_frame, text="✕", width=24, height=22, font=ctk.CTkFont(size=10),
             fg_color=THEME["error"], hover_color="#991B1B",
             command=self._handle_cancel
         )
-        self.cancel_button.pack(side="right", padx=8)
+        self.cancel_button.pack(side="right")
+
+        # Micro Action Buttons (displayed after job completion)
+        self.open_file_button = ctk.CTkButton(
+            self.actions_frame, text="📄", width=24, height=22, font=ctk.CTkFont(size=11),
+            fg_color=THEME["btn_secondary"], hover_color=THEME["btn_sec_hover"],
+            command=self._handle_open_file
+        )
+
+        self.open_folder_button = ctk.CTkButton(
+            self.actions_frame, text="📁", width=24, height=22, font=ctk.CTkFont(size=11),
+            fg_color=THEME["btn_secondary"], hover_color=THEME["btn_sec_hover"],
+            command=self._handle_open_folder
+        )
+
+        self.review_button = ctk.CTkButton(
+            self.actions_frame, text="⚠", width=24, height=22, font=ctk.CTkFont(size=11),
+            fg_color=THEME["warning"], hover_color="#B45309",
+            command=self._handle_open_review
+        )
 
         # Aliases for dictionary-style compatibility
         self.row = self
         self.progress = self.progress_bar
         self.status_label = self.st_label
         self.cancel_btn = self.cancel_button
+        self.open_file_btn = self.open_file_button
+        self.open_folder_btn = self.open_folder_button
+        self.review_btn = self.review_button
 
         self.update_job(job)
 
@@ -82,6 +123,9 @@ class JobRow(ctk.CTkFrame):
             "progress": self.progress,
             "status_label": self.status_label,
             "cancel_btn": self.cancel_btn,
+            "open_file_btn": self.open_file_btn,
+            "open_folder_btn": self.open_folder_btn,
+            "review_btn": self.review_btn,
         }
         if key in aliases:
             return aliases[key]
@@ -92,15 +136,69 @@ class JobRow(ctk.CTkFrame):
             self.cancel_button.configure(state="disabled")
             self.on_cancel(self.job_id)
 
+    def _handle_open_file(self):
+        target = self._output_path
+        if not target or not os.path.exists(target):
+            messagebox.showwarning("File Not Found", f"Output file does not exist:\n{target}")
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(target)
+            else:
+                subprocess.Popen(["xdg-open", target])
+        except Exception as e:
+            messagebox.showerror("Cannot Open File", str(e))
+
+    def _handle_open_folder(self):
+        target = self._output_path
+        if not target:
+            return
+        try:
+            abs_path = os.path.abspath(target)
+            if sys.platform == "win32":
+                if os.path.exists(abs_path):
+                    subprocess.Popen(["explorer", "/select,", abs_path])
+                else:
+                    d = os.path.dirname(abs_path)
+                    if os.path.exists(d):
+                        subprocess.Popen(["explorer", d])
+            else:
+                d = os.path.dirname(abs_path) if os.path.isfile(abs_path) else abs_path
+                subprocess.Popen(["xdg-open", d])
+        except Exception as e:
+            messagebox.showerror("Cannot Open Folder", str(e))
+
+    def _handle_open_review(self):
+        target = self._review_log_path
+        if not target or not os.path.exists(target):
+            messagebox.showinfo("No Review Log", "No review log was generated for this job.")
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(target)
+            else:
+                subprocess.Popen(["xdg-open", target])
+        except Exception as e:
+            messagebox.showerror("Cannot Open Review Log", str(e))
+
     def update_job(self, job: TranslationJob) -> None:
         """Applies updated status, progress, and error display for the job."""
+        self._output_path = getattr(job, "output_path", "") or self._output_path
+        self._review_log_path = getattr(job, "review_log_path", "") or self._review_log_path
+
         pct = job.progress / 100.0
         self.progress_bar.set(pct)
 
         if job.status == JobStatus.QUEUED:
             self.st_label.configure(text="⏳ Queued", text_color=THEME["text_secondary"], cursor="")
             self.st_label.unbind("<Button-1>")
-            self.cancel_button.configure(state="normal")
+            if hasattr(self, "open_file_button"):
+                self.open_file_button.pack_forget()
+                self.open_folder_button.pack_forget()
+                self.review_button.pack_forget()
+            if hasattr(self, "cancel_button"):
+                self.cancel_button.pack(side="right")
+                self.cancel_button.configure(state="normal")
         elif job.status == JobStatus.RUNNING:
             eta_str = getattr(job, "eta_str", "")
             if not eta_str and job.started_at and job.progress > 0 and job.progress < 100.0:
@@ -119,10 +217,16 @@ class JobRow(ctk.CTkFrame):
 
             self.st_label.configure(text=status_text, text_color=THEME["primary"], cursor="")
             self.st_label.unbind("<Button-1>")
-            if getattr(job, "cancel_event", None) and job.cancel_event.is_set():
-                self.cancel_button.configure(state="disabled")
-            else:
-                self.cancel_button.configure(state="normal")
+            if hasattr(self, "open_file_button"):
+                self.open_file_button.pack_forget()
+                self.open_folder_button.pack_forget()
+                self.review_button.pack_forget()
+            if hasattr(self, "cancel_button"):
+                self.cancel_button.pack(side="right")
+                if getattr(job, "cancel_event", None) and job.cancel_event.is_set():
+                    self.cancel_button.configure(state="disabled")
+                else:
+                    self.cancel_button.configure(state="normal")
         elif job.status == JobStatus.COMPLETED:
             elapsed = ""
             if job.started_at and job.completed_at:
@@ -149,9 +253,28 @@ class JobRow(ctk.CTkFrame):
 
             self.st_label.configure(text=status_text, text_color=THEME["success"], cursor="")
             self.st_label.unbind("<Button-1>")
-            self.cancel_button.configure(state="disabled")
             self.progress_bar.set(1.0)
+
+            if hasattr(self, "cancel_button"):
+                self.cancel_button.configure(state="disabled")
+                self.cancel_button.pack_forget()
+
+            if hasattr(self, "open_file_button"):
+                self.open_file_button.pack(side="left", padx=2)
+                self.open_folder_button.pack(side="left", padx=2)
+                if self._review_log_path and os.path.exists(self._review_log_path) and os.path.getsize(self._review_log_path) > 0:
+                    self.review_button.pack(side="left", padx=2)
+                else:
+                    self.review_button.pack_forget()
         elif job.status == JobStatus.FAILED:
+            if hasattr(self, "open_file_button"):
+                self.open_file_button.pack_forget()
+                self.open_folder_button.pack_forget()
+                self.review_button.pack_forget()
+            if hasattr(self, "cancel_button"):
+                self.cancel_button.pack(side="right")
+                self.cancel_button.configure(state="disabled")
+
             if job.error and hasattr(job.error, "title"):
                 err_display = job.error.title
             else:
@@ -159,7 +282,6 @@ class JobRow(ctk.CTkFrame):
             if len(err_display) > 22:
                 err_display = err_display[:20] + "..."
             self.st_label.configure(text=f"❌ {err_display}", text_color=THEME["error"])
-            self.cancel_button.configure(state="disabled")
 
             if job.error and hasattr(job.error, "format_user_dialog"):
                 self.st_label.configure(cursor="hand2")
@@ -184,4 +306,10 @@ class JobRow(ctk.CTkFrame):
         elif job.status == JobStatus.CANCELLED:
             self.st_label.configure(text="⛔ Cancelled", text_color=THEME["text_secondary"], cursor="")
             self.st_label.unbind("<Button-1>")
-            self.cancel_button.configure(state="disabled")
+            if hasattr(self, "open_file_button"):
+                self.open_file_button.pack_forget()
+                self.open_folder_button.pack_forget()
+                self.review_button.pack_forget()
+            if hasattr(self, "cancel_button"):
+                self.cancel_button.pack(side="right")
+                self.cancel_button.configure(state="disabled")

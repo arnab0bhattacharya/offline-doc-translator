@@ -5,6 +5,7 @@ Main workspace view for multi-document batch translation, staging, and queue mon
 """
 
 import os
+import sys
 import time
 import subprocess
 from tkinter import messagebox
@@ -38,6 +39,8 @@ class DocumentsView(ctk.CTkFrame):
         self.on_log_cb = on_log
 
         self._job_widgets: Dict[str, Union[JobRow, Dict]] = {}
+        self._completed_outputs: List[str] = []
+        self._completed_review_logs: List[str] = []
         self._last_output_path: Optional[str] = None
         self._last_review_log: Optional[str] = None
         self._glossary_open = False
@@ -627,10 +630,44 @@ class DocumentsView(ctk.CTkFrame):
                     w["cancel_btn"].configure(state="disabled")
 
         if job.status == JobStatus.COMPLETED:
-            self.open_file_btn.configure(state="normal")
-            self.open_dir_btn.configure(state="normal")
+            if job.output_path:
+                self._last_output_path = job.output_path
+                if job.output_path not in self._completed_outputs:
+                    self._completed_outputs.append(job.output_path)
+            if job.review_log_path:
+                self._last_review_log = job.review_log_path
+                if os.path.exists(job.review_log_path) and os.path.getsize(job.review_log_path) > 0:
+                    if job.review_log_path not in self._completed_review_logs:
+                        self._completed_review_logs.append(job.review_log_path)
+
+            self._update_post_action_buttons()
+
+    def _update_post_action_buttons(self):
+        num_out = len(self._completed_outputs)
+        if num_out == 0:
+            if self._last_output_path and os.path.exists(self._last_output_path):
+                self.open_file_btn.configure(text="📄  Open Output File", state="normal")
+                self.open_dir_btn.configure(text="📁  Open Folder", state="normal")
+            else:
+                self.open_file_btn.configure(text="📄  Open Output File", state="disabled")
+                self.open_dir_btn.configure(text="📁  Open Folder", state="disabled")
+        elif num_out == 1:
+            self.open_file_btn.configure(text="📄  Open Output File", state="normal")
+            self.open_dir_btn.configure(text="📁  Open Folder", state="normal")
+        else:
+            self.open_file_btn.configure(text=f"📄  Open All Outputs ({num_out})", state="normal")
+            self.open_dir_btn.configure(text="📁  Open Output Folders", state="normal")
+
+        num_rev = len(self._completed_review_logs)
+        if num_rev == 0:
             if self._last_review_log and os.path.exists(self._last_review_log) and os.path.getsize(self._last_review_log) > 0:
-                self.review_btn.configure(state="normal")
+                self.review_btn.configure(text="⚠  Review Log", state="normal")
+            else:
+                self.review_btn.configure(text="⚠  Review Log", state="disabled")
+        elif num_rev == 1:
+            self.review_btn.configure(text="⚠  Review Log", state="normal")
+        else:
+            self.review_btn.configure(text=f"⚠  Review Logs ({num_rev})", state="normal")
 
     def clear_completed_jobs(self):
         self.controller.clear_completed()
@@ -646,33 +683,71 @@ class DocumentsView(ctk.CTkFrame):
         for jid in to_remove:
             del self._job_widgets[jid]
 
+        self._completed_outputs.clear()
+        self._completed_review_logs.clear()
+        self._last_output_path = None
+        self._last_review_log = None
+        self._update_post_action_buttons()
+
         if not self._job_widgets:
             self.queue_empty_label.pack(pady=14)
 
     # ── Post Actions ──
 
     def open_last_output(self):
-        if self._last_output_path and os.path.exists(self._last_output_path):
+        targets = [p for p in self._completed_outputs if os.path.exists(p)]
+        if not targets and self._last_output_path and os.path.exists(self._last_output_path):
+            targets = [self._last_output_path]
+        if not targets:
+            messagebox.showinfo("No Output Files", "No completed output files found.")
+            return
+
+        if len(targets) > 5:
+            if not messagebox.askyesno("Open All Output Files", f"Open all {len(targets)} translated documents?"):
+                return
+
+        for p in targets:
             try:
-                os.startfile(self._last_output_path)
+                if sys.platform == "win32":
+                    os.startfile(p)
+                else:
+                    subprocess.Popen(["xdg-open", p])
             except Exception as e:
-                messagebox.showerror("Cannot Open File", str(e))
+                messagebox.showerror("Cannot Open File", f"Could not open {p}:\n{e}")
 
     def open_last_dir(self):
-        if self._last_output_path:
-            d = os.path.dirname(os.path.abspath(self._last_output_path))
-            if os.path.exists(d):
-                try:
+        targets = self._completed_outputs or ([self._last_output_path] if self._last_output_path else [])
+        dirs = list(dict.fromkeys(os.path.dirname(os.path.abspath(p)) for p in targets if p))
+        valid_dirs = [d for d in dirs if os.path.exists(d)]
+        if not valid_dirs:
+            messagebox.showinfo("No Folders", "No output folders found.")
+            return
+
+        for d in valid_dirs:
+            try:
+                if sys.platform == "win32":
                     subprocess.Popen(["explorer", d])
-                except Exception:
-                    pass
+                else:
+                    subprocess.Popen(["xdg-open", d])
+            except Exception as e:
+                messagebox.showerror("Cannot Open Folder", f"Could not open {d}:\n{e}")
 
     def view_review_log(self):
-        if self._last_review_log and os.path.exists(self._last_review_log):
+        targets = [p for p in self._completed_review_logs if os.path.exists(p) and os.path.getsize(p) > 0]
+        if not targets and self._last_review_log and os.path.exists(self._last_review_log):
+            targets = [self._last_review_log]
+        if not targets:
+            messagebox.showinfo("No Review Logs", "No review logs were generated for completed jobs.")
+            return
+
+        for p in targets:
             try:
-                os.startfile(self._last_review_log)
+                if sys.platform == "win32":
+                    os.startfile(p)
+                else:
+                    subprocess.Popen(["xdg-open", p])
             except Exception as e:
-                messagebox.showerror("Cannot Open File", str(e))
+                messagebox.showerror("Cannot Open Review Log", f"Could not open {p}:\n{e}")
 
     def log(self, msg: str):
         self.log_text.configure(state="normal")

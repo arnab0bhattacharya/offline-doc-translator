@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import pytest
 from unittest.mock import patch, MagicMock
@@ -667,6 +668,206 @@ def test_gui_widget_update_running_eta():
     text_val = st_lbl.configure.call_args.kwargs.get("text", "")
     assert "🔄 60%" in text_val
     assert "(~2m left)" in text_val
+
+
+def test_job_row_completed_micro_actions_without_review_log(tmp_path):
+    from gui.widgets.job_row import JobRow
+    st_lbl = MagicMock()
+    progress_bar = MagicMock()
+    cancel_btn = MagicMock()
+    open_file_btn = MagicMock()
+    open_folder_btn = MagicMock()
+    review_btn = MagicMock()
+
+    out_file = str(tmp_path / "result.docx")
+    # File exists on disk
+    with open(out_file, "w") as f:
+        f.write("test")
+
+    job = TranslationJob(
+        id="job-micro-1",
+        input_path="sample.docx",
+        output_path=out_file,
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Completed",
+        started_at=100.0,
+        completed_at=110.0,
+        review_log_path=str(tmp_path / "result.docx.needs_review.log"),
+    )
+
+    row = MagicMock(spec=JobRow)
+    row.st_label = st_lbl
+    row.progress_bar = progress_bar
+    row.cancel_button = cancel_btn
+    row.open_file_button = open_file_btn
+    row.open_folder_button = open_folder_btn
+    row.review_button = review_btn
+    row._output_path = ""
+    row._review_log_path = ""
+
+    JobRow.update_job(row, job)
+
+    assert cancel_btn.pack_forget.called
+    assert open_file_btn.pack.called
+    assert open_folder_btn.pack.called
+    # Review log does not exist on disk, so review button should be hidden
+    assert review_btn.pack_forget.called
+
+
+def test_job_row_completed_micro_actions_with_review_log(tmp_path):
+    from gui.widgets.job_row import JobRow
+    st_lbl = MagicMock()
+    progress_bar = MagicMock()
+    cancel_btn = MagicMock()
+    open_file_btn = MagicMock()
+    open_folder_btn = MagicMock()
+    review_btn = MagicMock()
+
+    out_file = str(tmp_path / "result.docx")
+    with open(out_file, "w") as f:
+        f.write("content")
+
+    rev_file = str(tmp_path / "result.docx.needs_review.log")
+    with open(rev_file, "w") as f:
+        f.write("Item needing review")
+
+    job = TranslationJob(
+        id="job-micro-rev",
+        input_path="sample.docx",
+        output_path=out_file,
+        direction="ja2en",
+        mode=TranslationMode.FAST_NMT,
+        model_name="argos",
+        glossary={},
+        status=JobStatus.COMPLETED,
+        progress=100.0,
+        progress_message="Completed",
+        started_at=100.0,
+        completed_at=110.0,
+        review_log_path=rev_file,
+    )
+
+    row = MagicMock(spec=JobRow)
+    row.st_label = st_lbl
+    row.progress_bar = progress_bar
+    row.cancel_button = cancel_btn
+    row.open_file_button = open_file_btn
+    row.open_folder_button = open_folder_btn
+    row.review_button = review_btn
+    row._output_path = ""
+    row._review_log_path = ""
+
+    JobRow.update_job(row, job)
+
+    assert cancel_btn.pack_forget.called
+    assert open_file_btn.pack.called
+    assert open_folder_btn.pack.called
+    # Review log exists and has content, so review button is packed
+    assert review_btn.pack.called
+
+
+def test_job_row_open_action_handlers(tmp_path):
+    from gui.widgets.job_row import JobRow
+
+    out_file = str(tmp_path / "sample_out.docx")
+    with open(out_file, "w") as f:
+        f.write("sample")
+
+    rev_file = str(tmp_path / "sample_out.docx.needs_review.log")
+    with open(rev_file, "w") as f:
+        f.write("review items")
+
+    row = MagicMock(spec=JobRow)
+    row._output_path = out_file
+    row._review_log_path = rev_file
+
+    with patch("os.startfile", create=True) as mock_startfile:
+        with patch("subprocess.Popen") as mock_popen:
+            # 1. Open output file
+            JobRow._handle_open_file(row)
+            if sys.platform == "win32":
+                mock_startfile.assert_called_with(out_file)
+            else:
+                assert mock_popen.called
+
+            # 2. Open containing folder (selects file on Windows)
+            JobRow._handle_open_folder(row)
+            if sys.platform == "win32":
+                mock_popen.assert_called_with(["explorer", "/select,", os.path.abspath(out_file)])
+            else:
+                assert mock_popen.called
+
+            # 3. Open review log
+            JobRow._handle_open_review(row)
+            if sys.platform == "win32":
+                mock_startfile.assert_called_with(rev_file)
+            else:
+                assert mock_popen.called
+
+
+def test_documents_view_multi_job_post_action_summary(tmp_path):
+    from gui.views.documents_view import DocumentsView
+    from gui.widgets.job_row import JobRow
+
+    view = MagicMock(spec=DocumentsView)
+    view._completed_outputs = []
+    view._completed_review_logs = []
+    view._last_output_path = None
+    view._last_review_log = None
+    view.open_file_btn = MagicMock()
+    view.open_dir_btn = MagicMock()
+    view.review_btn = MagicMock()
+    view._update_post_action_buttons = lambda: DocumentsView._update_post_action_buttons(view)
+
+    out1 = str(tmp_path / "doc1.docx")
+    with open(out1, "w") as f: f.write("1")
+    out2 = str(tmp_path / "doc2.docx")
+    with open(out2, "w") as f: f.write("2")
+
+    job1 = TranslationJob(
+        id="j1", input_path="d1.docx", output_path=out1, direction="ja2en",
+        mode=TranslationMode.FAST_NMT, model_name="m", glossary={},
+        status=JobStatus.COMPLETED, progress=100.0, progress_message="Done",
+        review_log_path="",
+    )
+    job2 = TranslationJob(
+        id="j2", input_path="d2.docx", output_path=out2, direction="ja2en",
+        mode=TranslationMode.FAST_NMT, model_name="m", glossary={},
+        status=JobStatus.COMPLETED, progress=100.0, progress_message="Done",
+        review_log_path=str(tmp_path / "rev.log"),
+    )
+    with open(str(tmp_path / "rev.log"), "w") as f: f.write("review log")
+
+    # 1. Complete job 1: single output summary
+    view._job_widgets = {job1.id: MagicMock(spec=JobRow), job2.id: MagicMock(spec=JobRow)}
+    DocumentsView.update_job(view, job1)
+    assert view._completed_outputs == [out1]
+    assert view.open_file_btn.configure.called
+    assert view.open_file_btn.configure.call_args.kwargs["text"] == "📄  Open Output File"
+    assert view.open_file_btn.configure.call_args.kwargs["state"] == "normal"
+    assert view.open_dir_btn.configure.call_args.kwargs["text"] == "📁  Open Folder"
+
+    # 2. Complete job 2: multi-output batch summary
+    DocumentsView.update_job(view, job2)
+    assert len(view._completed_outputs) == 2
+    assert view.open_file_btn.configure.call_args.kwargs["text"] == "📄  Open All Outputs (2)"
+    assert view.open_dir_btn.configure.call_args.kwargs["text"] == "📁  Open Output Folders"
+    assert view.review_btn.configure.call_args.kwargs["text"] == "⚠  Review Log"
+    assert view.review_btn.configure.call_args.kwargs["state"] == "normal"
+
+    # 3. Test open_last_output opens all completed outputs
+    with patch("os.startfile", create=True) as mock_startfile:
+        with patch("subprocess.Popen") as mock_popen:
+            DocumentsView.open_last_output(view)
+            if sys.platform == "win32":
+                assert mock_startfile.call_count == 2
+            else:
+                assert mock_popen.call_count == 2
 
 
 

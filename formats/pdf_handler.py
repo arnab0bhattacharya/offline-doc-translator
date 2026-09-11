@@ -90,6 +90,20 @@ class PDFHandler(BaseFormatHandler):
         except Exception:
             return (1.0, 1.0, 1.0)
 
+    @staticmethod
+    def _color_to_rgb(color_val: Any) -> tuple[float, float, float]:
+        """Convert PyMuPDF integer color (0xRRGGBB) to (r, g, b) float tuple in [0.0, 1.0]."""
+        try:
+            c = int(color_val)
+            if c <= 0:
+                return (0.0, 0.0, 0.0)
+            r = ((c >> 16) & 0xFF) / 255.0
+            g = ((c >> 8) & 0xFF) / 255.0
+            b = (c & 0xFF) / 255.0
+            return (r, g, b)
+        except Exception:
+            return (0.0, 0.0, 0.0)
+
     def translate(
         self,
         input_path: str,
@@ -141,23 +155,82 @@ class PDFHandler(BaseFormatHandler):
             )
 
         try:
-            # 1. Count total translatable blocks
+            # 1. Count total translatable blocks via get_text("dict")
             total_translatable = 0
             all_page_blocks = []
 
             for page_idx in range(total_pages):
                 page = doc[page_idx]
-                blocks = page.get_text("blocks")
-                text_blocks = [b for b in blocks if len(b) >= 7 and b[6] == 0]
-                text_blocks.sort(key=lambda b: (round(b[1] / 10) * 10, b[0]))
+                page_dict = page.get_text("dict")
+                text_blocks = []
+
+                for block_idx, block in enumerate(page_dict.get("blocks", [])):
+                    if block.get("type") != 0:
+                        continue
+
+                    bbox = block.get("bbox")
+                    if not bbox or len(bbox) < 4:
+                        continue
+
+                    lines = block.get("lines", [])
+                    spans = []
+                    lines_text = []
+                    for line in lines:
+                        line_spans = line.get("spans", [])
+                        spans.extend(line_spans)
+                        line_str = "".join(s.get("text", "") for s in line_spans)
+                        lines_text.append(line_str)
+
+                    raw_text = "\n".join(lines_text)
+                    clean_text = raw_text.strip()
+
+                    # Dominant font size, font family, and text color
+                    non_empty_spans = [s for s in spans if s.get("text", "").strip()]
+                    if non_empty_spans:
+                        size_counts: dict[float, int] = {}
+                        font_counts: dict[str, int] = {}
+                        color_counts: dict[int, int] = {}
+                        for s in non_empty_spans:
+                            ch_len = len(s.get("text", "").strip())
+                            sz = round(float(s.get("size", 12.0)), 1)
+                            fn = s.get("font", "helv")
+                            cl = s.get("color", 0)
+
+                            size_counts[sz] = size_counts.get(sz, 0) + ch_len
+                            font_counts[fn] = font_counts.get(fn, 0) + ch_len
+                            color_counts[cl] = color_counts.get(cl, 0) + ch_len
+
+                        dominant_size = max(size_counts.keys(), key=lambda k: size_counts[k])
+                        dominant_font = max(font_counts.keys(), key=lambda k: font_counts[k])
+                        dominant_color = max(color_counts.keys(), key=lambda k: color_counts[k])
+                    else:
+                        dominant_size = 12.0
+                        dominant_font = "helv"
+                        dominant_color = 0
+
+                    block_no = block.get("number", block_idx)
+                    text_blocks.append(
+                        {
+                            "bbox": bbox,
+                            "rect": fitz.Rect(bbox),
+                            "text": clean_text,
+                            "raw_text": raw_text,
+                            "block_no": block_no,
+                            "original_fontsize": dominant_size,
+                            "dominant_font": dominant_font,
+                            "dominant_color": dominant_color,
+                            "spans": spans,
+                        }
+                    )
+
+                text_blocks.sort(key=lambda b: (round(b["bbox"][1] / 10) * 10, b["bbox"][0]))
                 all_page_blocks.append(text_blocks)
 
                 for b in text_blocks:
-                    clean_text = b[4].strip()
-                    if clean_text and should_translate(clean_text, direction):
+                    if b["text"] and should_translate(b["text"], direction):
                         total_translatable += 1
 
-            has_selectable_text = any(any(b[4].strip() for b in page_blocks) for page_blocks in all_page_blocks)
+            has_selectable_text = any(any(b["text"] for b in page_blocks) for page_blocks in all_page_blocks)
             if not has_selectable_text:
                 raise TranslatorError(
                     ErrorCode.E04,
@@ -188,12 +261,16 @@ class PDFHandler(BaseFormatHandler):
                 text_blocks = all_page_blocks[page_idx]
                 translated_blocks = []
 
-                for b_idx, block in enumerate(text_blocks):
+                for b_idx, block_info in enumerate(text_blocks):
                     if cancel_event and cancel_event.is_set():
                         raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
 
-                    x0, y0, x1, y1, raw_text, block_no, _ = block
-                    clean_text = raw_text.strip()
+                    clean_text = block_info["text"]
+                    block_no = block_info["block_no"]
+                    rect = block_info["rect"]
+                    original_fontsize = block_info["original_fontsize"]
+                    dominant_font = block_info["dominant_font"]
+                    dominant_color = block_info["dominant_color"]
 
                     if not clean_text:
                         continue
@@ -243,10 +320,13 @@ class PDFHandler(BaseFormatHandler):
                         stats["translated"] += 1
                         translated_blocks.append(
                             {
-                                "rect": fitz.Rect(x0, y0, x1, y1),
+                                "rect": rect,
                                 "text": result.text,
                                 "original": clean_text,
                                 "block_no": block_no,
+                                "original_fontsize": original_fontsize,
+                                "dominant_font": dominant_font,
+                                "dominant_color": dominant_color,
                             }
                         )
 
@@ -259,14 +339,20 @@ class PDFHandler(BaseFormatHandler):
                     rect = item["rect"]
                     trans_text = item["text"]
 
+                    if rect.width < 1.0 or rect.height < 1.0:
+                        stats["translated"] -= 1
+                        stats["reverted"] += 1
+                        continue
+
                     effective_font = "japan" if direction == "en2ja" or HAS_CJK.search(trans_text) else "helv"
 
-                    estimated_fontsize = max(
-                        8.0, min(14.0, (rect.height / max(1, len(trans_text.splitlines()))) * 0.85)
-                    )
-                    font_floor = max(6.0, estimated_fontsize * 0.70)
-                    cur_size = estimated_fontsize
+                    # Start fitting from the original font size extracted via span metrics
+                    start_fontsize = max(6.0, min(72.0, float(item.get("original_fontsize", 12.0))))
+                    font_floor = max(4.5, start_fontsize * 0.60)
+                    cur_size = start_fontsize
                     fitted = False
+
+                    text_color = self._color_to_rgb(item.get("dominant_color", 0))
 
                     # Verify fit on a disposable page before removing the source text.
                     # insert_textbox returns a negative value without drawing when it cannot fit.
@@ -280,7 +366,7 @@ class PDFHandler(BaseFormatHandler):
                                 trans_text,
                                 fontsize=cur_size,
                                 fontname=effective_font,
-                                color=(0, 0, 0),
+                                color=text_color,
                                 align=fitz.TEXT_ALIGN_LEFT,
                             )
                             if rc >= 0:
@@ -306,6 +392,7 @@ class PDFHandler(BaseFormatHandler):
 
                     item["fitted_size"] = cur_size
                     item["fontname"] = effective_font
+                    item["text_color"] = text_color
                     fitted_blocks.append(item)
 
                 if cancel_event and cancel_event.is_set():
@@ -328,7 +415,7 @@ class PDFHandler(BaseFormatHandler):
                             item["text"],
                             fontsize=item["fitted_size"],
                             fontname=item["fontname"],
-                            color=(0, 0, 0),
+                            color=item.get("text_color", (0, 0, 0)),
                             align=fitz.TEXT_ALIGN_LEFT,
                         )
 

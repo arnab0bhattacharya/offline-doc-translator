@@ -641,6 +641,93 @@ class TestPDFHandler(unittest.TestCase):
         self.assertEqual(bg_err, (1.0, 1.0, 1.0))
         doc.close()
 
+    def test_pdf_span_extraction_preserves_large_heading_font_size(self):
+        doc = fitz.open()
+        page = doc.new_page(width=600, height=400)
+        # 24pt title heading
+        page.insert_textbox(fitz.Rect(50, 50, 500, 120), "重要なお知らせ", fontsize=24, fontname="japan")
+        input_path = os.path.join(self.test_dir, "title_input.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        captured_calls = []
+        real_insert = fitz.Page.insert_textbox
+
+        def spy_insert(page_self, *args, **kwargs):
+            captured_calls.append(kwargs)
+            return real_insert(page_self, *args, **kwargs)
+
+        fitz.Page.insert_textbox = spy_insert
+        try:
+            with patch.object(self.mock_engine, "translate_chunk", return_value=("Important Notice", True, False)):
+                handler = PDFHandler(self.mock_engine)
+                output_path = os.path.join(self.test_dir, "title_out.pdf")
+                stats = handler.translate(input_path, output_path, "ja2en")
+
+                self.assertEqual(stats["translated"], 1)
+                self.assertEqual(stats["reverted"], 0)
+
+                # Should preserve a font size starting from 24pt, fitting down to 17.0 (strictly > 14.0 old cap)
+                final_call = captured_calls[-1]
+                self.assertGreater(final_call["fontsize"], 14.0)
+                self.assertEqual(final_call["fontsize"], 17.0)
+                self.assertEqual(final_call["fontname"], "helv")
+        finally:
+            fitz.Page.insert_textbox = real_insert
+
+    def test_pdf_span_extraction_preserves_text_color(self):
+        doc = fitz.open()
+        page = doc.new_page(width=600, height=400)
+        # Red text color: (1.0, 0.0, 0.0)
+        page.insert_textbox(
+            fitz.Rect(50, 50, 450, 120), "緊急警報テキスト", fontsize=14, fontname="japan", color=(1.0, 0.0, 0.0)
+        )
+        input_path = os.path.join(self.test_dir, "color_input.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        captured_calls = []
+        real_insert = fitz.Page.insert_textbox
+
+        def spy_insert(page_self, *args, **kwargs):
+            captured_calls.append(kwargs)
+            return real_insert(page_self, *args, **kwargs)
+
+        fitz.Page.insert_textbox = spy_insert
+        try:
+            with patch.object(self.mock_engine, "translate_chunk", return_value=("Emergency Alert", True, False)):
+                handler = PDFHandler(self.mock_engine)
+                output_path = os.path.join(self.test_dir, "color_out.pdf")
+                stats = handler.translate(input_path, output_path, "ja2en")
+
+                self.assertEqual(stats["translated"], 1)
+                final_call = captured_calls[-1]
+                color = final_call.get("color")
+                self.assertIsNotNone(color)
+                # Expect red color (1.0, 0.0, 0.0)
+                self.assertAlmostEqual(color[0], 1.0, delta=0.05)
+                self.assertAlmostEqual(color[1], 0.0, delta=0.05)
+                self.assertAlmostEqual(color[2], 0.0, delta=0.05)
+        finally:
+            fitz.Page.insert_textbox = real_insert
+
+    def test_color_to_rgb_conversion(self):
+        # 0x000000 -> black
+        self.assertEqual(PDFHandler._color_to_rgb(0), (0.0, 0.0, 0.0))
+        # 0xFF0000 -> pure red (1.0, 0.0, 0.0)
+        r, g, b = PDFHandler._color_to_rgb(0xFF0000)
+        self.assertAlmostEqual(r, 1.0)
+        self.assertAlmostEqual(g, 0.0)
+        self.assertAlmostEqual(b, 0.0)
+        # 0x00FF00 -> pure green
+        r, g, b = PDFHandler._color_to_rgb(0x00FF00)
+        self.assertAlmostEqual(r, 0.0)
+        self.assertAlmostEqual(g, 1.0)
+        self.assertAlmostEqual(b, 0.0)
+        # Invalid / negative -> fallback to black
+        self.assertEqual(PDFHandler._color_to_rgb(-1), (0.0, 0.0, 0.0))
+        self.assertEqual(PDFHandler._color_to_rgb("not_a_color"), (0.0, 0.0, 0.0))
+
     def test_ooxml_text_unit_processing(self):
         handler = DOCXHandler(self.mock_engine)
 

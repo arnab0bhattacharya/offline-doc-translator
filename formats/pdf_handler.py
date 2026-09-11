@@ -109,10 +109,19 @@ class PDFHandler(BaseFormatHandler):
                     if clean_text and should_translate(clean_text, direction):
                         total_translatable += 1
 
-            if not any(all_page_blocks):
+            has_selectable_text = any(
+                any(b[4].strip() for b in page_blocks)
+                for page_blocks in all_page_blocks
+            )
+            if not has_selectable_text:
                 raise TranslatorError(
                     ErrorCode.E04,
-                    detail="The PDF has no selectable text. Scanned PDFs require OCR before translation."
+                    detail=(
+                        "The PDF has no selectable text — it appears to be a scanned document. "
+                        "To translate scanned PDFs, first run OCR using Adobe Acrobat's 'Recognize Text' feature, "
+                        "or free tools like NAPS2 (naps2.com) or ocrmypdf (pip install ocrmypdf), "
+                        "then re-open the OCR'd PDF here."
+                    )
                 )
 
             if log_cb:

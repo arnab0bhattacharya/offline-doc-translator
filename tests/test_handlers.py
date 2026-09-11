@@ -336,6 +336,25 @@ class TestPDFHandler(unittest.TestCase):
             handler.translate(input_path, output_path, "ja2en")
         self.assertEqual(ctx.exception.code, ErrorCode.E04)
         self.assertIn("no selectable text", ctx.exception.detail)
+        self.assertIn("scanned document", ctx.exception.detail)
+        self.assertIn("NAPS2", ctx.exception.detail)
+        self.assertIn("ocrmypdf", ctx.exception.detail)
+
+    def test_pdf_whitespace_only_raises_e04_actionable(self):
+        doc = fitz.open()
+        page = doc.new_page(width=500, height=300)
+        page.insert_textbox(fitz.Rect(72, 72, 400, 120), "   \n\t  ", fontsize=14)
+        input_path = os.path.join(self.test_dir, "whitespace.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        handler = PDFHandler(self.mock_engine)
+        output_path = os.path.join(self.test_dir, "whitespace_out.pdf")
+        with self.assertRaises(TranslatorError) as ctx:
+            handler.translate(input_path, output_path, "ja2en")
+        self.assertEqual(ctx.exception.code, ErrorCode.E04)
+        self.assertIn("no selectable text", ctx.exception.detail)
+        self.assertIn("NAPS2", ctx.exception.detail)
 
     def test_pdf_corrupt_file_raises_e04(self):
         input_path = os.path.join(self.test_dir, "corrupt.pdf")

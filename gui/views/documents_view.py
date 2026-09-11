@@ -44,6 +44,17 @@ class DocumentsView(ctk.CTkFrame):
     glossary_drawer: Any = None
     glossary_text: Any = None
     queue_empty_label: Any = None
+    batch_summary_card: Any = None
+    summary_files_lbl: Any = None
+    summary_chunks_lbl: Any = None
+    summary_time_lbl: Any = None
+    summary_review_lbl: Any = None
+    summary_open_folder_btn: Any = None
+    summary_copy_btn: Any = None
+    bottom_box: Any = None
+    _current_batch_ids: Any = None
+    _batch_summary_shown: Any = None
+    _last_batch_summary: Any = None
 
     def __init__(
         self,
@@ -61,6 +72,9 @@ class DocumentsView(ctk.CTkFrame):
         self._completed_review_logs: list[str] = []
         self._last_output_path: str | None = None
         self._last_review_log: str | None = None
+        self._current_batch_ids: set[str] = set()
+        self._batch_summary_shown: bool = False
+        self._last_batch_summary: dict[str, Any] | None = None
         self._glossary_open = False
         self._log_open = False
         self._drop_hook: WindowsDropHook | None = None
@@ -400,9 +414,13 @@ class DocumentsView(ctk.CTkFrame):
         )
         self.queue_empty_label.pack()
 
+        # ── Batch Summary Card (Initially Hidden) ──
+        self._build_batch_summary_card(scroll)
+
         # ── Card 4: Post-Actions & Activity Drawer ──
-        bottom_box = ctk.CTkFrame(scroll, fg_color="transparent")
-        bottom_box.pack(fill="x", pady=(0, 16))
+        self.bottom_box = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.bottom_box.pack(fill="x", pady=(0, 16))
+        bottom_box = self.bottom_box
 
         self.open_file_btn = ctk.CTkButton(
             bottom_box,
@@ -740,6 +758,11 @@ class DocumentsView(ctk.CTkFrame):
             cache_policy=cache_policy,
         )
 
+        self._current_batch_ids = {job_id for job_id, _, _ in dispatched}
+        self._batch_summary_shown = False
+        if hasattr(self, "batch_summary_card") and self.batch_summary_card:
+            self.batch_summary_card.pack_forget()
+
         for job_id, in_path, out_path in dispatched:
             self._last_output_path = out_path
             self._last_review_log = f"{out_path}.needs_review.log"
@@ -857,7 +880,17 @@ class DocumentsView(ctk.CTkFrame):
                     if job.review_log_path not in self._completed_review_logs:
                         self._completed_review_logs.append(job.review_log_path)
 
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
             self._update_post_action_buttons()
+
+            # Check if all jobs in current batch have reached a terminal state
+            batch_ids = getattr(self, "_current_batch_ids", None)
+            summary_shown = getattr(self, "_batch_summary_shown", False)
+            if batch_ids and not summary_shown:
+                ctrl = getattr(self, "controller", None)
+                if ctrl and hasattr(ctrl, "is_batch_complete") and ctrl.is_batch_complete(batch_ids):
+                    self._batch_summary_shown = True
+                    self._show_batch_summary()
 
     def _update_post_action_buttons(self):
         num_out = len(self._completed_outputs)
@@ -890,6 +923,204 @@ class DocumentsView(ctk.CTkFrame):
         else:
             self.review_btn.configure(text=f"⚠  Review Logs ({num_rev})", state="normal")
 
+    # ── Batch Summary Card ──
+
+    def _build_batch_summary_card(self, parent):
+        self.batch_summary_card = ctk.CTkFrame(
+            parent,
+            fg_color=THEME["card_bg"],
+            border_color=THEME["card_border"],
+            border_width=1,
+            corner_radius=12,
+        )
+
+        # Header Frame
+        head = ctk.CTkFrame(self.batch_summary_card, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(12, 6))
+
+        ctk.CTkLabel(
+            head,
+            text="📊  Batch Summary",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            head,
+            text="✕",
+            width=26,
+            height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],
+            hover_color=THEME["btn_secondary"],
+            command=self._dismiss_batch_summary,
+        ).pack(side="right")
+
+        # Body Frame
+        body = ctk.CTkFrame(self.batch_summary_card, fg_color="transparent")
+        body.pack(fill="x", padx=16, pady=(2, 6))
+
+        self.summary_files_lbl = ctk.CTkLabel(
+            body,
+            text="Files: 0 completed, 0 failed",
+            font=ctk.CTkFont(size=12),
+            text_color=THEME["text_primary"],
+            anchor="w",
+        )
+        self.summary_files_lbl.pack(fill="x", pady=2)
+
+        self.summary_chunks_lbl = ctk.CTkLabel(
+            body,
+            text="Chunks: 0 translated",
+            font=ctk.CTkFont(size=12),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+        )
+        self.summary_chunks_lbl.pack(fill="x", pady=2)
+
+        self.summary_time_lbl = ctk.CTkLabel(
+            body,
+            text="Total time: 0s",
+            font=ctk.CTkFont(size=12),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+        )
+        self.summary_time_lbl.pack(fill="x", pady=2)
+
+        self.summary_review_lbl = ctk.CTkLabel(
+            body,
+            text="Review logs: None",
+            font=ctk.CTkFont(size=12),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+        )
+        self.summary_review_lbl.pack(fill="x", pady=2)
+
+        # Button Frame
+        btn_bar = ctk.CTkFrame(self.batch_summary_card, fg_color="transparent")
+        btn_bar.pack(fill="x", padx=16, pady=(8, 12))
+
+        self.summary_open_folder_btn = ctk.CTkButton(
+            btn_bar,
+            text="📁  Open Output Folder",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=32,
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            command=self._open_batch_common_folder,
+        )
+        self.summary_open_folder_btn.pack(side="left", padx=(0, 8))
+
+        self.summary_copy_btn = ctk.CTkButton(
+            btn_bar,
+            text="📋  Copy Summary",
+            font=ctk.CTkFont(size=12),
+            height=32,
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            command=self._copy_batch_summary,
+        )
+        self.summary_copy_btn.pack(side="left")
+
+    def _dismiss_batch_summary(self):
+        """Hides the batch summary card."""
+        if hasattr(self, "batch_summary_card") and self.batch_summary_card:
+            self.batch_summary_card.pack_forget()
+
+    def _show_batch_summary(self):
+        """Populates and displays the batch summary card."""
+        summary = self.controller.get_batch_summary(self._current_batch_ids)
+        self._last_batch_summary = summary
+
+        # 1. Files line
+        completed_c = summary.get("completed_count", 0)
+        failed_c = summary.get("failed_count", 0)
+        cancelled_c = summary.get("cancelled_count", 0)
+        files_text = f"Files: {completed_c} completed, {failed_c} failed"
+        if cancelled_c > 0:
+            files_text += f", {cancelled_c} cancelled"
+        self.summary_files_lbl.configure(text=files_text)
+
+        # 2. Chunks line
+        trans_c = summary.get("translated_chunks", 0)
+        rev_c = summary.get("reverted_chunks", 0)
+        skip_c = summary.get("skipped_chunks", 0)
+        chunk_parts = [f"{trans_c} translated"]
+        if rev_c > 0:
+            chunk_parts.append(f"{rev_c} reverted")
+        if skip_c > 0:
+            chunk_parts.append(f"{skip_c} skipped")
+        self.summary_chunks_lbl.configure(text=f"Chunks: {', '.join(chunk_parts)}")
+
+        # 3. Total time line
+        self.summary_time_lbl.configure(text=f"Total time: {summary.get('formatted_time', '0s')}")
+
+        # 4. Review logs line
+        rev_paths = summary.get("review_log_paths", [])
+        if not rev_paths:
+            self.summary_review_lbl.configure(
+                text="Review logs: None (clean translation)", text_color=THEME["text_secondary"]
+            )
+        else:
+            num = len(rev_paths)
+            self.summary_review_lbl.configure(
+                text=f"Review logs: {num} file{'s' if num != 1 else ''} {'have' if num != 1 else 'has'} items to review",
+                text_color=THEME["warning"],
+            )
+
+        # Folder button state
+        has_outputs = bool(summary.get("output_paths") or summary.get("common_dir"))
+        self.summary_open_folder_btn.configure(state="normal" if has_outputs else "disabled")
+
+        if getattr(self, "bottom_box", None):
+            self.batch_summary_card.pack(fill="x", pady=(0, 14), before=self.bottom_box)
+        else:
+            self.batch_summary_card.pack(fill="x", pady=(0, 14))
+
+    def _open_batch_common_folder(self):
+        """Opens the folder containing the batch outputs."""
+        if not self._last_batch_summary:
+            return
+        target_dir = self._last_batch_summary.get("common_dir")
+        if not target_dir or not os.path.exists(target_dir):
+            outputs = self._last_batch_summary.get("output_paths", [])
+            for out_p in outputs:
+                parent = os.path.dirname(os.path.abspath(out_p))
+                if os.path.exists(parent):
+                    target_dir = parent
+                    break
+
+        if not target_dir or not os.path.exists(target_dir):
+            messagebox.showinfo("No Output Folder", "No output folders were found for this batch.")
+            return
+
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", target_dir])
+            else:
+                subprocess.Popen(["xdg-open", target_dir])
+        except Exception as e:
+            messagebox.showerror("Cannot Open Folder", f"Could not open {target_dir}:\n{e}")
+
+    def _copy_batch_summary(self):
+        """Copies the summary text to the clipboard and provides visual feedback."""
+        if not self._last_batch_summary:
+            return
+        text = self._last_batch_summary.get("formatted_text", "")
+        if not text:
+            return
+
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update()
+        except Exception:
+            pass
+
+        self.summary_copy_btn.configure(text="✅  Copied!")
+        self.after(2000, lambda: self.summary_copy_btn.configure(text="📋  Copy Summary"))
+
     def clear_completed_jobs(self):
         self.controller.clear_completed()
         to_remove = []
@@ -908,6 +1139,10 @@ class DocumentsView(ctk.CTkFrame):
         self._completed_review_logs.clear()
         self._last_output_path = None
         self._last_review_log = None
+        self._current_batch_ids.clear()
+        self._batch_summary_shown = False
+        if hasattr(self, "batch_summary_card") and self.batch_summary_card:
+            self.batch_summary_card.pack_forget()
         self._update_post_action_buttons()
 
         if not self._job_widgets:

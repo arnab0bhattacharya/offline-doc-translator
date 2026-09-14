@@ -2,17 +2,35 @@
 gui/views/quick_view.py
 =======================
 Quick translate view supporting side-by-side text lookup powered by Ollama.
+Supports custom glossary rules, number masking, and placeholder verification.
 """
 
+import os
 import threading
+from tkinter import filedialog, messagebox
+from typing import Any
 
 import customtkinter as ctk
 import requests
 
 from engine.backend_llm import LLMBackend
-from engine.core import mask_numbers, unmask_numbers
+from engine.core import (
+    mask_glossary_terms,
+    mask_numbers,
+    should_translate,
+    unmask_protected_text,
+    verify_placeholders,
+)
 from engine.preflight import check_ollama_status
-from gui.theme import GEMMA_PRESETS, LANGUAGE_PAIRS, THEME
+from gui.dnd_helper import is_point_in_widget
+from gui.theme import (
+    GEMMA_PRESETS,
+    GLOSSARY_DIR,
+    LANGUAGE_PAIRS,
+    LAST_GLOSSARY_PATH,
+    THEME,
+    parse_glossary_text,
+)
 
 
 class QuickView(ctk.CTkFrame):
@@ -20,10 +38,20 @@ class QuickView(ctk.CTkFrame):
     Renders the split-pane quick text translation workspace.
     """
 
+    glossary_btn: Any = None
+    glossary_load_btn: Any = None
+    glossary_save_btn: Any = None
+    glossary_drawer: Any = None
+    glossary_text: Any = None
+    pane: Any = None
+
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
+        self._glossary_open = False
 
         self._build_ui()
+        self._auto_load_glossary()
+        self._setup_dnd()
 
     def _build_ui(self):
         # Header
@@ -104,16 +132,68 @@ class QuickView(ctk.CTkFrame):
             command=self._clear_quick_text,
         ).pack(side="right", padx=4)
 
+        # Collapsible Glossary
+        glossary_toggle_frame = ctk.CTkFrame(self, fg_color="transparent")
+        glossary_toggle_frame.pack(fill="x", pady=(0, 6))
+
+        self.glossary_btn = ctk.CTkButton(
+            glossary_toggle_frame,
+            text="▶  Custom Glossary (Optional)",
+            anchor="w",
+            fg_color="transparent",
+            hover_color=THEME["btn_secondary"],
+            text_color=THEME["text_secondary"],
+            font=ctk.CTkFont(size=12),
+            command=self._toggle_glossary,
+        )
+        self.glossary_btn.pack(side="left")
+
+        self.glossary_save_btn = ctk.CTkButton(
+            glossary_toggle_frame,
+            text="💾 Save",
+            width=68,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],
+            hover_color=THEME["btn_secondary"],
+            command=self._save_glossary_file,
+        )
+        self.glossary_save_btn.pack(side="right", padx=(4, 0))
+
+        self.glossary_load_btn = ctk.CTkButton(
+            glossary_toggle_frame,
+            text="📥 Load",
+            width=68,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],
+            hover_color=THEME["btn_secondary"],
+            command=self._load_glossary_file,
+        )
+        self.glossary_load_btn.pack(side="right")
+
+        self.glossary_drawer = ctk.CTkFrame(self, fg_color="transparent")
+        self.glossary_text = ctk.CTkTextbox(
+            self.glossary_drawer,
+            height=70,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color=THEME["staging_bg"],
+        )
+        self.glossary_text.pack(fill="x", pady=(0, 6))
+        self.glossary_text.insert("0.0", "# Term -> Translation (one per line)\n")
+
         # Split Text Pane
-        pane = ctk.CTkFrame(self, fg_color="transparent")
-        pane.pack(fill="both", expand=True)
-        pane.columnconfigure(0, weight=1)
-        pane.columnconfigure(1, weight=1)
-        pane.rowconfigure(0, weight=1)
+        self.pane = ctk.CTkFrame(self, fg_color="transparent")
+        self.pane.pack(fill="both", expand=True)
+        self.pane.columnconfigure(0, weight=1)
+        self.pane.columnconfigure(1, weight=1)
+        self.pane.rowconfigure(0, weight=1)
 
         # Left Source Box
         src_card = ctk.CTkFrame(
-            pane, fg_color=THEME["card_bg"], border_color=THEME["card_border"], border_width=1, corner_radius=10
+            self.pane, fg_color=THEME["card_bg"], border_color=THEME["card_border"], border_width=1, corner_radius=10
         )
         src_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
@@ -133,7 +213,7 @@ class QuickView(ctk.CTkFrame):
 
         # Right Target Box
         tgt_card = ctk.CTkFrame(
-            pane, fg_color=THEME["card_bg"], border_color=THEME["card_border"], border_width=1, corner_radius=10
+            self.pane, fg_color=THEME["card_bg"], border_color=THEME["card_border"], border_width=1, corner_radius=10
         )
         tgt_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
@@ -209,22 +289,37 @@ class QuickView(ctk.CTkFrame):
                 self.after(0, self._set_quick_result, "", "⚠ Ollama is offline. Please start Ollama service.")
                 return
 
-            backend = LLMBackend(model_name=model, context_window=4096)
+            if not should_translate(text, direction):
+                self.after(
+                    0,
+                    self._set_quick_result,
+                    text,
+                    "ℹ Text does not require translation for selected direction.",
+                )
+                return
 
-            masked_text, number_map = mask_numbers(text)
+            glossary = parse_glossary_text(self.glossary_text.get("0.0", "end"))
+            masked_text, glossary_map = mask_glossary_terms(text, glossary)
+            masked_text, number_map = mask_numbers(masked_text)
+            placeholder_map = {**number_map, **glossary_map}
+
+            backend = LLMBackend(model_name=model, context_window=4096)
             result, elapsed = backend.translate_single(
                 masked_text=masked_text,
-                number_map=number_map,
+                number_map=placeholder_map,
                 direction=direction,
             )
 
-            if result:
-                final = unmask_numbers(result, number_map)
+            if result and verify_placeholders(result, placeholder_map, masked_text):
+                final = unmask_protected_text(result, number_map, glossary_map)
+                info_parts = [f"✓ Translated in {elapsed:.1f}s via {model}"]
+                if glossary_map:
+                    info_parts.append(f"({len(glossary_map)} glossary term{'s' if len(glossary_map) != 1 else ''})")
                 self.after(
                     0,
                     self._set_quick_result,
                     final,
-                    f"✓ Translated in {elapsed:.1f}s via {model}",
+                    " ".join(info_parts),
                 )
             else:
                 self.after(
@@ -293,3 +388,154 @@ class QuickView(ctk.CTkFrame):
             self.quick_status.configure(
                 text="Direction swapped. Click 'Translate Text'.", text_color=THEME["text_secondary"]
             )
+
+    def _toggle_glossary(self):
+        if self._glossary_open:
+            self.glossary_drawer.pack_forget()
+            self.glossary_btn.configure(text="▶  Custom Glossary (Optional)")
+            self._glossary_open = False
+        else:
+            self.glossary_drawer.pack(fill="x", pady=(0, 6), before=self.pane)
+            self.glossary_btn.configure(text="▼  Custom Glossary (Optional)")
+            self._glossary_open = True
+
+    # ── Glossary Persistence & Management ──
+
+    def _auto_load_glossary(self):
+        """Auto-loads last-used glossary from ~/.offline-translator/last_glossary.txt on startup."""
+        try:
+            if os.path.isfile(LAST_GLOSSARY_PATH):
+                with open(LAST_GLOSSARY_PATH, encoding="utf-8") as f:
+                    content = f.read()
+                if content.strip():
+                    self.glossary_text.delete("0.0", "end")
+                    self.glossary_text.insert("0.0", content)
+        except Exception:
+            pass
+
+    def sync_glossary(self):
+        """Synchronizes glossary content from persisted file if modified elsewhere."""
+        try:
+            if os.path.isfile(LAST_GLOSSARY_PATH):
+                with open(LAST_GLOSSARY_PATH, encoding="utf-8") as f:
+                    content = f.read()
+                current = self.glossary_text.get("0.0", "end")
+                if content.strip() and content.strip() != current.strip():
+                    self.glossary_text.delete("0.0", "end")
+                    self.glossary_text.insert("0.0", content)
+        except Exception:
+            pass
+
+    def persist_glossary(self):
+        """Auto-persists current glossary to ~/.offline-translator/last_glossary.txt."""
+        try:
+            os.makedirs(GLOSSARY_DIR, exist_ok=True)
+            content = self.glossary_text.get("0.0", "end").rstrip()
+            with open(LAST_GLOSSARY_PATH, "w", encoding="utf-8") as f:
+                f.write(content + "\n" if content else "")
+        except Exception:
+            pass
+
+    def _load_glossary_file(self, file_path: str | None = None):
+        """Loads a glossary text/csv file into the glossary drawer."""
+        if not file_path:
+            file_path = filedialog.askopenfilename(
+                title="Load Glossary File",
+                filetypes=[
+                    ("Glossary / Text Files", "*.txt *.csv"),
+                    ("Text Files", "*.txt"),
+                    ("CSV Files", "*.csv"),
+                    ("All Files", "*.*"),
+                ],
+            )
+        if not file_path or not os.path.isfile(file_path):
+            return
+
+        try:
+            try:
+                with open(file_path, encoding="utf-8") as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                with open(file_path, encoding="latin-1") as f:
+                    content = f.read()
+
+            warnings: list[str] = []
+            parsed = parse_glossary_text(content, on_warning=lambda w: warnings.append(w))
+
+            self.glossary_text.delete("0.0", "end")
+            self.glossary_text.insert("0.0", content)
+
+            if not self._glossary_open:
+                self._toggle_glossary()
+
+            msg = f"Loaded {len(parsed)} glossary entries from {os.path.basename(file_path)}."
+            if warnings:
+                msg += f" (Warnings: {'; '.join(warnings)})"
+                messagebox.showwarning("Glossary Limits", "\n".join(warnings))
+            self.quick_status.configure(text=f"📋 {msg}", text_color=THEME["success"])
+            self.persist_glossary()
+        except Exception as e:
+            messagebox.showerror("Glossary Load Error", f"Failed to load glossary file:\n{e}")
+
+    def _save_glossary_file(self):
+        """Saves current glossary drawer content to a user-chosen text file."""
+        content = self.glossary_text.get("0.0", "end").strip()
+        if not content or content == "# Term -> Translation (one per line)":
+            messagebox.showinfo("Empty Glossary", "There are no glossary entries to save.")
+            return
+
+        dest = filedialog.asksaveasfilename(
+            title="Save Glossary As",
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+            initialfile="glossary.txt",
+        )
+        if not dest:
+            return
+
+        try:
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(content + "\n")
+            self.quick_status.configure(
+                text=f"💾 Saved glossary to {os.path.basename(dest)}.", text_color=THEME["success"]
+            )
+        except Exception as e:
+            messagebox.showerror("Glossary Save Error", f"Failed to save glossary:\n{e}")
+
+    def _setup_dnd(self):
+        """Initializes drag-and-drop support via Tkinter extensions if available."""
+        for w in (self.glossary_drawer, self.glossary_text):
+            if hasattr(w, "drop_target_register"):
+                try:
+                    w.drop_target_register("DND_Files")
+                    w.dnd_bind("<<Drop>>", self._on_tkdnd_drop)
+                except Exception:
+                    pass
+
+    def _on_tkdnd_drop(self, event):
+        """Handles dropped files from Tkinter DnD extension."""
+        raw_data = getattr(event, "data", "")
+        if not raw_data:
+            return
+        files = [p.strip().strip("{}") for p in raw_data.split()]
+        if files:
+            self._load_glossary_file(files[0])
+
+    def _on_window_drop(self, files: list[str], screen_x: int, screen_y: int):
+        """Handles dropped files forwarded from window drop hook."""
+        if not self.winfo_ismapped() or not files:
+            return
+
+        hit_glossary = is_point_in_widget(self.glossary_drawer, screen_x, screen_y) or is_point_in_widget(
+            self.glossary_text, screen_x, screen_y
+        )
+        if hit_glossary:
+            glossary_files = [f for f in files if f.lower().endswith((".txt", ".csv"))]
+            if glossary_files:
+                self._load_glossary_file(glossary_files[0])
+            return
+
+        # If dropped onto quick view and it's a text/csv file, load into glossary
+        first = files[0]
+        if first.lower().endswith((".txt", ".csv")):
+            self._load_glossary_file(first)

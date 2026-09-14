@@ -558,6 +558,19 @@ class DocumentsView(ctk.CTkFrame):
         except Exception:
             pass
 
+    def sync_glossary(self):
+        """Synchronizes glossary content from persisted file if modified elsewhere."""
+        try:
+            if os.path.isfile(LAST_GLOSSARY_PATH):
+                with open(LAST_GLOSSARY_PATH, encoding="utf-8") as f:
+                    content = f.read()
+                current = self.glossary_text.get("0.0", "end")
+                if content.strip() and content.strip() != current.strip():
+                    self.glossary_text.delete("0.0", "end")
+                    self.glossary_text.insert("0.0", content)
+        except Exception:
+            pass
+
     def persist_glossary(self):
         """Auto-persists current glossary to ~/.offline-translator/last_glossary.txt."""
         try:
@@ -662,6 +675,15 @@ class DocumentsView(ctk.CTkFrame):
     def _on_window_drop(self, files: list[str], screen_x: int, screen_y: int):
         """Handles dropped files from Windows Explorer."""
         if not files:
+            return
+        if not self.winfo_ismapped():
+            try:
+                for child in self.master.winfo_children():
+                    if hasattr(child, "_on_window_drop") and child != self and child.winfo_ismapped():
+                        child._on_window_drop(files, screen_x, screen_y)
+                        break
+            except Exception:
+                pass
             return
 
         hit_glossary = is_point_in_widget(self.glossary_drawer, screen_x, screen_y) or is_point_in_widget(

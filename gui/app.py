@@ -273,6 +273,12 @@ class TranslatorApp:
         self.theme_switch.pack(side="left")
 
     def _switch_tab(self, tab_id: str):
+        # Persist glossary before leaving active tab
+        if self.active_tab == "docs" and hasattr(self.docs_view, "persist_glossary"):
+            self.docs_view.persist_glossary()
+        elif self.active_tab == "quick" and hasattr(self.quick_view, "persist_glossary"):
+            self.quick_view.persist_glossary()
+
         self.active_tab = tab_id
         for tid, frame in self.tab_frames.items():
             if tid == tab_id:
@@ -285,6 +291,12 @@ class TranslatorApp:
                 btn.configure(fg_color=THEME["primary"], text_color="#FFFFFF")
             else:
                 btn.configure(fg_color="transparent", text_color=THEME["text_secondary"])
+
+        # Sync glossary on entering tab
+        if tab_id == "docs" and hasattr(self.docs_view, "sync_glossary"):
+            self.docs_view.sync_glossary()
+        elif tab_id == "quick" and hasattr(self.quick_view, "sync_glossary"):
+            self.quick_view.sync_glossary()
 
     def _toggle_theme(self):
         if self.theme_switch.get():
@@ -430,6 +442,8 @@ class TranslatorApp:
         """Clean shutdown of translation queue worker thread and auto-persists state."""
         if hasattr(self, "docs_view") and hasattr(self.docs_view, "persist_glossary"):
             self.docs_view.persist_glossary()
+        if hasattr(self, "quick_view") and hasattr(self.quick_view, "persist_glossary"):
+            self.quick_view.persist_glossary()
         self.controller.shutdown()
 
 

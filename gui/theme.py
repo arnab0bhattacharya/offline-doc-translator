@@ -41,12 +41,15 @@ GEMMA_PRESETS = [
 ]
 
 import logging
+import os
 from collections.abc import Callable
 
 logger = logging.getLogger("offline_translator.glossary")
 
 MAX_GLOSSARY_ENTRIES: int = 10_000
 MAX_TERM_LENGTH: int = 200
+GLOSSARY_DIR: str = os.path.expanduser("~/.offline-translator")
+LAST_GLOSSARY_PATH: str = os.path.join(GLOSSARY_DIR, "last_glossary.txt")
 
 
 def parse_glossary_text(

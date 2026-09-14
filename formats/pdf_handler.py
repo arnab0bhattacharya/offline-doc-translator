@@ -117,7 +117,14 @@ class PDFHandler(BaseFormatHandler):
         self.validate_input_file(input_path)
         if cancel_event and cancel_event.is_set():
             raise TranslatorError(ErrorCode.E09, detail="Translation cancelled by user.")
-        stats = {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
+        stats = {
+            "total": 0,
+            "translated": 0,
+            "reverted": 0,
+            "skipped": 0,
+            "pages_with_text": 0,
+            "total_pages": 0,
+        }
 
         try:
             import fitz  # PyMuPDF
@@ -140,6 +147,7 @@ class PDFHandler(BaseFormatHandler):
             ) from e
 
         total_pages = len(doc)
+        stats["total_pages"] = total_pages
         if total_pages == 0:
             doc.close()
             return stats
@@ -230,8 +238,13 @@ class PDFHandler(BaseFormatHandler):
                     if b["text"] and should_translate(b["text"], direction):
                         total_translatable += 1
 
-            has_selectable_text = any(any(b["text"] for b in page_blocks) for page_blocks in all_page_blocks)
-            if not has_selectable_text:
+            pages_with_text = sum(1 for page_blocks in all_page_blocks if any(b["text"] for b in page_blocks))
+            text_coverage_ratio = pages_with_text / total_pages if total_pages > 0 else 0.0
+
+            stats["pages_with_text"] = pages_with_text
+            stats["total_pages"] = total_pages
+
+            if text_coverage_ratio == 0.0:
                 raise TranslatorError(
                     ErrorCode.E04,
                     detail=(
@@ -242,8 +255,18 @@ class PDFHandler(BaseFormatHandler):
                     ),
                 )
 
+            if text_coverage_ratio < 0.5 and log_cb:
+                log_cb(
+                    f"⚠ Warning: Only {pages_with_text}/{total_pages} pages "
+                    f"({text_coverage_ratio:.0%}) have selectable text. "
+                    f"Remaining pages may be scanned images and will be skipped."
+                )
+
             if log_cb:
-                log_cb(f"[*] Found {total_translatable} translatable block(s) across {total_pages} page(s).")
+                log_cb(
+                    f"[*] Found {total_translatable} translatable block(s) across "
+                    f"{pages_with_text}/{total_pages} page(s)."
+                )
 
             progress_state = {"current": 0, "total": max(1, total_translatable)}
 
@@ -255,10 +278,15 @@ class PDFHandler(BaseFormatHandler):
                 page = doc[page_idx]
                 page_num = page_idx + 1
 
+                text_blocks = all_page_blocks[page_idx]
+                if not text_blocks or not any(b["text"] for b in text_blocks):
+                    if log_cb:
+                        log_cb(f"  [!] Page {page_num}: No selectable text (possibly scanned). Skipping.")
+                    continue
+
                 page_text_preview = page.get_text("text").strip()
                 page_context = page_text_preview[:300] if page_text_preview else None
 
-                text_blocks = all_page_blocks[page_idx]
                 translated_blocks = []
 
                 for b_idx, block_info in enumerate(text_blocks):

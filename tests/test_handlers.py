@@ -428,6 +428,79 @@ class TestPDFHandler(unittest.TestCase):
         self.assertIn("no selectable text", ctx.exception.detail)
         self.assertIn("NAPS2", ctx.exception.detail)
 
+    def test_pdf_mixed_scanned_digital_detection(self):
+        doc = fitz.open()
+        p1 = doc.new_page(width=500, height=300)
+        p1.insert_textbox(fitz.Rect(72, 72, 400, 120), "デジタルページのテキストです。", fontsize=14, fontname="japan")
+        # Page 2 and 3 are empty / scanned pages with no selectable text
+        doc.new_page(width=500, height=300)
+        doc.new_page(width=500, height=300)
+        input_path = os.path.join(self.test_dir, "mixed_scanned.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        logs = []
+        with patch.object(
+            self.mock_engine, "translate_chunk", return_value=("Translated digital page text.", True, False)
+        ):
+            handler = PDFHandler(self.mock_engine)
+            output_path = os.path.join(self.test_dir, "mixed_out.pdf")
+            stats = handler.translate(input_path, output_path, "ja2en", log_cb=logs.append)
+
+            self.assertEqual(stats["total_pages"], 3)
+            self.assertEqual(stats["pages_with_text"], 1)
+            self.assertEqual(stats["translated"], 1)
+            self.assertTrue(os.path.exists(output_path))
+
+            # Verify low coverage warning was logged (<50%)
+            warning_logs = [m for m in logs if "Warning: Only 1/3 pages" in m]
+            self.assertTrue(len(warning_logs) > 0)
+            self.assertIn("33%", warning_logs[0])
+
+            # Verify page skip notifications were logged for scanned/empty pages
+            skip_logs = [m for m in logs if "No selectable text (possibly scanned). Skipping." in m]
+            self.assertEqual(len(skip_logs), 2)
+            self.assertTrue(any("Page 2" in m for m in skip_logs))
+            self.assertTrue(any("Page 3" in m for m in skip_logs))
+
+            # Verify output PDF preserved all 3 pages
+            out_doc = fitz.open(output_path)
+            self.assertEqual(len(out_doc), 3)
+            self.assertIn("Translated digital page text.", out_doc[0].get_text("text"))
+            self.assertEqual(out_doc[1].get_text("text").strip(), "")
+            self.assertEqual(out_doc[2].get_text("text").strip(), "")
+            out_doc.close()
+
+    def test_pdf_mixed_scanned_high_coverage_no_warning(self):
+        doc = fitz.open()
+        p1 = doc.new_page(width=500, height=300)
+        p1.insert_textbox(fitz.Rect(72, 72, 400, 120), "1ページ目テキスト", fontsize=14, fontname="japan")
+        p2 = doc.new_page(width=500, height=300)
+        p2.insert_textbox(fitz.Rect(72, 72, 400, 120), "2ページ目テキスト", fontsize=14, fontname="japan")
+        # Page 3 has no selectable text
+        doc.new_page(width=500, height=300)
+        input_path = os.path.join(self.test_dir, "mostly_digital.pdf")
+        doc.save(input_path)
+        doc.close()
+
+        logs = []
+        with patch.object(self.mock_engine, "translate_chunk", return_value=("Translated text", True, False)):
+            handler = PDFHandler(self.mock_engine)
+            output_path = os.path.join(self.test_dir, "mostly_digital_out.pdf")
+            stats = handler.translate(input_path, output_path, "ja2en", log_cb=logs.append)
+
+            self.assertEqual(stats["total_pages"], 3)
+            self.assertEqual(stats["pages_with_text"], 2)
+            self.assertEqual(stats["translated"], 2)
+
+            # 2/3 = 66.7% >= 50%, so no low coverage warning
+            warning_logs = [m for m in logs if "Warning: Only" in m]
+            self.assertEqual(len(warning_logs), 0)
+
+            # Page 3 skip log is present
+            skip_logs = [m for m in logs if "Page 3" in m and "No selectable text" in m]
+            self.assertEqual(len(skip_logs), 1)
+
     def test_pdf_corrupt_file_raises_e04(self):
         input_path = os.path.join(self.test_dir, "corrupt.pdf")
         with open(input_path, "wb") as f:

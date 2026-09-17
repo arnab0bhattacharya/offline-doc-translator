@@ -15,9 +15,8 @@ build/
 # PyInstaller / tool caches
 .ruff_cache/
 
-# Installer build artifacts / logs / outputs
-installer/argos_install.log
-installer/Output/
+# Installer directory (untracked / private)
+installer/
 
 # Runtime data files — never commit these
 translation_cache.json

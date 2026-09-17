@@ -13,13 +13,19 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from installer.install_argos_packages import (
-    check_privileges,
-    install_pair,
-    verify_package_archive,
-)
+try:
+    from installer.install_argos_packages import (
+        check_privileges,
+        install_pair,
+        verify_package_archive,
+    )
+
+    HAS_INSTALLER = True
+except ImportError:
+    HAS_INSTALLER = False
 
 
+@unittest.skipUnless(HAS_INSTALLER, "installer/ package is omitted or untracked")
 class TestInstallerSecurity(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp(prefix="test_installer_")

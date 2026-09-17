@@ -119,7 +119,6 @@ offline-doc-translator/
 │   ├── controllers/ # TranslationController
 │   └── widgets/     # JobRow, StagedFileList
 ├── tests/           # 240+ unit tests (pytest)
-├── installer/       # InnoSetup installer scripts
 └── main.py          # CLI entry point
 ```
 

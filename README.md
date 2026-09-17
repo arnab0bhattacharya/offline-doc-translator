@@ -40,7 +40,7 @@ Download `OfflineTranslatorSetup.exe` from the [Releases](../../releases) page a
 ### Option 2 — From Source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/offline-doc-translator.git
+git clone https://github.com/arnab0bhattacharya/offline-doc-translator.git
 cd offline-doc-translator
 
 pip install -r requirements.txt
@@ -164,4 +164,14 @@ python lint.py --fix    # Auto-fix safe issues
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see the [LICENSE](LICENSE) file for details.
+
+### Third-Party Components & Notices
+
+- **PyMuPDF (`fitz`)**: Licensed under GNU AGPL v3.0 / Artifex Software Inc.
+- **Argos Translate**: Licensed under MIT License (models under Creative Commons / Open Data).
+- **CustomTkinter**: Licensed under MIT License.
+- **CTranslate2**: Licensed under MIT License.
+- **lxml**: Licensed under BSD License.
+- **defusedxml**: Licensed under Python Software Foundation License.
+- **cryptography**: Licensed under Apache-2.0 / BSD.

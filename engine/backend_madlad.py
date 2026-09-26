@@ -153,6 +153,8 @@ class MADLADBackend(TranslationBackend):
             elapsed = time.time() - t0
             return result, elapsed
         except Exception as e:
+            if "mkl_malloc" in str(e).lower() or isinstance(e, MemoryError):
+                raise
             if log_cb:
                 log_cb(f"[!] MADLAD translation error: {e}")
             elapsed = time.time() - t0

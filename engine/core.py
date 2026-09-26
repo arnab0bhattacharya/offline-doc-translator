@@ -480,8 +480,12 @@ class TranslationEngine:
         if effective_mode == TranslationMode.FAST_NMT:
             return self.nmt_backend
         if effective_mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
+            if self._madlad_backend is not None and getattr(self._madlad_backend, "is_model_loaded", lambda: False)():
+                self._madlad_backend.unload()
             return self.nllb_backend
         if effective_mode == TranslationMode.MADLAD_3B:
+            if self._nllb_backend is not None and getattr(self._nllb_backend, "is_model_loaded", lambda: False)():
+                self._nllb_backend.unload()
             return self.madlad_backend
         return self.llm_backend
 
@@ -568,7 +572,7 @@ class TranslationEngine:
 
     def flush_model(self) -> None:
         """Explicitly unloads model from VRAM/RAM after a document completes."""
-        if self.mode == TranslationMode.FAST_NMT:
+        if self.mode != TranslationMode.PURE_LLM:
             return
         try:
             requests.post(
@@ -742,7 +746,12 @@ class TranslationEngine:
 
         # 3. Check backend readiness
         if not backend.is_ready(direction):
-            engine_label = "Quality NMT (NLLB)" if self.mode == TranslationMode.QUALITY_NMT else "Fast NMT (Argos)"
+            if self.mode == TranslationMode.MADLAD_3B:
+                engine_label = "MADLAD-400 3B"
+            elif self.mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
+                engine_label = "NLLB-200 3.3B"
+            else:
+                engine_label = "Fast NMT (Argos)"
             raise TranslatorError(
                 ErrorCode.E08,
                 detail=f"{engine_label} cannot translate {direction}: the language model package is not installed.",
@@ -764,6 +773,16 @@ class TranslationEngine:
                 translated_raw = backend.translate_single(text, direction)
                 elapsed = time.time() - t0
         except Exception as e:
+            err_str = str(e).lower()
+            if "mkl_malloc" in err_str or "out of memory" in err_str or isinstance(e, MemoryError):
+                raise TranslatorError(
+                    ErrorCode.E03,
+                    detail=(
+                        f"Out of memory during {backend_name.upper()} translation: {e}. "
+                        "The system ran out of RAM for this 3B model. Please close other applications "
+                        "or switch to ⚡ Fast (Argos) mode."
+                    ),
+                ) from e
             if self.logger:
                 self.logger.error(
                     message=f"{backend_name.upper()} translation error for {location_id}: {e}. Original kept.",
@@ -821,7 +840,12 @@ class TranslationEngine:
                 details={"source_backend": backend_name},
             )
         if log_cb:
-            tag = "⚡ Fast NMT" if self.mode == TranslationMode.FAST_NMT else "🎯 Quality NMT"
+            if self.mode == TranslationMode.FAST_NMT:
+                tag = "⚡ Fast NMT"
+            elif self.mode == TranslationMode.MADLAD_3B:
+                tag = "🎯 MADLAD 3B"
+            else:
+                tag = "🌐 NLLB 3.3B"
             log_cb(f'  [{tag} in {elapsed:.2f}s] {location_id}: "{preview_src}" => "{preview_res}"')
 
         return TranslationResult(
@@ -1065,7 +1089,12 @@ class TranslationEngine:
         if not should_translate(text, direction):
             return TranslationResult(text=text, was_translated=False, was_reverted=False)
 
-        if self.mode in (TranslationMode.FAST_NMT, TranslationMode.QUALITY_NMT):
+        if self.mode in (
+            TranslationMode.FAST_NMT,
+            TranslationMode.QUALITY_NMT,
+            TranslationMode.NLLB_3B,
+            TranslationMode.MADLAD_3B,
+        ):
             return self._translate_chunk_nmt(
                 text=text,
                 direction=direction,

@@ -145,6 +145,8 @@ class NLLBBackend(TranslationBackend):
             elapsed = time.time() - t0
             return res, elapsed
         except Exception as e:
+            if "mkl_malloc" in str(e).lower() or isinstance(e, MemoryError):
+                raise
             if log_cb:
                 log_cb(f"  [-] NLLB backend error: {e}")
             return None, time.time() - t0

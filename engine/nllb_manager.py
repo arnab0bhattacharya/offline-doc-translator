@@ -22,16 +22,21 @@ NLLB_1_3B_DIR_NAME = "nllb-200-distilled-1.3B-ct2-int8"
 
 # Files required for CTranslate2 + SentencePiece execution
 REQUIRED_MODEL_FILES = {
-    "model.bin": 500 * 1024 * 1024,  # minimum 500 MB (actual ~1.4 GB)
-    "shared_vocabulary.json": 50 * 1024,  # minimum 50 KB (actual ~2.5 MB)
-    "sentencepiece.bpe.model": 1 * 1024 * 1024,  # minimum 1 MB (actual ~4.9 MB)
+    "config.json": 50,  # minimum 50 bytes (actual 159 bytes)
+    "shared_vocabulary.txt": 50 * 1024,  # minimum 50 KB (actual ~2.56 MB)
+    "sentencepiece.bpe.model": 1 * 1024 * 1024,  # minimum 1 MB (actual ~4.85 MB)
+    "model.bin": 500 * 1024 * 1024,  # minimum 500 MB (actual ~1.38 GB)
 }
+
+# Approximate total bytes for progress calculation (~1.39 GB)
+TOTAL_MODEL_BYTES_APPROX = 1_389_250_000
 
 # Hugging Face CDN endpoints (JustFrederik/nllb-200-distilled-1.3B-ct2-int8)
 HF_BASE_URL = "https://huggingface.co/JustFrederik/nllb-200-distilled-1.3B-ct2-int8/resolve/main"
 NLLB_DOWNLOAD_MANIFEST = {
+    "config.json": f"{HF_BASE_URL}/config.json",
+    "shared_vocabulary.txt": f"{HF_BASE_URL}/shared_vocabulary.txt",
     "sentencepiece.bpe.model": f"{HF_BASE_URL}/sentencepiece.bpe.model",
-    "shared_vocabulary.json": f"{HF_BASE_URL}/shared_vocabulary.json",
     "model.bin": f"{HF_BASE_URL}/model.bin",
 }
 
@@ -68,12 +73,18 @@ def check_nllb_installed(model_dir: str | None = None) -> bool:
     """
     Verifies if NLLB-200 1.3B model files are present and valid on disk.
     Checks existence and non-trivial file sizes for all required CTranslate2 files.
+    Accepts either shared_vocabulary.txt or shared_vocabulary.json.
     """
     target_dir = model_dir or get_nllb_model_dir()
     if not os.path.isdir(target_dir):
         return False
 
-    for filename, min_bytes in REQUIRED_MODEL_FILES.items():
+    core_files = {
+        "config.json": 50,
+        "sentencepiece.bpe.model": 1 * 1024 * 1024,
+        "model.bin": 500 * 1024 * 1024,
+    }
+    for filename, min_bytes in core_files.items():
         file_path = os.path.join(target_dir, filename)
         if not os.path.isfile(file_path):
             return False
@@ -83,7 +94,19 @@ def check_nllb_installed(model_dir: str | None = None) -> bool:
         except OSError:
             return False
 
-    return True
+    # Check for vocabulary file (either .txt or .json is accepted by CTranslate2)
+    vocab_ok = False
+    for vocab_name in ("shared_vocabulary.txt", "shared_vocabulary.json"):
+        vpath = os.path.join(target_dir, vocab_name)
+        if os.path.isfile(vpath):
+            try:
+                if os.path.getsize(vpath) >= 50 * 1024:
+                    vocab_ok = True
+                    break
+            except OSError:
+                pass
+
+    return vocab_ok
 
 
 def get_nllb_model_info(model_dir: str | None = None) -> dict[str, Any]:
@@ -93,8 +116,14 @@ def get_nllb_model_info(model_dir: str | None = None) -> dict[str, Any]:
     total_bytes = 0
     missing = []
 
+    core_files = {
+        "config.json": 50,
+        "sentencepiece.bpe.model": 1 * 1024 * 1024,
+        "model.bin": 500 * 1024 * 1024,
+    }
+
     if os.path.isdir(target_dir):
-        for filename, min_bytes in REQUIRED_MODEL_FILES.items():
+        for filename, min_bytes in core_files.items():
             file_path = os.path.join(target_dir, filename)
             if os.path.isfile(file_path):
                 try:
@@ -106,8 +135,25 @@ def get_nllb_model_info(model_dir: str | None = None) -> dict[str, Any]:
                     missing.append(f"{filename} (unreadable)")
             else:
                 missing.append(filename)
+
+        vocab_found = False
+        for vocab_name in ("shared_vocabulary.txt", "shared_vocabulary.json"):
+            vpath = os.path.join(target_dir, vocab_name)
+            if os.path.isfile(vpath):
+                vocab_found = True
+                try:
+                    size = os.path.getsize(vpath)
+                    total_bytes += size
+                    if size < 50 * 1024:
+                        missing.append(f"{vocab_name} (corrupted/truncated)")
+                except OSError:
+                    missing.append(f"{vocab_name} (unreadable)")
+                break
+
+        if not vocab_found:
+            missing.append("shared_vocabulary.txt")
     else:
-        missing = list(REQUIRED_MODEL_FILES.keys())
+        missing = [*core_files.keys(), "shared_vocabulary.txt"]
 
     return {
         "installed": installed,
@@ -122,7 +168,7 @@ def download_nllb_model(
     progress_cb: Callable[[float, str], None] | None = None,
     cancel_event: threading.Event | None = None,
     log_cb: Callable[[str], None] | None = None,
-) -> bool:
+) -> tuple[bool, str]:
     """
     Downloads NLLB-200 1.3B INT8 model files from Hugging Face with chunked streaming.
     Streams to .tmp files and renames atomically upon completion.
@@ -132,6 +178,9 @@ def download_nllb_model(
         progress_cb: Callback receiving (percentage: float 0.0-100.0, status_str: str).
         cancel_event: Optional threading.Event to abort download.
         log_cb: Optional logging callback.
+
+    Returns:
+        tuple[bool, str]: (success, status_or_error_message)
     """
     dest_dir = target_dir or get_nllb_model_dir()
     os.makedirs(dest_dir, exist_ok=True)
@@ -141,27 +190,29 @@ def download_nllb_model(
             log_cb("[✓] NLLB-200 1.3B model is already installed.")
         if progress_cb:
             progress_cb(100.0, "Model installed.")
-        return True
+        return True, "NLLB-200 1.3B model is already installed."
 
     if log_cb:
         log_cb(f"[*] Starting NLLB-200 1.3B download (~1.4 GB) to: {dest_dir}")
 
     accumulated_bytes = 0
+    headers = {"User-Agent": "OfflineDocTranslator/1.0"}
 
     try:
         for filename, url in NLLB_DOWNLOAD_MANIFEST.items():
             final_path = os.path.join(dest_dir, filename)
             tmp_path = final_path + ".tmp"
+            min_size = REQUIRED_MODEL_FILES.get(filename, 1)
 
             # Skip if already downloaded and valid
-            if os.path.exists(final_path) and os.path.getsize(final_path) >= REQUIRED_MODEL_FILES[filename]:
+            if os.path.exists(final_path) and os.path.getsize(final_path) >= min_size:
                 accumulated_bytes += os.path.getsize(final_path)
                 continue
 
             if log_cb:
                 log_cb(f"[*] Downloading {filename} from Hugging Face...")
 
-            response = requests.get(url, stream=True, timeout=30)
+            response = requests.get(url, headers=headers, stream=True, timeout=(10, 60))
             response.raise_for_status()
 
             file_bytes_done = 0
@@ -177,7 +228,7 @@ def download_nllb_model(
                             os.remove(tmp_path)
                         except OSError:
                             pass
-                        return False
+                        return False, "Download cancelled by user."
 
                     if chunk:
                         f.write(chunk)
@@ -185,15 +236,22 @@ def download_nllb_model(
                         accumulated_bytes += len(chunk)
 
                         if progress_cb:
-                            pct = min(99.0, (accumulated_bytes / (1.45 * 1024 * 1024 * 1024)) * 100)
+                            pct = min(99.0, (accumulated_bytes / TOTAL_MODEL_BYTES_APPROX) * 100)
                             elapsed = time.time() - t_start
                             speed_mb = (file_bytes_done / (1024 * 1024)) / max(0.1, elapsed)
                             mb_done = round(accumulated_bytes / (1024 * 1024), 1)
                             progress_cb(pct, f"Downloading {filename} ({mb_done} MB, {speed_mb:.1f} MB/s)...")
 
             # Validate size floor before committing
-            if os.path.getsize(tmp_path) < REQUIRED_MODEL_FILES[filename]:
-                raise RuntimeError(f"Downloaded file {filename} is too small ({os.path.getsize(tmp_path)} bytes).")
+            actual_size = os.path.getsize(tmp_path)
+            if actual_size < min_size:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                raise RuntimeError(
+                    f"Downloaded file {filename} is too small ({actual_size} bytes, expected at least {min_size} bytes)."
+                )
 
             # Atomic move
             if os.path.exists(final_path):
@@ -207,14 +265,15 @@ def download_nllb_model(
                 log_cb("[✓] NLLB-200 1.3B model successfully installed and ready.")
             if progress_cb:
                 progress_cb(100.0, "NLLB 1.3B model installed successfully!")
-            return True
+            return True, "NLLB-200 1.3B model installed successfully!"
         else:
-            raise RuntimeError("Model verification failed after download.")
+            return False, "Model verification failed after download."
 
     except Exception as e:
+        err_msg = str(e)
         if log_cb:
-            log_cb(f"[!] Error downloading NLLB model: {e}")
-        return False
+            log_cb(f"[!] Error downloading NLLB model: {err_msg}")
+        return False, f"Download failed: {err_msg}"
 
 
 def import_local_model_folder(
@@ -228,25 +287,31 @@ def import_local_model_folder(
     if not os.path.isdir(src_abs):
         return False, f"Source folder not found: {src_abs}"
 
-    missing = []
-    for filename, min_bytes in REQUIRED_MODEL_FILES.items():
-        src_file = os.path.join(src_abs, filename)
-        if not os.path.isfile(src_file) or os.path.getsize(src_file) < min_bytes:
-            missing.append(filename)
-
-    if missing:
-        return False, f"Folder is missing required files or files are truncated: {', '.join(missing)}"
+    if not check_nllb_installed(src_abs):
+        info = get_nllb_model_info(src_abs)
+        missing_str = ", ".join(info.get("missing_files", []))
+        return False, f"Folder is missing required files or files are truncated: {missing_str}"
 
     dest_dir = target_dir or get_nllb_model_dir()
     os.makedirs(dest_dir, exist_ok=True)
 
     try:
-        for filename in REQUIRED_MODEL_FILES:
+        # Copy core files
+        for filename in ("model.bin", "sentencepiece.bpe.model", "config.json"):
             src_file = os.path.join(src_abs, filename)
             dst_file = os.path.join(dest_dir, filename)
             if log_cb:
                 log_cb(f"[*] Copying {filename}...")
             shutil.copy2(src_file, dst_file)
+
+        # Copy vocabulary (whichever is present)
+        for vocab_name in ("shared_vocabulary.txt", "shared_vocabulary.json"):
+            src_file = os.path.join(src_abs, vocab_name)
+            if os.path.isfile(src_file):
+                dst_file = os.path.join(dest_dir, vocab_name)
+                if log_cb:
+                    log_cb(f"[*] Copying {vocab_name}...")
+                shutil.copy2(src_file, dst_file)
 
         if check_nllb_installed(dest_dir):
             if log_cb:

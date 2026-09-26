@@ -194,6 +194,17 @@ class SystemView(ctk.CTkFrame):
         )
         self.sys_nllb_free_btn.pack(side="left", padx=(0, 8))
 
+        self.sys_nllb_cancel_btn = ctk.CTkButton(
+            nllb_action_row,
+            text="✕  Cancel",
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
+            command=self._cancel_nllb_download_gui,
+        )
+
         self.sys_nllb_msg = ctk.CTkLabel(nllb_action_row, text="", font=ctk.CTkFont(size=11))
         self.sys_nllb_msg.pack(side="left")
 
@@ -583,9 +594,16 @@ class SystemView(ctk.CTkFrame):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _cancel_nllb_download_gui(self) -> None:
+        if hasattr(self, "_nllb_cancel_event") and self._nllb_cancel_event:
+            self._nllb_cancel_event.set()
+            self.sys_nllb_msg.configure(text="Cancelling download...", text_color=THEME["warning"])
+
     def _download_nllb_gui(self) -> None:
         self.sys_nllb_download_btn.configure(state="disabled", text="Downloading...")
         self.sys_nllb_import_btn.configure(state="disabled")
+        self.sys_nllb_free_btn.configure(state="disabled")
+        self.sys_nllb_cancel_btn.pack(side="left", padx=(0, 8), after=self.sys_nllb_download_btn)
         self.sys_nllb_progress.pack(fill="x", pady=(0, 6))
         self.sys_nllb_progress.set(0.0)
         self.sys_nllb_msg.configure(text="Initializing download from Hugging Face...", text_color=THEME["primary"])
@@ -600,21 +618,20 @@ class SystemView(ctk.CTkFrame):
             self.after(0, update)
 
         def worker():
-            success = download_nllb_model(
+            success, msg = download_nllb_model(
                 progress_cb=prog_cb,
                 cancel_event=self._nllb_cancel_event,
             )
 
             def done():
+                self.sys_nllb_cancel_btn.pack_forget()
                 self.sys_nllb_download_btn.configure(state="normal", text="⬇   Download Model (~1.4 GB)")
                 self.sys_nllb_import_btn.configure(state="normal")
                 self.sys_nllb_progress.pack_forget()
                 if success:
-                    self.sys_nllb_msg.configure(
-                        text="✓ NLLB-200 1.3B installed and ready!", text_color=THEME["success"]
-                    )
+                    self.sys_nllb_msg.configure(text=f"✓ {msg}", text_color=THEME["success"])
                 else:
-                    self.sys_nllb_msg.configure(text="⚠ Download failed or was cancelled.", text_color=THEME["error"])
+                    self.sys_nllb_msg.configure(text=f"⚠ {msg}", text_color=THEME["error"])
                 self.refresh_nllb_status()
 
             self.after(0, done)

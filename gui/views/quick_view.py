@@ -21,6 +21,7 @@ from engine.core import (
     unmask_protected_text,
     verify_placeholders,
 )
+from engine.ollama_manager import get_ollama_manager
 from engine.preflight import check_ollama_status
 from gui.dnd_helper import is_point_in_widget
 from gui.theme import (
@@ -274,6 +275,22 @@ class QuickView(ctk.CTkFrame):
 
         direction = self.quick_dir_var.get()
         model_name = self.model_var.get().strip() or "gemma4:e2b-it-qat"
+
+        if not check_ollama_status():
+            start_now = messagebox.askyesno(
+                "Ollama Offline",
+                "Quick Translate requires Ollama, but the background service is currently offline.\n\n"
+                "Would you like to start Ollama in the background now?",
+            )
+            if start_now:
+                self.quick_status.configure(text="Starting Ollama in background...", text_color=THEME["primary"])
+                mgr = get_ollama_manager()
+                success, msg = mgr.start_service(timeout=15.0)
+                if not success:
+                    messagebox.showerror("Ollama Startup Failed", f"Could not start Ollama:\n{msg}")
+                    return
+            else:
+                return
 
         self.quick_translate_btn.configure(state="disabled", text="Translating...")
         self.quick_status.configure(text=f"Connecting to Ollama ({model_name})...", text_color=THEME["primary"])

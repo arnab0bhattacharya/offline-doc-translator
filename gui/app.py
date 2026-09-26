@@ -258,7 +258,7 @@ class TranslatorApp:
             fg_color="transparent",
             text_color=THEME["warning"],
             hover_color=THEME["btn_secondary"],
-            command=lambda: self.system_view.refresh_ollama_status(),
+            command=self._on_side_ollama_btn_click,
         )
         self.side_ollama_btn.pack(fill="x", padx=6, pady=(0, 6))
 
@@ -310,7 +310,14 @@ class TranslatorApp:
     #  DIAGNOSTICS & STATUS SYNC
     # ══════════════════════════════════════════════════════════════
 
+    def _on_side_ollama_btn_click(self):
+        if not getattr(self, "_ollama_online", False):
+            self._switch_tab("system")
+        else:
+            self.system_view.refresh_ollama_status()
+
     def _on_ollama_status(self, alive: bool, models: list[str]):
+        self._ollama_online = alive
         if alive:
             self.side_ollama_btn.configure(text=f"● Ollama: Online ({len(models)})", text_color=THEME["success"])
             if models:
@@ -445,6 +452,14 @@ class TranslatorApp:
         if hasattr(self, "quick_view") and hasattr(self.quick_view, "persist_glossary"):
             self.quick_view.persist_glossary()
         self.controller.shutdown()
+
+        # Evict models from VRAM and terminate background service if spawned by app
+        try:
+            from engine.ollama_manager import get_ollama_manager
+
+            get_ollama_manager().cleanup_on_exit()
+        except Exception:
+            pass
 
 
 def launch_gui():

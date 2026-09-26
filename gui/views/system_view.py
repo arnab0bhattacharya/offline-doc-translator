@@ -17,6 +17,7 @@ from engine.cache_locations import (
     clear_all_caches,
     get_cache_stats,
 )
+from engine.ollama_manager import get_ollama_manager
 from engine.preflight import (
     check_disk_space,
     check_ollama_status,
@@ -143,15 +144,47 @@ class SystemView(ctk.CTkFrame):
         )
         self.sys_ollama_desc.pack(anchor="w", pady=(6, 12))
 
-        ctk.CTkButton(
-            co_inner,
-            text="↻  Refresh Ollama Connection",
-            width=180,
+        self.ollama_action_row = ctk.CTkFrame(co_inner, fg_color="transparent")
+        self.ollama_action_row.pack(fill="x")
+
+        self.sys_ollama_start_btn = ctk.CTkButton(
+            self.ollama_action_row,
+            text="▶   Start Ollama in Background",
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=THEME["primary"],
+            hover_color=THEME["primary_hover"],
+            command=self._start_ollama_gui,
+        )
+
+        self.sys_ollama_refresh_btn = ctk.CTkButton(
+            self.ollama_action_row,
+            text="↻  Refresh Connection",
             height=32,
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
             command=self.refresh_ollama_status,
-        ).pack(anchor="w")
+        )
+
+        self.sys_ollama_free_btn = ctk.CTkButton(
+            self.ollama_action_row,
+            text="🧹  Free Model Memory",
+            height=32,
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            command=self._free_ollama_memory_gui,
+        )
+
+        self.sys_ollama_stop_btn = ctk.CTkButton(
+            self.ollama_action_row,
+            text="⏹  Stop Ollama",
+            height=32,
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            command=self._stop_ollama_gui,
+        )
+
+        self.sys_ollama_msg = ctk.CTkLabel(self.ollama_action_row, text="", font=ctk.CTkFont(size=11))
 
         # ── Card: Hardware ──
         card_hw = ctk.CTkFrame(
@@ -257,28 +290,112 @@ class SystemView(ctk.CTkFrame):
         """Probes local Ollama instance and installed models."""
         alive = check_ollama_status()
         models: list[str] = []
+        mgr = get_ollama_manager()
+
+        for btn in (
+            self.sys_ollama_start_btn,
+            self.sys_ollama_refresh_btn,
+            self.sys_ollama_free_btn,
+            self.sys_ollama_stop_btn,
+            self.sys_ollama_msg,
+        ):
+            btn.pack_forget()
+
         if alive:
             models = list_installed_models()
+            loaded = mgr.get_loaded_models()
+            loaded_info = f"\nActive in Memory (VRAM/RAM): {', '.join(loaded)}" if loaded else ""
             self.sys_ollama_desc.configure(
                 text=(
-                    f"Service: Online at http://localhost:11434\n"
+                    f"Service: Online at http://localhost:11434{loaded_info}\n"
                     f"Installed Models: {', '.join(models) if models else 'None'}\n"
                     f"(Zero-Load Guarantee: Model weights load strictly on-demand)"
                 ),
                 text_color=THEME["success"],
             )
+            self.sys_ollama_refresh_btn.pack(side="left", padx=(0, 8))
+            self.sys_ollama_free_btn.pack(side="left", padx=(0, 8))
+            if mgr.spawned_by_app:
+                self.sys_ollama_stop_btn.pack(side="left", padx=(0, 8))
+            self.sys_ollama_msg.pack(side="left")
         else:
             self.sys_ollama_desc.configure(
                 text=(
                     "Service: Offline\n"
                     "Ollama is not running. Fast NMT mode will operate 100% offline without it.\n"
-                    "Start the Ollama app to enable Pure LLM mode."
+                    "Start Ollama in the background to enable Pure LLM mode."
                 ),
                 text_color=THEME["error"],
             )
+            self.sys_ollama_start_btn.pack(side="left", padx=(0, 8))
+            self.sys_ollama_refresh_btn.pack(side="left", padx=(0, 8))
+            self.sys_ollama_msg.pack(side="left")
 
         if self.on_ollama_status:
             self.on_ollama_status(alive, models)
+
+    def _start_ollama_gui(self) -> None:
+        self.sys_ollama_start_btn.configure(state="disabled", text="⏳ Starting Ollama...")
+        self.sys_ollama_msg.configure(text="Spawning background service...", text_color=THEME["primary"])
+
+        def worker():
+            mgr = get_ollama_manager()
+            success, msg = mgr.start_service(timeout=15.0)
+
+            def done():
+                self.sys_ollama_start_btn.configure(state="normal", text="▶   Start Ollama in Background")
+                self.sys_ollama_msg.configure(
+                    text=msg,
+                    text_color=THEME["success"] if success else THEME["error"],
+                )
+                self.refresh_ollama_status()
+                if not success:
+                    messagebox.showerror("Ollama Startup Failed", msg)
+
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _free_ollama_memory_gui(self) -> None:
+        self.sys_ollama_free_btn.configure(state="disabled", text="Freeing...")
+
+        def worker():
+            mgr = get_ollama_manager()
+            unloaded = mgr.unload_all_models()
+
+            def done():
+                self.sys_ollama_free_btn.configure(state="normal", text="🧹  Free Model Memory")
+                if unloaded:
+                    txt = f"✓ Evicted {len(unloaded)} model(s) from VRAM: {', '.join(unloaded)}"
+                    self.sys_ollama_msg.configure(text=txt, text_color=THEME["success"])
+                else:
+                    self.sys_ollama_msg.configure(
+                        text="ℹ No active models were held in VRAM.", text_color=THEME["text_secondary"]
+                    )
+                self.refresh_ollama_status()
+
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _stop_ollama_gui(self) -> None:
+        self.sys_ollama_stop_btn.configure(state="disabled", text="Stopping...")
+
+        def worker():
+            mgr = get_ollama_manager()
+            success, msg = mgr.stop_service()
+
+            def done():
+                self.sys_ollama_stop_btn.configure(state="normal", text="⏹  Stop Ollama")
+                self.sys_ollama_msg.configure(
+                    text=msg,
+                    text_color=THEME["success"] if success else THEME["warning"],
+                )
+                self.refresh_ollama_status()
+
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def refresh_argos_status(self) -> None:
         """Verifies presence of offline Argos translation models."""

@@ -38,6 +38,11 @@ from .core import (
 )
 from .errors import ERROR_MESSAGES, ErrorCode, TranslatorError
 from .logging import TranslationLogEvent, TranslationLogger, get_logger
+from .ollama_manager import (
+    OllamaManager,
+    find_ollama_binary,
+    get_ollama_manager,
+)
 from .preflight import (
     check_disk_space,
     check_model_installed,
@@ -68,6 +73,7 @@ __all__ = [
     "LLMBackend",
     "NMTBackend",
     "NullCache",
+    "OllamaManager",
     "TranslationBackend",
     "TranslationCache",
     "TranslationEngine",
@@ -88,7 +94,9 @@ __all__ = [
     "derive_machine_key",
     "escape_xml",
     "execute_translation",
+    "find_ollama_binary",
     "get_logger",
+    "get_ollama_manager",
     "hash_text",
     "list_installed_models",
     "load_trusted_packages",

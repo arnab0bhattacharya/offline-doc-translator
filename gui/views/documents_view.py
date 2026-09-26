@@ -16,6 +16,7 @@ import customtkinter as ctk
 
 from engine.cache import CachePolicy
 from engine.core import TranslationMode
+from engine.ollama_manager import get_ollama_manager
 from engine.preflight import check_ollama_status
 from engine.queue_manager import JobStatus, TranslationJob, format_eta
 from gui.controllers.translation_controller import TranslationController
@@ -765,10 +766,20 @@ class DocumentsView(ctk.CTkFrame):
             cache_policy = CachePolicy.ENCRYPTED_PERSISTENT
 
         if mode == TranslationMode.PURE_LLM and not check_ollama_status():
-            if not messagebox.askyesno(
+            start_now = messagebox.askyesno(
                 "Ollama Offline",
-                "Pure LLM mode requires Ollama, but Ollama is offline.\n\nContinue anyway?",
-            ):
+                "Pure LLM mode requires Ollama, but the background service is currently offline.\n\n"
+                "Would you like to start Ollama in the background now?",
+            )
+            if start_now:
+                self.log("[AI Engine] Starting Ollama background service...")
+                mgr = get_ollama_manager()
+                success, msg = mgr.start_service(timeout=15.0)
+                if not success:
+                    messagebox.showerror("Ollama Startup Failed", f"Could not start Ollama:\n{msg}")
+                    return
+                self.log(f"[AI Engine] {msg}")
+            else:
                 return
 
         dispatched = self.controller.start_batch(

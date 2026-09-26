@@ -39,12 +39,12 @@ class StagedFileList(ctk.CTkFrame):
         self.clear_btn = ctk.CTkButton(
             self.header_frame,
             text="Clear All",
-            width=70,
-            height=22,
+            width=80,
+            height=28,
             font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            text_color=THEME["text_secondary"],
-            hover_color=THEME["btn_secondary"],
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            hover_color=THEME["btn_sec_hover"],
             command=self.clear,
         )
         self.clear_btn.pack(side="right")
@@ -152,7 +152,7 @@ class StagedFileList(ctk.CTkFrame):
 
         for fpath in self.selected_files:
             chip = ctk.CTkFrame(self.list_frame, fg_color=THEME["card_bg"], corner_radius=6)
-            chip.pack(fill="x", padx=8, pady=3)
+            chip.pack(fill="x", padx=8, pady=4)
 
             ext = os.path.splitext(fpath)[1].lower().replace(".", "").upper()
             bcolor = THEME.get(f"badge_{ext.lower()}", THEME["primary"])
@@ -165,7 +165,7 @@ class StagedFileList(ctk.CTkFrame):
                 fg_color=bcolor,
                 corner_radius=4,
                 text_color="#FFFFFF",
-            ).pack(side="left", padx=(8, 6), pady=6)
+            ).pack(side="left", padx=(8, 6), pady=8)
 
             # Name & size
             name = os.path.basename(fpath)
@@ -187,11 +187,11 @@ class StagedFileList(ctk.CTkFrame):
             ctk.CTkButton(
                 chip,
                 text="✕",
-                width=22,
-                height=20,
+                width=26,
+                height=24,
                 font=ctk.CTkFont(size=10),
                 fg_color="transparent",
-                text_color=THEME["text_secondary"],
+                text_color=THEME["btn_sec_text"],
                 hover_color=THEME["btn_secondary"],
                 command=lambda p=fpath: self.remove_file(p),
             ).pack(side="right", padx=6)

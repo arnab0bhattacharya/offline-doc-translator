@@ -53,7 +53,7 @@ class JobRow(ctk.CTkFrame):
             corner_radius=4,
             text_color="#FFFFFF",
         )
-        self.badge_label.pack(side="left", padx=(8, 6), pady=6)
+        self.badge_label.pack(side="left", padx=(8, 6), pady=8)
 
         # File Name
         name = os.path.basename(job.input_path)
@@ -61,7 +61,7 @@ class JobRow(ctk.CTkFrame):
             self,
             text=name,
             font=ctk.CTkFont(size=11, weight="bold"),
-            width=170,
+            width=200,
             anchor="w",
             text_color=THEME["text_primary"],
         )
@@ -74,7 +74,7 @@ class JobRow(ctk.CTkFrame):
 
         # Status Label
         self.st_label = ctk.CTkLabel(
-            self, text="Queued", font=ctk.CTkFont(size=10), width=130, anchor="w", text_color=THEME["text_secondary"]
+            self, text="Queued", font=ctk.CTkFont(size=10), width=180, anchor="w", text_color=THEME["text_secondary"]
         )
         self.st_label.pack(side="left", padx=4)
 
@@ -90,7 +90,7 @@ class JobRow(ctk.CTkFrame):
             height=22,
             font=ctk.CTkFont(size=10),
             fg_color=THEME["error"],
-            hover_color="#991B1B",
+            hover_color=THEME["cancel_hover"],
             command=self._handle_cancel,
         )
         self.cancel_button.pack(side="right")
@@ -104,6 +104,7 @@ class JobRow(ctk.CTkFrame):
             font=ctk.CTkFont(size=11),
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._handle_open_file,
         )
 
@@ -115,6 +116,7 @@ class JobRow(ctk.CTkFrame):
             font=ctk.CTkFont(size=11),
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._handle_open_folder,
         )
 
@@ -125,7 +127,7 @@ class JobRow(ctk.CTkFrame):
             height=22,
             font=ctk.CTkFont(size=11),
             fg_color=THEME["warning"],
-            hover_color="#B45309",
+            hover_color=THEME["review_hover"],
             command=self._handle_open_review,
         )
 

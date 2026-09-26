@@ -118,7 +118,7 @@ class DocumentsView(ctk.CTkFrame):
         upload_area = ctk.CTkFrame(card_sel, fg_color=THEME["staging_bg"], corner_radius=10)
         upload_area.pack(fill="x", padx=16, pady=16)
 
-        ctk.CTkLabel(upload_area, text="📂", font=ctk.CTkFont(size=28)).pack(pady=(12, 4))
+        ctk.CTkLabel(upload_area, text="📂", font=ctk.CTkFont(size=28)).pack(pady=(16, 6))
 
         ctk.CTkLabel(
             upload_area,
@@ -155,6 +155,7 @@ class DocumentsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._browse_folder,
         ).pack(side="left", padx=6)
 
@@ -233,11 +234,14 @@ class DocumentsView(ctk.CTkFrame):
         ctk.CTkButton(
             dir_sub,
             text="⇄",
-            width=32,
-            height=28,
+            width=36,
+            height=32,
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
+            border_width=1,
+            border_color=THEME["card_border"],
             command=self._swap_doc_direction,
         ).pack(side="left")
 
@@ -309,12 +313,12 @@ class DocumentsView(ctk.CTkFrame):
         self.glossary_save_btn = ctk.CTkButton(
             glossary_toggle_frame,
             text="💾 Save",
-            width=68,
-            height=24,
+            width=80,
+            height=30,
             font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            text_color=THEME["text_secondary"],
-            hover_color=THEME["btn_secondary"],
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            hover_color=THEME["btn_sec_hover"],
             command=self._save_glossary_file,
         )
         self.glossary_save_btn.pack(side="right", padx=(4, 0))
@@ -322,12 +326,12 @@ class DocumentsView(ctk.CTkFrame):
         self.glossary_load_btn = ctk.CTkButton(
             glossary_toggle_frame,
             text="📥 Load",
-            width=68,
-            height=24,
+            width=80,
+            height=30,
             font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            text_color=THEME["text_secondary"],
-            hover_color=THEME["btn_secondary"],
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            hover_color=THEME["btn_sec_hover"],
             command=self._load_glossary_file,
         )
         self.glossary_load_btn.pack(side="right")
@@ -335,7 +339,7 @@ class DocumentsView(ctk.CTkFrame):
         self.glossary_drawer = ctk.CTkFrame(opt_inner, fg_color="transparent")
         self.glossary_text = ctk.CTkTextbox(
             self.glossary_drawer,
-            height=70,
+            height=100,
             font=ctk.CTkFont(family="Consolas", size=11),
             fg_color=THEME["staging_bg"],
         )
@@ -368,6 +372,7 @@ class DocumentsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self.add_to_queue_only,
         )
         self.add_queue_btn.pack(side="left")
@@ -395,11 +400,12 @@ class DocumentsView(ctk.CTkFrame):
         ctk.CTkButton(
             q_head,
             text="Clear Finished",
-            width=90,
-            height=24,
+            width=100,
+            height=28,
             font=ctk.CTkFont(size=11),
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self.clear_completed_jobs,
         ).pack(side="right")
 
@@ -431,6 +437,7 @@ class DocumentsView(ctk.CTkFrame):
             state="disabled",
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self.open_last_output,
         )
         self.open_file_btn.pack(side="left", padx=(0, 8))
@@ -443,6 +450,7 @@ class DocumentsView(ctk.CTkFrame):
             state="disabled",
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self.open_last_dir,
         )
         self.open_dir_btn.pack(side="left", padx=(0, 8))
@@ -454,7 +462,7 @@ class DocumentsView(ctk.CTkFrame):
             height=32,
             state="disabled",
             fg_color=THEME["warning"],
-            hover_color="#B45309",
+            hover_color=THEME["review_hover"],
             command=self.view_review_log,
         )
         self.review_btn.pack(side="left")
@@ -464,9 +472,9 @@ class DocumentsView(ctk.CTkFrame):
             text="Activity Log ▶",
             width=110,
             height=32,
-            fg_color="transparent",
-            text_color=THEME["text_secondary"],
-            hover_color=THEME["btn_secondary"],
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            hover_color=THEME["btn_sec_hover"],
             command=self._toggle_log,
         )
         self.log_drawer_btn.pack(side="right")
@@ -973,7 +981,7 @@ class DocumentsView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             head,
-            text="📊  Batch Summary",
+            text="Batch Summary",
             font=ctk.CTkFont(size=14, weight="bold"),
             text_color=THEME["text_primary"],
         ).pack(side="left")
@@ -1041,6 +1049,7 @@ class DocumentsView(ctk.CTkFrame):
             height=32,
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._open_batch_common_folder,
         )
         self.summary_open_folder_btn.pack(side="left", padx=(0, 8))
@@ -1052,6 +1061,7 @@ class DocumentsView(ctk.CTkFrame):
             height=32,
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._copy_batch_summary,
         )
         self.summary_copy_btn.pack(side="left")

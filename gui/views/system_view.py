@@ -84,7 +84,7 @@ class SystemView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             ca_inner,
-            text="📦  Argos Offline Neural Engine",
+            text="Argos Offline Neural Engine",
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=THEME["text_primary"],
         ).pack(anchor="w")
@@ -130,7 +130,7 @@ class SystemView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             co_inner,
-            text="🧠  Local Ollama LLM Service",
+            text="Local Ollama LLM Service",
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=THEME["text_primary"],
         ).pack(anchor="w")
@@ -163,6 +163,7 @@ class SystemView(ctk.CTkFrame):
             height=32,
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self.refresh_ollama_status,
         )
 
@@ -172,6 +173,7 @@ class SystemView(ctk.CTkFrame):
             height=32,
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._free_ollama_memory_gui,
         )
 
@@ -181,6 +183,7 @@ class SystemView(ctk.CTkFrame):
             height=32,
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._stop_ollama_gui,
         )
 
@@ -201,7 +204,7 @@ class SystemView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             ch_inner,
-            text="💻  System Hardware & Memory Diagnostics",
+            text="System Hardware & Memory",
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=THEME["text_primary"],
         ).pack(anchor="w")
@@ -230,7 +233,7 @@ class SystemView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             cc_inner,
-            text="💾  Translation Cache",
+            text="Translation Cache",
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=THEME["text_primary"],
         ).pack(anchor="w")
@@ -254,6 +257,7 @@ class SystemView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
             fg_color=THEME["btn_secondary"],
             hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
             command=self._clear_cache_gui,
         )
         self.sys_clear_cache_btn.pack(side="left", padx=(0, 10))

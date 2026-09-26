@@ -55,16 +55,23 @@ class QuickView(ctk.CTkFrame):
         self._setup_dnd()
 
     def _build_ui(self):
-        # Header
+        # ── Page Header ──
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 12))
+        header.pack(fill="x", pady=(0, 16))
 
         ctk.CTkLabel(
             header,
             text="Quick Text Translation",
             font=ctk.CTkFont(size=22, weight="bold"),
             text_color=THEME["text_primary"],
-        ).pack(side="left")
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            header,
+            text="Paste text and get instant translations",
+            font=ctk.CTkFont(size=12),
+            text_color=THEME["text_secondary"],
+        ).pack(anchor="w", pady=(2, 0))
 
         # Top Control Bar
         toolbar = ctk.CTkFrame(
@@ -92,11 +99,14 @@ class QuickView(ctk.CTkFrame):
         ctk.CTkButton(
             tb_inner,
             text="⇄",
-            width=32,
-            height=28,
+            width=36,
+            height=32,
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
             hover_color=THEME["btn_sec_hover"],
+            border_width=1,
+            border_color=THEME["card_border"],
             command=self._swap_quick_dir,
         ).pack(side="left", padx=(0, 14))
 
@@ -118,6 +128,7 @@ class QuickView(ctk.CTkFrame):
             width=70,
             height=28,
             fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
             hover_color=THEME["btn_sec_hover"],
             command=self._copy_quick_translation,
         ).pack(side="right", padx=(4, 0))
@@ -127,9 +138,9 @@ class QuickView(ctk.CTkFrame):
             text="🗑 Clear",
             width=70,
             height=28,
-            fg_color="transparent",
-            text_color=THEME["text_secondary"],
-            hover_color=THEME["btn_secondary"],
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            hover_color=THEME["btn_sec_hover"],
             command=self._clear_quick_text,
         ).pack(side="right", padx=4)
 
@@ -152,12 +163,12 @@ class QuickView(ctk.CTkFrame):
         self.glossary_save_btn = ctk.CTkButton(
             glossary_toggle_frame,
             text="💾 Save",
-            width=68,
-            height=24,
+            width=80,
+            height=30,
             font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            text_color=THEME["text_secondary"],
-            hover_color=THEME["btn_secondary"],
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            hover_color=THEME["btn_sec_hover"],
             command=self._save_glossary_file,
         )
         self.glossary_save_btn.pack(side="right", padx=(4, 0))
@@ -165,12 +176,12 @@ class QuickView(ctk.CTkFrame):
         self.glossary_load_btn = ctk.CTkButton(
             glossary_toggle_frame,
             text="📥 Load",
-            width=68,
-            height=24,
+            width=80,
+            height=30,
             font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            text_color=THEME["text_secondary"],
-            hover_color=THEME["btn_secondary"],
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            hover_color=THEME["btn_sec_hover"],
             command=self._load_glossary_file,
         )
         self.glossary_load_btn.pack(side="right")
@@ -178,7 +189,7 @@ class QuickView(ctk.CTkFrame):
         self.glossary_drawer = ctk.CTkFrame(self, fg_color="transparent")
         self.glossary_text = ctk.CTkTextbox(
             self.glossary_drawer,
-            height=70,
+            height=100,
             font=ctk.CTkFont(family="Consolas", size=11),
             fg_color=THEME["staging_bg"],
         )

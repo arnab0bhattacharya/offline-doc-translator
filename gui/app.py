@@ -171,7 +171,12 @@ class TranslatorApp:
         self._switch_tab("docs")
 
     def _build_sidebar(self):
-        self.sidebar = ctk.CTkFrame(self.main_container, width=230, corner_radius=0, fg_color=THEME["sidebar_bg"])
+        self.sidebar = ctk.CTkFrame(
+            self.main_container,
+            width=200,
+            corner_radius=0,
+            fg_color=THEME["sidebar_bg"],
+        )
         self.sidebar.pack(side="left", fill="y", padx=0, pady=0)
         self.sidebar.pack_propagate(False)
 
@@ -181,7 +186,7 @@ class TranslatorApp:
 
         ctk.CTkLabel(
             brand_frame,
-            text="🌐  DocTranslator",
+            text="DocTranslator",
             font=ctk.CTkFont(size=17, weight="bold"),
             text_color=THEME["text_primary"],
             anchor="w",
@@ -198,9 +203,9 @@ class TranslatorApp:
         # ── Navigation Buttons ──
         self.nav_buttons = {}
         nav_items = [
-            ("docs", "📄  Documents", "Batch translate PPTX, XLSX, DOCX, PDF"),
-            ("quick", "⚡  Quick Translate", "Instant side-by-side text lookup"),
-            ("system", "⚙  System & AI", "Engines, models, and diagnostics"),
+            ("docs", "Documents", "Batch translate PPTX, XLSX, DOCX, PDF"),
+            ("quick", "Quick Translate", "Instant side-by-side text lookup"),
+            ("system", "System & AI", "Engines, models, and diagnostics"),
         ]
 
         nav_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
@@ -210,7 +215,7 @@ class TranslatorApp:
             btn = ctk.CTkButton(
                 nav_frame,
                 text=f"  {label}",
-                height=42,
+                height=44,
                 anchor="w",
                 font=ctk.CTkFont(size=13, weight="bold"),
                 corner_radius=8,
@@ -266,11 +271,19 @@ class TranslatorApp:
         footer = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         footer.pack(fill="x", padx=14, pady=(0, 16))
 
-        self.theme_switch = ctk.CTkSwitch(
-            footer, text="Dark Theme", font=ctk.CTkFont(size=11), command=self._toggle_theme
+        self._is_dark = True
+        self.theme_toggle_btn = ctk.CTkButton(
+            footer,
+            text="☀  Light Mode",
+            height=30,
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],
+            hover_color=THEME["btn_secondary"],
+            command=self._toggle_theme,
         )
-        self.theme_switch.select()
-        self.theme_switch.pack(side="left")
+        self.theme_toggle_btn.pack(side="left")
 
     def _switch_tab(self, tab_id: str):
         # Persist glossary before leaving active tab
@@ -299,12 +312,14 @@ class TranslatorApp:
             self.quick_view.sync_glossary()
 
     def _toggle_theme(self):
-        if self.theme_switch.get():
-            ctk.set_appearance_mode("dark")
-            self.theme_switch.configure(text="Dark Theme")
-        else:
+        if self._is_dark:
             ctk.set_appearance_mode("light")
-            self.theme_switch.configure(text="Light Theme")
+            self.theme_toggle_btn.configure(text="🌙  Dark Mode")
+            self._is_dark = False
+        else:
+            ctk.set_appearance_mode("dark")
+            self.theme_toggle_btn.configure(text="☀  Light Mode")
+            self._is_dark = True
 
     # ══════════════════════════════════════════════════════════════
     #  DIAGNOSTICS & STATUS SYNC

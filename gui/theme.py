@@ -5,28 +5,45 @@ Theme palette, language pairs, model presets, and shared GUI parsing utilities.
 """
 
 # ── Color System (Dual Light/Dark Mode Tuples) ────────────────────
+# Each value is a (light_mode, dark_mode) tuple compatible with
+# CustomTkinter's native dual-mode color handling.
 THEME = {
-    "bg": ("gray94", "#0F172A"),
-    "sidebar_bg": ("gray90", "#0B1120"),
-    "card_bg": ("white", "#1E293B"),
-    "card_border": ("gray80", "#334155"),
-    "staging_bg": ("gray96", "#0F172A"),
-    "text_primary": ("gray10", "#F8FAFC"),
-    "text_secondary": ("gray45", "#94A3B8"),
+    "bg": ("#F8FAFC", "#0F172A"),
+    "sidebar_bg": ("#FFFFFF", "#0B1120"),
+    "card_bg": ("#FFFFFF", "#1E293B"),
+    "card_border": ("#E2E8F0", "#334155"),
+    "staging_bg": ("#F1F5F9", "#0F172A"),
+    "text_primary": ("#0F172A", "#F8FAFC"),
+    "text_secondary": ("#64748B", "#94A3B8"),
     "primary": ("#2563EB", "#3B82F6"),
     "primary_hover": ("#1D4ED8", "#2563EB"),
     "success": ("#16A34A", "#22C55E"),
     "warning": ("#D97706", "#F59E0B"),
     "error": ("#DC2626", "#EF4444"),
-    "btn_secondary": ("gray85", "#334155"),
-    "btn_sec_hover": ("gray75", "#475569"),
-    "log_bg": ("gray96", "#090D16"),
-    "log_fg": ("gray20", "#CBD5E1"),
-    # Badges
+    "btn_secondary": ("#E2E8F0", "#334155"),
+    "btn_sec_hover": ("#CBD5E1", "#475569"),
+    "btn_sec_text": ("#334155", "#E2E8F0"),
+    "log_bg": ("#F8FAFC", "#090D16"),
+    "log_fg": ("#334155", "#CBD5E1"),
+    "review_hover": ("#B45309", "#B45309"),
+    "cancel_hover": ("#991B1B", "#991B1B"),
+    # Badges (single color — high contrast on white text in both modes)
     "badge_pptx": "#EA580C",
     "badge_xlsx": "#16A34A",
     "badge_docx": "#2563EB",
     "badge_pdf": "#DC2626",
+}
+
+# ── Spacing Constants ─────────────────────────────────────────────
+SPACING = {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32,
+    "section_gap": 20,
+    "card_pad": 16,
+    "sidebar_pad": 16,
 }
 
 LANGUAGE_PAIRS = [

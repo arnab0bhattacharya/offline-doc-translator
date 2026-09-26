@@ -153,6 +153,63 @@ def verify_placeholders(
     return actual == expected
 
 
+_MONTH_NAMES_EN = {
+    "1": "january",
+    "2": "february",
+    "3": "march",
+    "4": "april",
+    "5": "may",
+    "6": "june",
+    "7": "july",
+    "8": "august",
+    "9": "september",
+    "10": "october",
+    "11": "november",
+    "12": "december",
+}
+
+
+def extract_numeric_tokens(text: str) -> list[str]:
+    """Extracts numeric values without commas or percentages for consistency checks."""
+    matches = re.findall(r"(?<![A-Za-z0-9])\d+(?:,\d{3})*(?:\.\d+)?%?(?![A-Za-z0-9])", text)
+    cleaned = []
+    for m in matches:
+        val = m.replace(",", "").rstrip("%").strip()
+        if val:
+            cleaned.append(val)
+    return cleaned
+
+
+def verify_nmt_numbers(source_text: str, target_text: str) -> tuple[bool, list[str]]:
+    """
+    Checks that numbers present in the source text appear in the target text.
+    Accounts for localized month names (e.g. '10月' -> 'October').
+    Returns (all_present: bool, missing_numbers: list[str]).
+    """
+    src_nums = extract_numeric_tokens(source_text)
+    if not src_nums:
+        return True, []
+
+    target_lower = target_text.lower()
+    tgt_nums = extract_numeric_tokens(target_text)
+    tgt_counter = Counter(tgt_nums)
+
+    missing = []
+    for num in src_nums:
+        if tgt_counter.get(num, 0) > 0:
+            tgt_counter[num] -= 1
+            continue
+
+        if num in _MONTH_NAMES_EN:
+            month_word = _MONTH_NAMES_EN[num]
+            if month_word in target_lower or month_word[:3] in target_lower:
+                continue
+
+        missing.append(num)
+
+    return len(missing) == 0, missing
+
+
 def unmask_numbers(text: str, number_map: dict[str, str]) -> str:
     """Replaces placeholders [[N#]] back with their original numerical values."""
     for placeholder, original in number_map.items():
@@ -303,6 +360,7 @@ class TranslationEngine:
 
         self.failed_this_run: set = set()
         self.logged_failed_keys: set = set()
+        self._glossary_translation_cache: dict[tuple[str, str], str] = {}
 
         # Resolve CachePolicy (handling legacy encrypted_cache boolean if passed)
         if encrypted_cache is not None:
@@ -435,7 +493,7 @@ class TranslationEngine:
     def _cache_fingerprint(self, context: str | None = None) -> str:
         """Prevents reuse across models, glossaries, and context-sensitive translations."""
         payload = {
-            "schema": 3,
+            "schema": 4,
             "model": self.model_name,
             "glossary": sorted(self.glossary.items()),
             "context": context or "",
@@ -522,7 +580,65 @@ class TranslationEngine:
         except Exception:
             pass
 
-    def translate_chunk(
+    def _get_term_translation(self, term: str, direction: str, backend: TranslationBackend) -> str:
+        """Retrieves or queries the default isolated translation of a glossary term."""
+        cache_key = (term, direction)
+        if cache_key in self._glossary_translation_cache:
+            return self._glossary_translation_cache[cache_key]
+
+        val = ""
+        try:
+            if hasattr(backend, "translate_single"):
+                res = backend.translate_single(term, direction)
+                val = (res or "").strip()
+            elif hasattr(backend, "translate"):
+                res_tuple = backend.translate(text=term, direction=direction)
+                res = res_tuple[0] if isinstance(res_tuple, tuple) else res_tuple
+                val = (res or "").strip()
+        except Exception:
+            val = ""
+
+        self._glossary_translation_cache[cache_key] = val
+        return val
+
+    def _apply_post_translation_glossary(
+        self,
+        translated_text: str,
+        source_text: str,
+        direction: str,
+        backend: TranslationBackend,
+    ) -> str:
+        """
+        Enforces user glossary rules on clean NMT output using dynamic pivot alignment.
+        Replaces the default machine-translated term with the approved glossary term.
+        """
+        if not self.glossary:
+            return translated_text
+
+        matching_terms = [(src, tgt) for src, tgt in self.glossary.items() if src and tgt and src in source_text]
+        matching_terms.sort(key=lambda pair: len(pair[0]), reverse=True)
+
+        for src_term, tgt_term in matching_terms:
+            if direction == "ja2en":
+                if re.search(rf"\b{re.escape(tgt_term)}\b", translated_text, re.IGNORECASE):
+                    continue
+            else:
+                if tgt_term in translated_text:
+                    continue
+
+            default_trans = self._get_term_translation(src_term, direction, backend)
+            if not default_trans or default_trans.lower() == tgt_term.lower():
+                continue
+
+            if direction == "ja2en":
+                pattern = re.compile(rf"\b{re.escape(default_trans)}(?:s|es)?\b", re.IGNORECASE)
+                translated_text = pattern.sub(tgt_term, translated_text)
+            else:
+                translated_text = translated_text.replace(default_trans, tgt_term)
+
+        return translated_text
+
+    def _translate_chunk_nmt(
         self,
         text: str,
         direction: str,
@@ -533,12 +649,162 @@ class TranslationEngine:
         log_cb: Callable[[str], None] | None = None,
     ) -> TranslationResult:
         """
-        Translates a single piece of text according to the selected TranslationMode.
-        Returns: TranslationResult(text, was_translated, was_reverted, elapsed, source_backend)
+        Fast NMT translation pipeline operating strictly on clean, natural text.
+        Bypasses synthetic placeholder brackets to prevent subword tokenizer fragmentation.
+        Enforces post-translation glossary substitution and numeric audit verification.
         """
-        if not should_translate(text, direction):
-            return TranslationResult(text=text, was_translated=False, was_reverted=False)
+        key = hash_text(text)
+        mode_str = self.mode.value if isinstance(self.mode, TranslationMode) else str(self.mode)
+        fp = self._cache_fingerprint(context)
+        dir_cache = self._get_direction_cache(direction, context)
 
+        # 1. Check persistent cache
+        cached_trans = self._cache_mgr.get(key=key, direction=direction, fingerprint=fp, mode=mode_str)
+        if cached_trans is None and key in dir_cache:
+            cached_trans = dir_cache[key]
+
+        if cached_trans is not None:
+            self._record_cache_access(direction, context, key)
+            preview_src = (text[:24] + "..") if len(text) > 26 else text
+            preview_res = (cached_trans[:24] + "..") if len(cached_trans) > 26 else cached_trans
+            if self.logger:
+                self.logger.info(
+                    message=f'"{preview_src}" => "{preview_res}"',
+                    category="cache",
+                    location=location_id,
+                    elapsed=0.0,
+                )
+            if log_cb:
+                log_cb(f'  [⚡ Cache] {location_id}: "{preview_src}" => "{preview_res}"')
+            return TranslationResult(
+                text=cached_trans,
+                was_translated=True,
+                was_reverted=False,
+                elapsed=0.0,
+                source_backend="cache",
+            )
+
+        # 2. Check runtime failure tracker
+        if key in self.failed_this_run:
+            if self.logger:
+                self.logger.warning(
+                    message=f"Skipped {location_id} (previously failed this run)",
+                    category="translation",
+                    location=location_id,
+                )
+            if log_cb:
+                log_cb(f"  [⏩ Skipped] {location_id}")
+            if review_log_path:
+                self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
+            return TranslationResult(text=text, was_translated=False, was_reverted=True)
+
+        preview_src = (text[:30] + "..") if len(text) > 32 else text
+        backend = self.get_backend()
+        backend_name = getattr(backend, "name", "nmt")
+
+        # 3. Check backend readiness
+        if not backend.is_ready(direction):
+            raise TranslatorError(
+                ErrorCode.E08,
+                detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed.",
+            )
+
+        # 4. Dispatch clean translation via backend
+        elapsed = 0.0
+        try:
+            if hasattr(backend, "translate"):
+                translated_raw, elapsed = backend.translate(
+                    text=text,
+                    direction=direction,
+                    placeholder_map=None,
+                    context=None,
+                    log_cb=log_cb,
+                )
+            else:
+                t0 = time.time()
+                translated_raw = backend.translate_single(text, direction)
+                elapsed = time.time() - t0
+        except Exception as e:
+            if self.logger:
+                self.logger.error(
+                    message=f"{backend_name.upper()} translation error for {location_id}: {e}. Original kept.",
+                    category="translation",
+                    location=location_id,
+                    details={"error": str(e)},
+                )
+            if log_cb:
+                log_cb(f"  [-] {backend_name.upper()} translation error for {location_id}: {e}. Original kept.")
+            self.failed_this_run.add(key)
+            if review_log_path:
+                self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
+            return TranslationResult(
+                text=text,
+                was_translated=False,
+                was_reverted=True,
+                source_backend=backend_name,
+            )
+
+        if not translated_raw:
+            self.failed_this_run.add(key)
+            if review_log_path:
+                self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
+            return TranslationResult(
+                text=text,
+                was_translated=False,
+                was_reverted=True,
+                source_backend=backend_name,
+            )
+
+        # 5. Post-translation numeric audit
+        nums_ok, missing_nums = verify_nmt_numbers(text, translated_raw)
+        if not nums_ok:
+            warn_msg = f"NMT numeric check: missing {missing_nums} in '{location_id}'"
+            if self.logger:
+                self.logger.warning(message=warn_msg, category="translation", location=location_id)
+            if log_cb:
+                log_cb(f"  [⚠ Number Audit] {warn_msg}")
+
+        # 6. Post-translation glossary substitution
+        final_trans = self._apply_post_translation_glossary(translated_raw, text, direction, backend)
+
+        # 7. Store in cache & return
+        self._cache_mgr.put(key=key, direction=direction, fingerprint=fp, value=final_trans, mode=mode_str)
+        dir_cache[key] = final_trans
+        self._record_cache_access(direction, context, key)
+
+        preview_res = (final_trans[:30] + "..") if len(final_trans) > 32 else final_trans
+        if self.logger:
+            self.logger.info(
+                message=f'"{preview_src}" => "{preview_res}"',
+                category="translation",
+                location=location_id,
+                elapsed=elapsed,
+                details={"source_backend": backend_name},
+            )
+        if log_cb:
+            log_cb(f'  [⚡ Fast NMT in {elapsed:.2f}s] {location_id}: "{preview_src}" => "{preview_res}"')
+
+        return TranslationResult(
+            text=final_trans,
+            was_translated=True,
+            was_reverted=False,
+            elapsed=elapsed,
+            source_backend=backend_name,
+        )
+
+    def _translate_chunk_llm(
+        self,
+        text: str,
+        direction: str,
+        context: str | None = None,
+        location_id: str = "doc",
+        chunk_id: str = "0",
+        review_log_path: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
+    ) -> TranslationResult:
+        """
+        Pure LLM translation pipeline with placeholder masking and strict verification.
+        """
         glossary_masked_text, glossary_map = mask_glossary_terms(text, self.glossary)
         masked_text, number_map = mask_numbers(glossary_masked_text)
         placeholder_map = {**number_map, **glossary_map}
@@ -594,43 +860,35 @@ class TranslationEngine:
             return TranslationResult(text=text, was_translated=False, was_reverted=True)
 
         preview_src = (text[:30] + "..") if len(text) > 32 else text
-
         backend = self.get_backend()
-        backend_name = getattr(backend, "name", "nmt" if self.mode == TranslationMode.FAST_NMT else "llm")
+        backend_name = getattr(backend, "name", "llm")
 
-        # 3. Check backend readiness / resource gating
-        if self.mode == TranslationMode.FAST_NMT:
-            if not backend.is_ready(direction):
-                raise TranslatorError(
-                    ErrorCode.E08,
-                    detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed.",
+        # 3. Resource gating
+        if self.allow_llm is not False:
+            self.check_and_clear_memory(log_cb)
+
+        if log_cb:
+            path_label = "🤖 Pure LLM"
+            log_cb(f'  [{path_label}] {location_id}: "{preview_src}"...')
+
+        if self.allow_llm is False:
+            if self.logger:
+                self.logger.error(
+                    message=f"No LLM backend is available for {location_id}.",
+                    category="backend",
+                    location=location_id,
                 )
-        else:
-            if self.allow_llm is not False:
-                self.check_and_clear_memory(log_cb)
-
             if log_cb:
-                path_label = "🤖 Pure LLM"
-                log_cb(f'  [{path_label}] {location_id}: "{preview_src}"...')
-
-            if self.allow_llm is False:
-                if self.logger:
-                    self.logger.error(
-                        message=f"No LLM backend is available for {location_id}.",
-                        category="backend",
-                        location=location_id,
-                    )
-                if log_cb:
-                    log_cb(f"  [❌ Fallback] No LLM backend is available for {location_id}.")
-                self.failed_this_run.add(key)
-                if review_log_path:
-                    self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-                return TranslationResult(
-                    text=text,
-                    was_translated=False,
-                    was_reverted=True,
-                    source_backend=backend_name,
-                )
+                log_cb(f"  [❌ Fallback] No LLM backend is available for {location_id}.")
+            self.failed_this_run.add(key)
+            if review_log_path:
+                self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
+            return TranslationResult(
+                text=text,
+                was_translated=False,
+                was_reverted=True,
+                source_backend=backend_name,
+            )
 
         # 4. Dispatch translation via backend
         elapsed = 0.0
@@ -644,22 +902,18 @@ class TranslationEngine:
                     log_cb=log_cb,
                 )
             else:
-                # Backward compatibility for legacy test mocks defining only translate_single
                 t0 = time.time()
-                if self.mode == TranslationMode.FAST_NMT:
-                    translated_masked = backend.translate_single(masked_text, direction)
+                res_tuple = backend.translate_single(
+                    masked_text=masked_text,
+                    number_map=placeholder_map,
+                    direction=direction,
+                    context=context,
+                    log_cb=log_cb,
+                )
+                if isinstance(res_tuple, tuple):
+                    translated_masked, elapsed = res_tuple
                 else:
-                    res_tuple = backend.translate_single(
-                        masked_text=masked_text,
-                        number_map=placeholder_map,
-                        direction=direction,
-                        context=context,
-                        log_cb=log_cb,
-                    )
-                    if isinstance(res_tuple, tuple):
-                        translated_masked, elapsed = res_tuple
-                    else:
-                        translated_masked = res_tuple
+                    translated_masked = res_tuple
                 if elapsed == 0.0:
                     elapsed = time.time() - t0
         except Exception as e:
@@ -701,11 +955,7 @@ class TranslationEngine:
                         details={"source_backend": backend_name},
                     )
                 if log_cb:
-                    if self.mode == TranslationMode.FAST_NMT:
-                        path_tag = "⚡ Fast NMT"
-                        log_cb(f'  [{path_tag} in {elapsed:.2f}s] {location_id}: "{preview_src}" => "{preview_res}"')
-                    else:
-                        log_cb(f'  [✓ Done in {elapsed:.1f}s] "{preview_src}" => "{preview_res}"')
+                    log_cb(f'  [✓ Done in {elapsed:.1f}s] "{preview_src}" => "{preview_res}"')
                 return TranslationResult(
                     text=final_trans,
                     was_translated=True,
@@ -756,4 +1006,41 @@ class TranslationEngine:
             was_reverted=True,
             elapsed=elapsed,
             source_backend=backend_name,
+        )
+
+    def translate_chunk(
+        self,
+        text: str,
+        direction: str,
+        context: str | None = None,
+        location_id: str = "doc",
+        chunk_id: str = "0",
+        review_log_path: str | None = None,
+        log_cb: Callable[[str], None] | None = None,
+    ) -> TranslationResult:
+        """
+        Translates a single piece of text according to the selected TranslationMode.
+        Returns: TranslationResult(text, was_translated, was_reverted, elapsed, source_backend)
+        """
+        if not should_translate(text, direction):
+            return TranslationResult(text=text, was_translated=False, was_reverted=False)
+
+        if self.mode == TranslationMode.FAST_NMT:
+            return self._translate_chunk_nmt(
+                text=text,
+                direction=direction,
+                context=context,
+                location_id=location_id,
+                chunk_id=chunk_id,
+                review_log_path=review_log_path,
+                log_cb=log_cb,
+            )
+        return self._translate_chunk_llm(
+            text=text,
+            direction=direction,
+            context=context,
+            location_id=location_id,
+            chunk_id=chunk_id,
+            review_log_path=review_log_path,
+            log_cb=log_cb,
         )

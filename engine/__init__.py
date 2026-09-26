@@ -27,6 +27,7 @@ from .core import (
     contains_japanese,
     contains_latin,
     escape_xml,
+    extract_numeric_tokens,
     hash_text,
     mask_glossary_terms,
     mask_numbers,
@@ -34,6 +35,7 @@ from .core import (
     unescape_xml,
     unmask_numbers,
     unmask_protected_text,
+    verify_nmt_numbers,
     verify_placeholders,
 )
 from .errors import ERROR_MESSAGES, ErrorCode, TranslatorError
@@ -94,6 +96,7 @@ __all__ = [
     "derive_machine_key",
     "escape_xml",
     "execute_translation",
+    "extract_numeric_tokens",
     "find_ollama_binary",
     "get_logger",
     "get_ollama_manager",
@@ -108,6 +111,7 @@ __all__ = [
     "unescape_xml",
     "unmask_numbers",
     "unmask_protected_text",
+    "verify_nmt_numbers",
     "verify_package_archive",
     "verify_placeholders",
 ]

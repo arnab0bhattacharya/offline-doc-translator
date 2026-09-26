@@ -233,7 +233,7 @@ class TestEngineStructuredLoggingIntegration(unittest.TestCase):
 
     def test_engine_emits_warning_on_dropped_placeholder(self):
         class DroppingBackend:
-            name = "nmt"
+            name = "llm"
 
             def is_ready(self, direction):
                 return True
@@ -246,7 +246,7 @@ class TestEngineStructuredLoggingIntegration(unittest.TestCase):
         test_logger.subscribe(events.append)
 
         engine = TranslationEngine(
-            mode=TranslationMode.FAST_NMT,
+            mode=TranslationMode.PURE_LLM,
             backend=DroppingBackend(),
             logger=test_logger,
         )
@@ -256,6 +256,32 @@ class TestEngineStructuredLoggingIntegration(unittest.TestCase):
         warn_events = [e for e in events if e.level == "warning"]
         self.assertGreaterEqual(len(warn_events), 1)
         self.assertEqual(warn_events[-1].location, "num_chunk")
+
+    def test_engine_emits_warning_on_nmt_number_audit(self):
+        class MissingNumberNMT:
+            name = "nmt"
+
+            def is_ready(self, direction):
+                return True
+
+            def translate(self, text, direction, **kwargs):
+                return "Output with no numbers", 0.02
+
+        test_logger = TranslationLogger(name="nmt_audit_test")
+        events = []
+        test_logger.subscribe(events.append)
+
+        engine = TranslationEngine(
+            mode=TranslationMode.FAST_NMT,
+            backend=MissingNumberNMT(),
+            logger=test_logger,
+        )
+
+        res = engine.translate_chunk("Total: 500 items", "en2ja", location_id="nmt_chunk")
+        self.assertTrue(res.was_translated)
+        warn_events = [e for e in events if e.level == "warning"]
+        self.assertGreaterEqual(len(warn_events), 1)
+        self.assertIn("NMT numeric check: missing ['500']", warn_events[-1].message)
 
 
 if __name__ == "__main__":

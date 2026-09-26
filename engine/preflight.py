@@ -83,7 +83,7 @@ def run_nmt_preflight(direction: str) -> None:
 
 
 def check_nllb_ready(direction: str) -> bool:
-    """Checks that NLLB-200 1.3B model files exist and the requested direction is supported."""
+    """Checks that NLLB-200 3.3B model files exist and the requested direction is supported."""
     try:
         from .backend_nllb import NLLBBackend
 
@@ -93,11 +93,31 @@ def check_nllb_ready(direction: str) -> bool:
 
 
 def run_nllb_preflight(direction: str) -> None:
-    """Raises a user-facing error when Quality NMT (NLLB) mode cannot run locally."""
+    """Raises a user-facing error when NLLB-200 3.3B mode cannot run locally."""
     if not check_nllb_ready(direction):
         raise TranslatorError(
             ErrorCode.E08,
-            detail=f"NLLB-200 1.3B model is not installed or does not support {direction}. "
+            detail=f"NLLB-200 3.3B model is not installed or does not support {direction}. "
+            "Please download or import the model in System & AI Diagnostics.",
+        )
+
+
+def check_madlad_ready(direction: str) -> bool:
+    """Checks that MADLAD-400 3B model files exist and the requested direction is supported."""
+    try:
+        from .backend_madlad import MADLADBackend
+
+        return MADLADBackend().is_ready(direction)
+    except Exception:
+        return False
+
+
+def run_madlad_preflight(direction: str) -> None:
+    """Raises a user-facing error when MADLAD-400 3B mode cannot run locally."""
+    if not check_madlad_ready(direction):
+        raise TranslatorError(
+            ErrorCode.E08,
+            detail=f"MADLAD-400 3B model is not installed or does not support {direction}. "
             "Please download or import the model in System & AI Diagnostics.",
         )
 

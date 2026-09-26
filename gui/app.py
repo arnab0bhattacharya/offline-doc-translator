@@ -27,6 +27,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+from engine.backend_madlad import MADLADBackend
 from engine.backend_nllb import NLLBBackend
 from engine.backend_nmt import NMTBackend
 from engine.queue_manager import JobStatus, TranslationJob
@@ -54,6 +55,7 @@ class TranslatorApp:
         # Engine & Controller state
         self.nmt_backend = NMTBackend()
         self.nllb_backend = NLLBBackend()
+        self.madlad_backend = MADLADBackend()
         self.controller = TranslationController(
             on_job_update=self._on_job_update,
             on_log=self._on_job_log,
@@ -160,6 +162,7 @@ class TranslatorApp:
             self.content_area,
             nmt_backend=self.nmt_backend,
             nllb_backend=self.nllb_backend,
+            madlad_backend=self.madlad_backend,
             on_ollama_status=self._on_ollama_status,
             on_argos_status=self._on_argos_status,
         )
@@ -483,6 +486,13 @@ class TranslatorApp:
         try:
             if hasattr(self, "nllb_backend") and self.nllb_backend:
                 self.nllb_backend.unload()
+        except Exception:
+            pass
+
+        # Evict MADLAD-400 model from RAM if resident
+        try:
+            if hasattr(self, "madlad_backend") and self.madlad_backend:
+                self.madlad_backend.unload()
         except Exception:
             pass
 

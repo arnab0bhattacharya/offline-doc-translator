@@ -4,6 +4,7 @@ engine package initialization.
 
 from .backend_base import TranslationBackend
 from .backend_llm import LLMBackend
+from .backend_madlad import MADLADBackend
 from .backend_nllb import NLLBBackend
 from .backend_nmt import (
     NMTBackend,
@@ -41,6 +42,13 @@ from .core import (
 )
 from .errors import ERROR_MESSAGES, ErrorCode, TranslatorError
 from .logging import TranslationLogEvent, TranslationLogger, get_logger
+from .madlad_manager import (
+    check_madlad_installed,
+    download_madlad_model,
+    get_madlad_model_dir,
+    get_madlad_model_info,
+    import_local_madlad_folder,
+)
 from .nllb_manager import (
     check_nllb_installed,
     download_nllb_model,
@@ -55,12 +63,14 @@ from .ollama_manager import (
 )
 from .preflight import (
     check_disk_space,
+    check_madlad_ready,
     check_model_installed,
     check_nllb_ready,
     check_nmt_ready,
     check_ollama_status,
     check_ram,
     list_installed_models,
+    run_madlad_preflight,
     run_nllb_preflight,
     run_nmt_preflight,
     run_preflight,
@@ -83,6 +93,7 @@ __all__ = [
     "ErrorCode",
     "JSONFileCache",
     "LLMBackend",
+    "MADLADBackend",
     "NLLBBackend",
     "NMTBackend",
     "NullCache",
@@ -96,6 +107,8 @@ __all__ = [
     "TranslationResult",
     "TranslatorError",
     "check_disk_space",
+    "check_madlad_installed",
+    "check_madlad_ready",
     "check_model_installed",
     "check_nllb_installed",
     "check_nllb_ready",
@@ -107,21 +120,26 @@ __all__ = [
     "contains_latin",
     "derive_fernet_key",
     "derive_machine_key",
+    "download_madlad_model",
     "download_nllb_model",
     "escape_xml",
     "execute_translation",
     "extract_numeric_tokens",
     "find_ollama_binary",
     "get_logger",
+    "get_madlad_model_dir",
+    "get_madlad_model_info",
     "get_nllb_model_dir",
     "get_nllb_model_info",
     "get_ollama_manager",
     "hash_text",
+    "import_local_madlad_folder",
     "import_local_model_folder",
     "list_installed_models",
     "load_trusted_packages",
     "mask_glossary_terms",
     "mask_numbers",
+    "run_madlad_preflight",
     "run_nllb_preflight",
     "run_nmt_preflight",
     "run_preflight",

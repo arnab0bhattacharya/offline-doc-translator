@@ -11,12 +11,18 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from engine.backend_madlad import MADLADBackend
 from engine.backend_nllb import NLLBBackend
 from engine.backend_nmt import NMTBackend
 from engine.cache_locations import (
     cleanup_legacy_cache_remnants,
     clear_all_caches,
     get_cache_stats,
+)
+from engine.madlad_manager import (
+    download_madlad_model,
+    get_madlad_model_info,
+    import_local_madlad_folder,
 )
 from engine.nllb_manager import (
     download_nllb_model,
@@ -43,6 +49,7 @@ class SystemView(ctk.CTkFrame):
         master,
         nmt_backend: NMTBackend | None = None,
         nllb_backend: NLLBBackend | None = None,
+        madlad_backend: MADLADBackend | None = None,
         on_ollama_status: Callable[[bool, list[str]], None] | None = None,
         on_argos_status: Callable[[bool, str], None] | None = None,
         **kwargs,
@@ -50,9 +57,11 @@ class SystemView(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.nmt_backend = nmt_backend or NMTBackend()
         self.nllb_backend = nllb_backend or NLLBBackend()
+        self.madlad_backend = madlad_backend or MADLADBackend()
         self.on_ollama_status = on_ollama_status
         self.on_argos_status = on_argos_status
         self._nllb_cancel_event = None
+        self._madlad_cancel_event = None
 
         self._build_ui()
 
@@ -124,7 +133,7 @@ class SystemView(ctk.CTkFrame):
         self.sys_argos_msg = ctk.CTkLabel(argos_action_row, text="", font=ctk.CTkFont(size=11))
         self.sys_argos_msg.pack(side="left")
 
-        # ── Card: NLLB-200 1.3B Neural Engine ──
+        # ── Card: NLLB-200 3.3B Neural Engine ──
         card_nllb = ctk.CTkFrame(
             scroll,
             fg_color=THEME["card_bg"],
@@ -139,7 +148,7 @@ class SystemView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             cn_inner,
-            text="NLLB-200 1.3B Neural Engine (High Fidelity)",
+            text="NLLB-200 3.3B Neural Engine (High Fidelity, Meta AI)",
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=THEME["text_primary"],
         ).pack(anchor="w")
@@ -161,7 +170,7 @@ class SystemView(ctk.CTkFrame):
 
         self.sys_nllb_download_btn = ctk.CTkButton(
             nllb_action_row,
-            text="⬇   Download Model (~1.4 GB)",
+            text="⬇   Download Model (~3.4 GB)",
             height=32,
             font=ctk.CTkFont(size=12, weight="bold"),
             fg_color=THEME["primary"],
@@ -207,6 +216,90 @@ class SystemView(ctk.CTkFrame):
 
         self.sys_nllb_msg = ctk.CTkLabel(nllb_action_row, text="", font=ctk.CTkFont(size=11))
         self.sys_nllb_msg.pack(side="left")
+
+        # ── Card: MADLAD-400 3B Neural Engine ──
+        card_madlad = ctk.CTkFrame(
+            scroll,
+            fg_color=THEME["card_bg"],
+            border_color=THEME["card_border"],
+            border_width=1,
+            corner_radius=12,
+        )
+        card_madlad.pack(fill="x", pady=(0, 14))
+
+        cm_inner = ctk.CTkFrame(card_madlad, fg_color="transparent")
+        cm_inner.pack(fill="x", padx=16, pady=16)
+
+        ctk.CTkLabel(
+            cm_inner,
+            text="MADLAD-400 3B Neural Engine (Document MT, Google Research)",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(anchor="w")
+
+        self.sys_madlad_desc = ctk.CTkLabel(
+            cm_inner,
+            text="Probing MADLAD model files on disk...",
+            font=ctk.CTkFont(size=12),
+            text_color=THEME["text_secondary"],
+            justify="left",
+        )
+        self.sys_madlad_desc.pack(anchor="w", pady=(6, 8))
+
+        self.sys_madlad_progress = ctk.CTkProgressBar(cm_inner)
+        self.sys_madlad_progress.set(0.0)
+
+        madlad_action_row = ctk.CTkFrame(cm_inner, fg_color="transparent")
+        madlad_action_row.pack(fill="x", pady=(4, 0))
+
+        self.sys_madlad_download_btn = ctk.CTkButton(
+            madlad_action_row,
+            text="⬇   Download Model (~3.0 GB)",
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=THEME["primary"],
+            hover_color=THEME["primary_hover"],
+            command=self._download_madlad_gui,
+        )
+        self.sys_madlad_download_btn.pack(side="left", padx=(0, 8))
+
+        self.sys_madlad_import_btn = ctk.CTkButton(
+            madlad_action_row,
+            text="📂  Import Local Folder...",
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
+            command=self._import_madlad_gui,
+        )
+        self.sys_madlad_import_btn.pack(side="left", padx=(0, 8))
+
+        self.sys_madlad_free_btn = ctk.CTkButton(
+            madlad_action_row,
+            text="🧹  Free Model Memory",
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
+            command=self._free_madlad_memory_gui,
+        )
+        self.sys_madlad_free_btn.pack(side="left", padx=(0, 8))
+
+        self.sys_madlad_cancel_btn = ctk.CTkButton(
+            madlad_action_row,
+            text="✕  Cancel",
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
+            command=self._cancel_madlad_download_gui,
+        )
+
+        self.sys_madlad_msg = ctk.CTkLabel(madlad_action_row, text="", font=ctk.CTkFont(size=11))
+        self.sys_madlad_msg.pack(side="left")
 
         # ── Card: Ollama Engine ──
         card_ollama = ctk.CTkFrame(
@@ -360,10 +453,11 @@ class SystemView(ctk.CTkFrame):
         self.refresh_cache_status()
 
     def refresh_status(self) -> None:
-        """Refreshes all diagnostics: Ollama, Argos, NLLB, Hardware, and Cache."""
+        """Refreshes all diagnostics: Ollama, Argos, NLLB, MADLAD, Hardware, and Cache."""
         self.refresh_ollama_status()
         self.refresh_argos_status()
         self.refresh_nllb_status()
+        self.refresh_madlad_status()
         self.refresh_hw_status()
         self.refresh_cache_status()
 
@@ -532,14 +626,14 @@ class SystemView(ctk.CTkFrame):
             self.on_argos_status(ready, summary)
 
     def refresh_nllb_status(self) -> None:
-        """Verifies presence and RAM status of NLLB-200 1.3B model."""
+        """Verifies presence and RAM status of NLLB-200 3.3B model."""
         info = get_nllb_model_info()
         installed = info["installed"]
         is_loaded = self.nllb_backend.is_model_loaded()
 
         if installed:
             loaded_str = (
-                "Loaded in Memory (~1.6 GB RAM)" if is_loaded else "Unloaded (0 MB in RAM, loads on translation)"
+                "Loaded in Memory (~3.8 GB RAM)" if is_loaded else "Unloaded (0 MB in RAM, loads on translation)"
             )
             self.sys_nllb_desc.configure(
                 text=(
@@ -560,11 +654,11 @@ class SystemView(ctk.CTkFrame):
                 text=(
                     f"Status: Model not installed ({missing_str}).\n"
                     f"Target Location: {info['path']}\n"
-                    "Download the INT8 model (~1.4 GB) or import an existing folder for air-gapped offline use."
+                    "Download the INT8 model (~3.4 GB) or import an existing folder for air-gapped offline use."
                 ),
                 text_color=THEME["warning"],
             )
-            self.sys_nllb_download_btn.configure(text="⬇   Download Model (~1.4 GB)")
+            self.sys_nllb_download_btn.configure(text="⬇   Download Model (~3.4 GB)")
             self.sys_nllb_free_btn.configure(state="disabled")
 
     def _free_nllb_memory_gui(self) -> None:
@@ -625,7 +719,7 @@ class SystemView(ctk.CTkFrame):
 
             def done():
                 self.sys_nllb_cancel_btn.pack_forget()
-                self.sys_nllb_download_btn.configure(state="normal", text="⬇   Download Model (~1.4 GB)")
+                self.sys_nllb_download_btn.configure(state="normal", text="⬇   Download Model (~3.4 GB)")
                 self.sys_nllb_import_btn.configure(state="normal")
                 self.sys_nllb_progress.pack_forget()
                 if success:
@@ -633,6 +727,113 @@ class SystemView(ctk.CTkFrame):
                 else:
                     self.sys_nllb_msg.configure(text=f"⚠ {msg}", text_color=THEME["error"])
                 self.refresh_nllb_status()
+
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def refresh_madlad_status(self) -> None:
+        """Verifies presence and RAM status of MADLAD-400 3B model."""
+        info = get_madlad_model_info()
+        installed = info["installed"]
+        is_loaded = self.madlad_backend.is_model_loaded()
+
+        if installed:
+            loaded_str = (
+                "Loaded in Memory (~3.5 GB RAM)" if is_loaded else "Unloaded (0 MB in RAM, loads on translation)"
+            )
+            self.sys_madlad_desc.configure(
+                text=(
+                    f"Status: Model installed and verified ({info['size_mb']} MB on disk).\n"
+                    f"Location: {info['path']}\n"
+                    f"Memory State: {loaded_str}"
+                ),
+                text_color=THEME["success"],
+            )
+            self.sys_madlad_download_btn.configure(text="↻  Re-verify Model Files")
+            if is_loaded:
+                self.sys_madlad_free_btn.configure(state="normal")
+            else:
+                self.sys_madlad_free_btn.configure(state="disabled")
+        else:
+            missing_str = ", ".join(info["missing_files"]) if info["missing_files"] else "weights missing"
+            self.sys_madlad_desc.configure(
+                text=(
+                    f"Status: Model not installed ({missing_str}).\n"
+                    f"Target Location: {info['path']}\n"
+                    "Download the INT8 model (~3.0 GB) or import an existing folder for air-gapped offline use."
+                ),
+                text_color=THEME["warning"],
+            )
+            self.sys_madlad_download_btn.configure(text="⬇   Download Model (~3.0 GB)")
+            self.sys_madlad_free_btn.configure(state="disabled")
+
+    def _free_madlad_memory_gui(self) -> None:
+        self.madlad_backend.unload()
+        self.sys_madlad_msg.configure(text="✓ Model memory evicted (0 MB in RAM)", text_color=THEME["success"])
+        self.refresh_madlad_status()
+        self.after(4000, lambda: self.sys_madlad_msg.configure(text=""))
+
+    def _import_madlad_gui(self) -> None:
+        folder = filedialog.askdirectory(title="Select Folder Containing MADLAD-400 Model Files")
+        if not folder:
+            return
+
+        self.sys_madlad_msg.configure(text="Importing model files...", text_color=THEME["primary"])
+
+        def worker():
+            ok, msg = import_local_madlad_folder(folder)
+
+            def done():
+                if ok:
+                    self.sys_madlad_msg.configure(text="✓ Model imported successfully!", text_color=THEME["success"])
+                else:
+                    self.sys_madlad_msg.configure(text=f"⚠ Import failed: {msg}", text_color=THEME["error"])
+                self.refresh_madlad_status()
+
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _cancel_madlad_download_gui(self) -> None:
+        if hasattr(self, "_madlad_cancel_event") and self._madlad_cancel_event:
+            self._madlad_cancel_event.set()
+            self.sys_madlad_msg.configure(text="Cancelling download...", text_color=THEME["warning"])
+
+    def _download_madlad_gui(self) -> None:
+        self.sys_madlad_download_btn.configure(state="disabled", text="Downloading...")
+        self.sys_madlad_import_btn.configure(state="disabled")
+        self.sys_madlad_free_btn.configure(state="disabled")
+        self.sys_madlad_cancel_btn.pack(side="left", padx=(0, 8), after=self.sys_madlad_download_btn)
+        self.sys_madlad_progress.pack(fill="x", pady=(0, 6))
+        self.sys_madlad_progress.set(0.0)
+        self.sys_madlad_msg.configure(text="Initializing download from Hugging Face...", text_color=THEME["primary"])
+
+        self._madlad_cancel_event = threading.Event()
+
+        def prog_cb(pct: float, status_str: str):
+            def update():
+                self.sys_madlad_progress.set(pct / 100.0)
+                self.sys_madlad_msg.configure(text=status_str, text_color=THEME["primary"])
+
+            self.after(0, update)
+
+        def worker():
+            success, msg = download_madlad_model(
+                progress_cb=prog_cb,
+                cancel_event=self._madlad_cancel_event,
+            )
+
+            def done():
+                self.sys_madlad_cancel_btn.pack_forget()
+                self.sys_madlad_download_btn.configure(state="normal", text="⬇   Download Model (~3.0 GB)")
+                self.sys_madlad_import_btn.configure(state="normal")
+                self.sys_madlad_progress.pack_forget()
+                if success:
+                    self.sys_madlad_msg.configure(text=f"✓ {msg}", text_color=THEME["success"])
+                else:
+                    self.sys_madlad_msg.configure(text=f"⚠ {msg}", text_color=THEME["error"])
+                self.refresh_madlad_status()
 
             self.after(0, done)
 

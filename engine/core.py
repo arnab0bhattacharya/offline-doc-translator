@@ -54,8 +54,10 @@ class TranslationResult:
 
 class TranslationMode(str, Enum):
     FAST_NMT = "fast_nmt"  # 100% CTranslate2 / Argos (blazing fast, 0.02s/chunk)
-    QUALITY_NMT = "quality_nmt"  # 100% CTranslate2 / NLLB-200 1.3B INT8 (high fidelity, ~0.6s/chunk)
+    NLLB_3B = "nllb_3b"  # 100% CTranslate2 / NLLB-200 3.3B INT8 (~3.4 GB)
+    MADLAD_3B = "madlad_3b"  # 100% CTranslate2 / Google MADLAD-400 3B INT8 (~3.0 GB)
     PURE_LLM = "pure_llm"  # 100% Local LLM via Ollama
+    QUALITY_NMT = "quality_nmt"  # Backward-compatible alias (routes to NLLB 3.3B)
 
 
 def contains_japanese(text: str) -> bool:
@@ -415,6 +417,7 @@ class TranslationEngine:
         # Lazy-loaded backend instances
         self._nmt_backend = None
         self._nllb_backend = None
+        self._madlad_backend = None
         self._llm_backend = None
         self._custom_backend = backend
 
@@ -452,6 +455,14 @@ class TranslationEngine:
         return self._nllb_backend
 
     @property
+    def madlad_backend(self):
+        if self._madlad_backend is None:
+            from engine.backend_madlad import MADLADBackend
+
+            self._madlad_backend = MADLADBackend()
+        return self._madlad_backend
+
+    @property
     def llm_backend(self):
         if self._llm_backend is None:
             from engine.backend_llm import LLMBackend
@@ -468,8 +479,10 @@ class TranslationEngine:
         effective_mode = mode if mode is not None else self.mode
         if effective_mode == TranslationMode.FAST_NMT:
             return self.nmt_backend
-        if effective_mode == TranslationMode.QUALITY_NMT:
+        if effective_mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
             return self.nllb_backend
+        if effective_mode == TranslationMode.MADLAD_3B:
+            return self.madlad_backend
         return self.llm_backend
 
     def set_backend(self, backend: TranslationBackend, mode: TranslationMode | None = None) -> None:
@@ -478,15 +491,19 @@ class TranslationEngine:
             self._custom_backend = backend
         elif mode == TranslationMode.FAST_NMT:
             self._nmt_backend = backend
-        elif mode == TranslationMode.QUALITY_NMT:
+        elif mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
             self._nllb_backend = backend
+        elif mode == TranslationMode.MADLAD_3B:
+            self._madlad_backend = backend
         else:
             self._llm_backend = backend
 
     def unload_backends(self) -> None:
-        """Unloads in-memory backends (such as NLLB) and frees model RAM."""
+        """Unloads in-memory backends (such as NLLB and MADLAD) and frees model RAM."""
         if self._nllb_backend is not None and hasattr(self._nllb_backend, "unload"):
             self._nllb_backend.unload()
+        if self._madlad_backend is not None and hasattr(self._madlad_backend, "unload"):
+            self._madlad_backend.unload()
         if self._custom_backend is not None and hasattr(self._custom_backend, "unload"):
             self._custom_backend.unload()
 

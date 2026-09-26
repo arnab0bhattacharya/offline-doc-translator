@@ -54,6 +54,7 @@ class TranslationResult:
 
 class TranslationMode(str, Enum):
     FAST_NMT = "fast_nmt"  # 100% CTranslate2 / Argos (blazing fast, 0.02s/chunk)
+    QUALITY_NMT = "quality_nmt"  # 100% CTranslate2 / NLLB-200 1.3B INT8 (high fidelity, ~0.6s/chunk)
     PURE_LLM = "pure_llm"  # 100% Local LLM via Ollama
 
 
@@ -413,6 +414,7 @@ class TranslationEngine:
 
         # Lazy-loaded backend instances
         self._nmt_backend = None
+        self._nllb_backend = None
         self._llm_backend = None
         self._custom_backend = backend
 
@@ -442,6 +444,14 @@ class TranslationEngine:
         return self._nmt_backend
 
     @property
+    def nllb_backend(self):
+        if self._nllb_backend is None:
+            from engine.backend_nllb import NLLBBackend
+
+            self._nllb_backend = NLLBBackend()
+        return self._nllb_backend
+
+    @property
     def llm_backend(self):
         if self._llm_backend is None:
             from engine.backend_llm import LLMBackend
@@ -458,6 +468,8 @@ class TranslationEngine:
         effective_mode = mode if mode is not None else self.mode
         if effective_mode == TranslationMode.FAST_NMT:
             return self.nmt_backend
+        if effective_mode == TranslationMode.QUALITY_NMT:
+            return self.nllb_backend
         return self.llm_backend
 
     def set_backend(self, backend: TranslationBackend, mode: TranslationMode | None = None) -> None:
@@ -466,8 +478,17 @@ class TranslationEngine:
             self._custom_backend = backend
         elif mode == TranslationMode.FAST_NMT:
             self._nmt_backend = backend
+        elif mode == TranslationMode.QUALITY_NMT:
+            self._nllb_backend = backend
         else:
             self._llm_backend = backend
+
+    def unload_backends(self) -> None:
+        """Unloads in-memory backends (such as NLLB) and frees model RAM."""
+        if self._nllb_backend is not None and hasattr(self._nllb_backend, "unload"):
+            self._nllb_backend.unload()
+        if self._custom_backend is not None and hasattr(self._custom_backend, "unload"):
+            self._custom_backend.unload()
 
     def load_cache(self, direction: str) -> None:
         """Loads cache namespaced by mode -> direction -> configuration fingerprint -> hash."""
@@ -704,9 +725,10 @@ class TranslationEngine:
 
         # 3. Check backend readiness
         if not backend.is_ready(direction):
+            engine_label = "Quality NMT (NLLB)" if self.mode == TranslationMode.QUALITY_NMT else "Fast NMT (Argos)"
             raise TranslatorError(
                 ErrorCode.E08,
-                detail=f"Fast NMT cannot translate {direction}: the Argos language package is not installed.",
+                detail=f"{engine_label} cannot translate {direction}: the language model package is not installed.",
             )
 
         # 4. Dispatch clean translation via backend
@@ -782,7 +804,8 @@ class TranslationEngine:
                 details={"source_backend": backend_name},
             )
         if log_cb:
-            log_cb(f'  [⚡ Fast NMT in {elapsed:.2f}s] {location_id}: "{preview_src}" => "{preview_res}"')
+            tag = "⚡ Fast NMT" if self.mode == TranslationMode.FAST_NMT else "🎯 Quality NMT"
+            log_cb(f'  [{tag} in {elapsed:.2f}s] {location_id}: "{preview_src}" => "{preview_res}"')
 
         return TranslationResult(
             text=final_trans,
@@ -1025,7 +1048,7 @@ class TranslationEngine:
         if not should_translate(text, direction):
             return TranslationResult(text=text, was_translated=False, was_reverted=False)
 
-        if self.mode == TranslationMode.FAST_NMT:
+        if self.mode in (TranslationMode.FAST_NMT, TranslationMode.QUALITY_NMT):
             return self._translate_chunk_nmt(
                 text=text,
                 direction=direction,

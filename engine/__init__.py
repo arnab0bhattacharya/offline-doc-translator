@@ -4,6 +4,7 @@ engine package initialization.
 
 from .backend_base import TranslationBackend
 from .backend_llm import LLMBackend
+from .backend_nllb import NLLBBackend
 from .backend_nmt import (
     NMTBackend,
     compute_file_sha256,
@@ -40,6 +41,13 @@ from .core import (
 )
 from .errors import ERROR_MESSAGES, ErrorCode, TranslatorError
 from .logging import TranslationLogEvent, TranslationLogger, get_logger
+from .nllb_manager import (
+    check_nllb_installed,
+    download_nllb_model,
+    get_nllb_model_dir,
+    get_nllb_model_info,
+    import_local_model_folder,
+)
 from .ollama_manager import (
     OllamaManager,
     find_ollama_binary,
@@ -48,10 +56,12 @@ from .ollama_manager import (
 from .preflight import (
     check_disk_space,
     check_model_installed,
+    check_nllb_ready,
     check_nmt_ready,
     check_ollama_status,
     check_ram,
     list_installed_models,
+    run_nllb_preflight,
     run_nmt_preflight,
     run_preflight,
 )
@@ -73,6 +83,7 @@ __all__ = [
     "ErrorCode",
     "JSONFileCache",
     "LLMBackend",
+    "NLLBBackend",
     "NMTBackend",
     "NullCache",
     "OllamaManager",
@@ -86,6 +97,8 @@ __all__ = [
     "TranslatorError",
     "check_disk_space",
     "check_model_installed",
+    "check_nllb_installed",
+    "check_nllb_ready",
     "check_nmt_ready",
     "check_ollama_status",
     "check_ram",
@@ -94,17 +107,22 @@ __all__ = [
     "contains_latin",
     "derive_fernet_key",
     "derive_machine_key",
+    "download_nllb_model",
     "escape_xml",
     "execute_translation",
     "extract_numeric_tokens",
     "find_ollama_binary",
     "get_logger",
+    "get_nllb_model_dir",
+    "get_nllb_model_info",
     "get_ollama_manager",
     "hash_text",
+    "import_local_model_folder",
     "list_installed_models",
     "load_trusted_packages",
     "mask_glossary_terms",
     "mask_numbers",
+    "run_nllb_preflight",
     "run_nmt_preflight",
     "run_preflight",
     "should_translate",

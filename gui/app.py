@@ -27,6 +27,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+from engine.backend_nllb import NLLBBackend
 from engine.backend_nmt import NMTBackend
 from engine.queue_manager import JobStatus, TranslationJob
 from gui.controllers import TranslationController
@@ -52,6 +53,7 @@ class TranslatorApp:
 
         # Engine & Controller state
         self.nmt_backend = NMTBackend()
+        self.nllb_backend = NLLBBackend()
         self.controller = TranslationController(
             on_job_update=self._on_job_update,
             on_log=self._on_job_log,
@@ -157,6 +159,7 @@ class TranslatorApp:
         self.system_view = SystemView(
             self.content_area,
             nmt_backend=self.nmt_backend,
+            nllb_backend=self.nllb_backend,
             on_ollama_status=self._on_ollama_status,
             on_argos_status=self._on_argos_status,
         )
@@ -473,6 +476,13 @@ class TranslatorApp:
             from engine.ollama_manager import get_ollama_manager
 
             get_ollama_manager().cleanup_on_exit()
+        except Exception:
+            pass
+
+        # Evict NLLB-200 model from RAM if resident
+        try:
+            if hasattr(self, "nllb_backend") and self.nllb_backend:
+                self.nllb_backend.unload()
         except Exception:
             pass
 

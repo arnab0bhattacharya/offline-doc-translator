@@ -17,7 +17,7 @@ from .cache_locations import get_job_cache_path
 from .core import TranslationEngine, TranslationMode
 from .errors import ErrorCode, TranslatorError
 from .logging import TranslationLogger
-from .preflight import run_nmt_preflight, run_preflight
+from .preflight import run_nllb_preflight, run_nmt_preflight, run_preflight
 
 
 def execute_translation(
@@ -72,6 +72,8 @@ def execute_translation(
     )
     if mode == TranslationMode.FAST_NMT:
         run_nmt_preflight(direction)
+    elif mode == TranslationMode.QUALITY_NMT:
+        run_nllb_preflight(direction)
 
     if cancel_event and cancel_event.is_set():
         raise TranslatorError(ErrorCode.E09, detail="Translation cancelled after preflight.")

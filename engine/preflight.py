@@ -82,6 +82,26 @@ def run_nmt_preflight(direction: str) -> None:
         raise TranslatorError(ErrorCode.E08, detail=f"No usable local Argos package was found for {direction}.")
 
 
+def check_nllb_ready(direction: str) -> bool:
+    """Checks that NLLB-200 1.3B model files exist and the requested direction is supported."""
+    try:
+        from .backend_nllb import NLLBBackend
+
+        return NLLBBackend().is_ready(direction)
+    except Exception:
+        return False
+
+
+def run_nllb_preflight(direction: str) -> None:
+    """Raises a user-facing error when Quality NMT (NLLB) mode cannot run locally."""
+    if not check_nllb_ready(direction):
+        raise TranslatorError(
+            ErrorCode.E08,
+            detail=f"NLLB-200 1.3B model is not installed or does not support {direction}. "
+            "Please download or import the model in System & AI Diagnostics.",
+        )
+
+
 def run_preflight(
     model_name: str,
     input_path: str | None = None,

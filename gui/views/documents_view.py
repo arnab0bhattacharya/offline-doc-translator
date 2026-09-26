@@ -197,11 +197,11 @@ class DocumentsView(ctk.CTkFrame):
         self.mode_var = ctk.StringVar(value=TranslationMode.FAST_NMT.value)
         self.mode_seg = ctk.CTkSegmentedButton(
             engine_box,
-            values=["⚡ Fast NMT (Offline)", "🧠 Pure LLM (Ollama)"],
+            values=["⚡ Fast (Argos)", "🎯 Quality (NLLB 1.3B)", "🧠 Creative (Ollama)"],
             command=self._on_mode_seg_changed,
             font=ctk.CTkFont(size=12, weight="bold"),
         )
-        self.mode_seg.set("⚡ Fast NMT (Offline)")
+        self.mode_seg.set("⚡ Fast (Argos)")
         self.mode_seg.pack()
 
         # Direction Box
@@ -523,9 +523,12 @@ class DocumentsView(ctk.CTkFrame):
     # ── Mode & Direction Handlers ──
 
     def _on_mode_seg_changed(self, value: str):
-        if "Pure LLM" in value:
+        if "Creative" in value or "Pure LLM" in value:
             self.mode_var.set(TranslationMode.PURE_LLM.value)
             self.model_combo.configure(state="normal")
+        elif "Quality" in value or "NLLB" in value:
+            self.mode_var.set(TranslationMode.QUALITY_NMT.value)
+            self.model_combo.configure(state="disabled")
         else:
             self.mode_var.set(TranslationMode.FAST_NMT.value)
             self.model_combo.configure(state="disabled")
@@ -772,6 +775,18 @@ class DocumentsView(ctk.CTkFrame):
             cache_policy = CachePolicy.PLAINTEXT_PERSISTENT
         else:
             cache_policy = CachePolicy.ENCRYPTED_PERSISTENT
+
+        if mode == TranslationMode.QUALITY_NMT:
+            from engine.nllb_manager import check_nllb_installed
+
+            if not check_nllb_installed():
+                messagebox.showwarning(
+                    "NLLB Model Required",
+                    "The NLLB-200 1.3B neural model is not installed yet (~1.4 GB).\n\n"
+                    "Please navigate to 'System & AI Diagnostics' to download the model "
+                    "or import an existing local model folder.",
+                )
+                return
 
         if mode == TranslationMode.PURE_LLM and not check_ollama_status():
             start_now = messagebox.askyesno(

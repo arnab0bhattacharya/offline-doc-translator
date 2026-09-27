@@ -125,31 +125,49 @@ def query_cuda_acceleration() -> tuple[bool, str | None, float | None]:
 def calculate_optimal_cpu_threads(
     total_ram_gb: float | None = None,
     logical_threads: int | None = None,
+    avail_ram_gb: float | None = None,
 ) -> int:
     """
     Dynamically computes the optimal CTranslate2 CPU thread allocation based on host specs.
-    Balances inference parallelism against Intel MKL thread-local memory buffer overhead.
+    Balances inference parallelism against Intel MKL thread-local memory buffer overhead,
+    prioritizing real-time available RAM headroom to protect against mkl_malloc exhaustion.
     """
     if logical_threads is None:
         logical_threads = psutil.cpu_count(logical=True) or 4
+
     if total_ram_gb is None:
         try:
             total_ram_gb = psutil.virtual_memory().total / (1024.0**3)
         except Exception:
             total_ram_gb = 8.0
 
+    if avail_ram_gb is None:
+        try:
+            avail_ram_gb = psutil.virtual_memory().available / (1024.0**3)
+        except Exception:
+            avail_ram_gb = None
+
+    # Base hardware tier capping based on total installed RAM
     if total_ram_gb <= 8.5:
-        # <= 8 GB RAM: Cap at 4 threads to prevent Intel MKL heap allocation exhaustion (mkl_malloc)
         max_safe = 4
     elif total_ram_gb <= 16.5:
-        # 16 GB RAM: Safe for up to 6 threads
         max_safe = 6
     elif total_ram_gb <= 32.5:
-        # 32 GB RAM: Safe for up to 8 threads (optimal CTranslate2 scaling point)
         max_safe = 8
     else:
-        # 64 GB+ High-end Workstation: Up to 12 threads
         max_safe = 12
+
+    # Dynamic headroom scaling based on actual available RAM pool:
+    # MADLAD-400 3B INT8 requires ~2.8 GB base weights. Each OpenMP worker thread allocates
+    # ~150-200 MB for Intel MKL scratchpads. When memory headroom is constricted,
+    # scale threads down to prevent allocation failure.
+    if avail_ram_gb is not None:
+        if avail_ram_gb <= 2.2:
+            max_safe = min(max_safe, 2)
+        elif avail_ram_gb <= 3.5:
+            max_safe = min(max_safe, 3)
+        elif avail_ram_gb <= 5.0:
+            max_safe = min(max_safe, 4)
 
     return max(1, min(max_safe, logical_threads))
 

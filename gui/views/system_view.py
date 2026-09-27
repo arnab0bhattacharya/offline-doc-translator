@@ -388,7 +388,10 @@ class SystemView(ctk.CTkFrame):
             self.sys_ollama_msg.pack(side="left")
 
         if self.on_ollama_status:
-            self.on_ollama_status(alive, models)
+            try:
+                self.on_ollama_status(alive, models, loaded if alive else None)
+            except TypeError:
+                self.on_ollama_status(alive, models)
 
     def _start_ollama_gui(self) -> None:
         self.sys_ollama_start_btn.configure(state="disabled", text="Starting Ollama...")
@@ -494,7 +497,13 @@ class SystemView(ctk.CTkFrame):
             self.sys_madlad_free_btn.configure(state="disabled")
 
         if self.on_mt_status:
-            self.on_mt_status(installed, f"● MT (MADLAD): {'Ready' if installed else 'Not Installed'}")
+            if not installed:
+                status_label = "● MT: Not Installed"
+            elif is_loaded:
+                status_label = "● MT: Active (RAM)"
+            else:
+                status_label = "● MT: Standby"
+            self.on_mt_status(installed, status_label)
 
     def _free_madlad_memory_gui(self) -> None:
         """Explicitly unloads MADLAD-400 3B model from RAM."""
@@ -588,7 +597,7 @@ class SystemView(ctk.CTkFrame):
             f"System Memory: {specs.ram_available_gb:.2f} GB available / {specs.ram_total_gb:.2f} GB total ({'Healthy' if ram_ok else 'Low'})\n"
             f"Disk Storage: {specs.disk_free_gb:.2f} GB free / {specs.disk_total_gb:.2f} GB total ({'Healthy' if disk_ok else 'Low'})\n"
             f"Graphics & Compute: {accel_str}\n"
-            f"Engine Allocation: {allocated_threads} of {specs.logical_threads} threads allocated (safe memory limit for 8 GB RAM)"
+            f"Engine Allocation: {allocated_threads} of {specs.logical_threads} threads allocated (Dynamic Headroom Pool: auto-tuned for {specs.ram_total_gb:.1f} GB system with {specs.ram_available_gb:.2f} GB available)"
         )
         self.sys_hw_desc.configure(text=txt)
 

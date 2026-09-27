@@ -157,7 +157,7 @@ class TestOllamaManager(unittest.TestCase):
         self.assertTrue(res)
         mock_post.assert_called_with(
             "http://localhost:11434/api/generate",
-            json={"model": "gemma4:e2b-it-qat", "keep_alive": 0},
+            json={"model": "gemma4:e2b-it-qat", "prompt": "", "keep_alive": 0},
             timeout=5.0,
         )
 

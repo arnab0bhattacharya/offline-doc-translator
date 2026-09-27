@@ -331,10 +331,19 @@ class TranslatorApp:
         else:
             self.system_view.refresh_ollama_status()
 
-    def _on_ollama_status(self, alive: bool, models: list[str]):
+    def _on_ollama_status(self, alive: bool, models: list[str], loaded_models: list[str] | None = None):
         self._ollama_online = alive
         if alive:
-            self.side_ollama_btn.configure(text=f"● Ollama: Online ({len(models)})", text_color=THEME["success"])
+            if loaded_models:
+                self.side_ollama_btn.configure(
+                    text=f"● Ollama: Active ({len(loaded_models)} in RAM)",
+                    text_color=THEME["success"],
+                )
+            else:
+                self.side_ollama_btn.configure(
+                    text=f"● Ollama: Standby ({len(models)})",
+                    text_color=THEME["success"],
+                )
             if models:
                 self.docs_view.update_model_choices(models)
                 self.quick_view.update_models(models)

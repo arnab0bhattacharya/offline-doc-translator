@@ -141,7 +141,7 @@ class OllamaManager:
         Evicts a specific model from GPU VRAM and system RAM immediately
         by sending keep_alive: 0 to Ollama's /api/generate (or /api/chat fallback).
         """
-        payload = {"model": model_name, "keep_alive": 0}
+        payload = {"model": model_name, "prompt": "", "keep_alive": 0}
         # 1. Try /api/generate
         try:
             res = requests.post(f"{self.ollama_url}/api/generate", json=payload, timeout=5.0)
@@ -151,8 +151,9 @@ class OllamaManager:
             pass
 
         # 2. Fallback to /api/chat
+        chat_payload = {"model": model_name, "messages": [], "keep_alive": 0}
         try:
-            res = requests.post(f"{self.ollama_url}/api/chat", json=payload, timeout=5.0)
+            res = requests.post(f"{self.ollama_url}/api/chat", json=chat_payload, timeout=5.0)
             if res.status_code == 200:
                 return True
         except Exception:

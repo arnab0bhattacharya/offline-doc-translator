@@ -474,11 +474,43 @@ class TranslationEngine:
             )
         return self._llm_backend
 
+    def ensure_backend_exclusive(self, mode: TranslationMode | str | None = None) -> None:
+        """
+        Enforces strict mutual exclusivity between Machine Translation (MADLAD) and AI Translation (Ollama).
+        Guarantees that invoking one engine cleanly evicts the other from system RAM before inference starts.
+        """
+        effective_mode = mode if mode is not None else self.mode
+        is_mt = effective_mode in (
+            TranslationMode.MACHINE_TRANSLATION,
+            TranslationMode.FAST_NMT,
+            TranslationMode.QUALITY_NMT,
+            TranslationMode.NLLB_3B,
+            TranslationMode.MADLAD_3B,
+            "machine_translation",
+            "fast_nmt",
+            "quality_nmt",
+            "nllb_3b",
+            "madlad_3b",
+        )
+        if is_mt:
+            # We are using MADLAD: evict all models from Ollama's memory
+            try:
+                from engine.ollama_manager import get_ollama_manager
+
+                get_ollama_manager().unload_all_models()
+            except Exception:
+                pass
+        else:
+            # We are using AI Translation: evict MADLAD from memory
+            if self._madlad_backend is not None and hasattr(self._madlad_backend, "unload"):
+                self._madlad_backend.unload()
+
     def get_backend(self, mode: TranslationMode | str | None = None) -> TranslationBackend:
         """Returns the active or requested translation backend instance."""
         if mode is None and self._custom_backend is not None:
             return self._custom_backend
         effective_mode = mode if mode is not None else self.mode
+        self.ensure_backend_exclusive(effective_mode)
         if effective_mode in (
             TranslationMode.MACHINE_TRANSLATION,
             TranslationMode.FAST_NMT,
@@ -515,9 +547,17 @@ class TranslationEngine:
             self._llm_backend = backend
 
     def unload_backends(self) -> None:
-        """Unloads in-memory backends (such as MADLAD) and frees model memory."""
+        """Unloads in-memory backends (both MADLAD and Ollama) and frees model memory."""
         if self._madlad_backend is not None and hasattr(self._madlad_backend, "unload"):
             self._madlad_backend.unload()
+        if self._llm_backend is not None and hasattr(self._llm_backend, "unload"):
+            self._llm_backend.unload()
+        try:
+            from engine.ollama_manager import get_ollama_manager
+
+            get_ollama_manager().unload_all_models()
+        except Exception:
+            pass
         if self._custom_backend is not None and hasattr(self._custom_backend, "unload"):
             self._custom_backend.unload()
 

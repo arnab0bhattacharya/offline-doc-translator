@@ -44,6 +44,28 @@ class LLMBackend:
         """Returns True if Ollama is reachable and ready for translation."""
         return self.is_available()
 
+    def is_model_loaded(self) -> bool:
+        """Returns True if this model is currently resident in VRAM/RAM."""
+        try:
+            r = requests.get(f"{self.ollama_url}/api/ps", timeout=2.0)
+            if r.status_code == 200:
+                for m in r.json().get("models", []):
+                    m_name = m.get("name") or m.get("model") or ""
+                    if self.model_name in m_name or m_name in self.model_name:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def unload(self) -> bool:
+        """Evicts this model immediately from memory to free system RAM/VRAM."""
+        try:
+            payload = {"model": self.model_name, "prompt": "", "keep_alive": 0}
+            r = requests.post(self.generate_url, json=payload, timeout=5.0)
+            return r.status_code == 200
+        except Exception:
+            return False
+
     def translate(
         self,
         text: str,

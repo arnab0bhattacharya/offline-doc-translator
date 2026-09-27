@@ -82,6 +82,30 @@ class TestLLMBackend(unittest.TestCase):
 
         self.assertEqual(final, "これは99のテストです。")
 
+    @patch("requests.post")
+    def test_unload_calls_ollama_keep_alive_zero(self, mock_post):
+        mock_resp = MagicMock(status_code=200)
+        mock_post.return_value = mock_resp
+
+        res = self.backend.unload()
+        self.assertTrue(res)
+        mock_post.assert_called_once_with(
+            "http://localhost:11434/api/generate",
+            json={"model": "mock_model", "prompt": "", "keep_alive": 0},
+            timeout=5.0,
+        )
+
+    @patch("requests.get")
+    def test_is_model_loaded_ps(self, mock_get):
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {"models": [{"name": "mock_model:latest"}]}
+        mock_get.return_value = mock_resp
+
+        self.assertTrue(self.backend.is_model_loaded())
+
+        mock_resp.json.return_value = {"models": [{"name": "different_model"}]}
+        self.assertFalse(self.backend.is_model_loaded())
+
 
 if __name__ == "__main__":
     unittest.main()

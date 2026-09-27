@@ -91,6 +91,7 @@ class MADLADBackend(TranslationBackend):
         self.model_dir = model_dir or get_madlad_model_dir()
         self._user_device = device
         self._user_compute_type = compute_type
+        self._user_intra_threads = intra_threads
         self.intra_threads = intra_threads or calculate_optimal_cpu_threads()
 
         # Hardware runtime selection
@@ -171,6 +172,14 @@ class MADLADBackend(TranslationBackend):
                 "Please download the model before translating."
             )
 
+        # Enforce mutual exclusivity: evict any resident Ollama models from RAM
+        try:
+            from engine.ollama_manager import get_ollama_manager
+
+            get_ollama_manager().unload_all_models()
+        except Exception:
+            pass
+
         import ctranslate2
         import sentencepiece as spm
 
@@ -182,6 +191,10 @@ class MADLADBackend(TranslationBackend):
         self._refresh_hardware_config()
         device = self._active_device
         compute_type = self._active_compute_type
+
+        # Re-sample real-time available memory headroom right before allocating CTranslate2 buffers
+        if self._user_intra_threads is None and device == "cpu":
+            self.intra_threads = calculate_optimal_cpu_threads()
 
         try:
             self._translator = ctranslate2.Translator(

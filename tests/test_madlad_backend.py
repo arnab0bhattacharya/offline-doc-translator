@@ -295,5 +295,57 @@ class TestMADLADPreflightAndEngineIntegration(unittest.TestCase):
         self.assertFalse(engine.madlad_backend.is_model_loaded())
 
 
+class TestDynamicHeadroomAndMutualExclusivity(unittest.TestCase):
+    """Test dynamic available memory headroom thread allocation and mutual engine eviction."""
+
+    def test_dynamic_headroom_threads(self):
+        from engine.system_specs import calculate_optimal_cpu_threads
+
+        # Tight memory headroom (<= 2.2 GB available): must restrict to 2 threads
+        self.assertEqual(
+            calculate_optimal_cpu_threads(total_ram_gb=8.0, avail_ram_gb=1.2, logical_threads=12),
+            2,
+        )
+        self.assertEqual(
+            calculate_optimal_cpu_threads(total_ram_gb=16.0, avail_ram_gb=2.0, logical_threads=12),
+            2,
+        )
+
+        # Moderate memory headroom (2.2 - 3.5 GB): cap at 3 threads
+        self.assertEqual(
+            calculate_optimal_cpu_threads(total_ram_gb=8.0, avail_ram_gb=3.0, logical_threads=12),
+            3,
+        )
+
+        # Plentiful memory headroom (>= 4.5 GB) on 8 GB machine: cap at 4 threads
+        self.assertEqual(
+            calculate_optimal_cpu_threads(total_ram_gb=8.0, avail_ram_gb=5.0, logical_threads=12),
+            4,
+        )
+
+        # High-RAM machine with plentiful headroom: scales up to tier limit
+        self.assertEqual(
+            calculate_optimal_cpu_threads(total_ram_gb=16.0, avail_ram_gb=10.0, logical_threads=12),
+            6,
+        )
+
+    @patch("engine.ollama_manager.OllamaManager.unload_all_models")
+    def test_ensure_backend_exclusive_mt_evicts_ollama(self, mock_unload_ollama):
+        engine = TranslationEngine(mode=TranslationMode.MACHINE_TRANSLATION)
+        engine.ensure_backend_exclusive(TranslationMode.MACHINE_TRANSLATION)
+        mock_unload_ollama.assert_called_once()
+
+    def test_ensure_backend_exclusive_ai_evicts_madlad(self):
+        engine = TranslationEngine(mode=TranslationMode.AI_TRANSLATION)
+        # Simulate MADLAD resident in memory
+        engine.madlad_backend._translator = MagicMock()
+        engine.madlad_backend._is_loaded = True
+        self.assertTrue(engine.madlad_backend.is_model_loaded())
+
+        # Calling ensure_backend_exclusive for AI Translation must evict MADLAD
+        engine.ensure_backend_exclusive(TranslationMode.AI_TRANSLATION)
+        self.assertFalse(engine.madlad_backend.is_model_loaded())
+
+
 if __name__ == "__main__":
     unittest.main()

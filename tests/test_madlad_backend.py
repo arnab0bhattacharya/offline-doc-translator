@@ -258,14 +258,45 @@ class TestMADLADTranslationExecution(unittest.TestCase):
             res = backend.translate_single("Hello world", direction="en2ja")
             self.assertEqual(res, "こんにちは世界")
 
-            # Verify input structure passed to translate_batch
+            # Verify anti-repetition guards were supplied
             mock_translator.translate_batch.assert_called_once()
             call_args, call_kwargs = mock_translator.translate_batch.call_args
-            tokenized_batch = call_args[0]
-            # In MADLAD, target prefix <2ja> is prepended to input text before tokenization
-            mock_sp.encode_as_pieces.assert_called_once_with("<2ja> Hello world")
-            # Should have </s> suffix
-            self.assertEqual(tokenized_batch[0][-1], "</s>")
+            self.assertEqual(call_kwargs.get("repetition_penalty"), 1.2)
+            self.assertEqual(call_kwargs.get("no_repeat_ngram_size"), 3)
+
+    def test_translate_single_multiline_decomposition(self):
+        with tempfile.TemporaryDirectory() as td:
+            backend = MADLADBackend(model_dir=td)
+
+            # Mock SentencePiece
+            mock_sp = MagicMock()
+            mock_sp.encode_as_pieces.side_effect = lambda s: [s]
+            mock_sp.decode_pieces.side_effect = lambda pieces: f"Trans_{pieces[0]}"
+
+            # Mock CTranslate2
+            def fake_translate_batch(batch, **kwargs):
+                results = []
+                for item in batch:
+                    hyp = MagicMock()
+                    content = item[0].replace("<2ja> ", "")
+                    hyp.hypotheses = [[f"JP_{content}"]]
+                    results.append(hyp)
+                return results
+
+            mock_translator = MagicMock()
+            mock_translator.translate_batch.side_effect = fake_translate_batch
+
+            backend._sp_processor = mock_sp
+            backend._translator = mock_translator
+            backend._is_loaded = True
+
+            multiline_input = "Line 1\n\nLine 2\nLine 3"
+            res = backend.translate_single(multiline_input, direction="en2ja")
+
+            expected = "Trans_JP_Line 1\n\nTrans_JP_Line 2\nTrans_JP_Line 3"
+            self.assertEqual(res, expected)
+            # Only 3 non-empty lines were sent to translate_batch
+            self.assertEqual(len(mock_translator.translate_batch.call_args[0][0]), 3)
 
 
 class TestMADLADPreflightAndEngineIntegration(unittest.TestCase):

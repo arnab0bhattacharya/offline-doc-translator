@@ -274,7 +274,29 @@ class MADLADBackend(TranslationBackend):
         direction: str,
         log_cb: Callable[[str], None] | None = None,
     ) -> str:
-        """Translates a single clean text string."""
+        """
+        Translates a single clean text string.
+        For multi-line text (e.g. pasted documents, paragraphs with line breaks,
+        or multi-line table/shape cells), decomposes into lines and translates
+        in a vectorized batch to avoid NMT sequence saturation and repetition loops.
+        """
+        if not text or not text.strip():
+            return text
+
+        if "\n" in text:
+            lines = text.split("\n")
+            non_empty_indices = [i for i, line in enumerate(lines) if line.strip()]
+            if not non_empty_indices:
+                return text
+
+            non_empty_texts = [lines[i] for i in non_empty_indices]
+            translated_lines = self.translate_batch(non_empty_texts, direction=direction, log_cb=log_cb)
+
+            result_lines = list(lines)
+            for idx, trans in zip(non_empty_indices, translated_lines, strict=False):
+                result_lines[idx] = trans
+            return "\n".join(result_lines)
+
         results = self.translate_batch([text], direction=direction, log_cb=log_cb)
         return results[0] if results else text
 
@@ -287,6 +309,7 @@ class MADLADBackend(TranslationBackend):
         """
         Translates a batch of texts using CTranslate2 vectorization.
         Prepares token inputs formatted as: <2{tgt_lang}> {text} </s>
+        Enforces anti-repetition penalty and n-gram blocking to prevent hallucination loops.
         """
         if not texts:
             return []
@@ -317,6 +340,9 @@ class MADLADBackend(TranslationBackend):
             batch_type="examples",
             max_batch_size=len(texts),
             beam_size=4,
+            repetition_penalty=1.2,
+            no_repeat_ngram_size=3,
+            max_input_length=1024,
         )
 
         translated_texts = []

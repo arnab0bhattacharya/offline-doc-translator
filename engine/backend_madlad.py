@@ -20,6 +20,7 @@ from typing import Any
 
 from .backend_base import TranslationBackend
 from .madlad_manager import check_madlad_installed, get_madlad_model_dir
+from .system_specs import calculate_optimal_cpu_threads
 
 # Supported language codes for MADLAD-400
 MADLAD_LANG_MAP = {
@@ -67,9 +68,9 @@ def detect_hardware() -> tuple[str, str, str]:
     except Exception:
         pass
 
-    # Safe CPU baseline (optimized for 8 GB RAM systems)
+    # Dynamic adaptive CPU allocation based on host system RAM and core count
     cpu_cores = os.cpu_count() or 4
-    threads = min(4, cpu_cores)
+    threads = calculate_optimal_cpu_threads(logical_threads=cpu_cores)
     return "cpu", "int8", f"CPU Execution (Allocated {threads} of {cpu_cores} threads to preserve RAM stability)"
 
 
@@ -90,7 +91,7 @@ class MADLADBackend(TranslationBackend):
         self.model_dir = model_dir or get_madlad_model_dir()
         self._user_device = device
         self._user_compute_type = compute_type
-        self.intra_threads = intra_threads or min(4, os.cpu_count() or 4)
+        self.intra_threads = intra_threads or calculate_optimal_cpu_threads()
 
         # Hardware runtime selection
         self._active_device = "cpu"

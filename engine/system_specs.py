@@ -33,6 +33,7 @@ class HardwareSpecs:
     cuda_available: bool = False
     cuda_device_name: str | None = None
     cuda_vram_gb: float | None = None
+    recommended_threads: int = 4
 
 
 def query_cpu_name() -> str:
@@ -121,6 +122,38 @@ def query_cuda_acceleration() -> tuple[bool, str | None, float | None]:
     return False, None, None
 
 
+def calculate_optimal_cpu_threads(
+    total_ram_gb: float | None = None,
+    logical_threads: int | None = None,
+) -> int:
+    """
+    Dynamically computes the optimal CTranslate2 CPU thread allocation based on host specs.
+    Balances inference parallelism against Intel MKL thread-local memory buffer overhead.
+    """
+    if logical_threads is None:
+        logical_threads = psutil.cpu_count(logical=True) or 4
+    if total_ram_gb is None:
+        try:
+            total_ram_gb = psutil.virtual_memory().total / (1024.0**3)
+        except Exception:
+            total_ram_gb = 8.0
+
+    if total_ram_gb <= 8.5:
+        # <= 8 GB RAM: Cap at 4 threads to prevent Intel MKL heap allocation exhaustion (mkl_malloc)
+        max_safe = 4
+    elif total_ram_gb <= 16.5:
+        # 16 GB RAM: Safe for up to 6 threads
+        max_safe = 6
+    elif total_ram_gb <= 32.5:
+        # 32 GB RAM: Safe for up to 8 threads (optimal CTranslate2 scaling point)
+        max_safe = 8
+    else:
+        # 64 GB+ High-end Workstation: Up to 12 threads
+        max_safe = 12
+
+    return max(1, min(max_safe, logical_threads))
+
+
 def get_hardware_specs(target_path: str = ".") -> HardwareSpecs:
     """Queries and returns the full machine hardware specifications."""
     cpu_name = query_cpu_name()
@@ -142,6 +175,7 @@ def get_hardware_specs(target_path: str = ".") -> HardwareSpecs:
 
     gpus = query_installed_gpus()
     has_cuda, cuda_name, cuda_vram = query_cuda_acceleration()
+    recommended_threads = calculate_optimal_cpu_threads(ram_total_gb, logical_threads)
 
     return HardwareSpecs(
         cpu_name=cpu_name,
@@ -157,4 +191,5 @@ def get_hardware_specs(target_path: str = ".") -> HardwareSpecs:
         cuda_available=has_cuda,
         cuda_device_name=cuda_name,
         cuda_vram_gb=cuda_vram,
+        recommended_threads=recommended_threads,
     )

@@ -153,7 +153,11 @@ class TranslatorApp:
         self.tab_frames: dict[str, ctk.CTkFrame] = {}
 
         self.docs_view = DocumentsView(self.content_area, controller=self.controller)
-        self.quick_view = QuickView(self.content_area)
+        self.quick_view = QuickView(
+            self.content_area,
+            controller=self.controller,
+            madlad_backend=self.madlad_backend,
+        )
         self.system_view = SystemView(
             self.content_area,
             madlad_backend=self.madlad_backend,
@@ -362,6 +366,10 @@ class TranslatorApp:
 
     def _on_job_update(self, job: TranslationJob):
         self.root.after(0, self._update_job_widget, job)
+        if hasattr(self, "quick_view") and hasattr(self.quick_view, "set_locked_state"):
+            is_busy = self.controller.is_busy
+            job_name = job.input_path if is_busy else None
+            self.root.after(0, lambda: self.quick_view.set_locked_state(is_busy, job_name))
 
     def _on_job_log(self, job_id: str, message: str):
         self.root.after(0, self._log, message)

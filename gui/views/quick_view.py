@@ -14,6 +14,7 @@ import customtkinter as ctk
 import requests
 
 from engine.backend_llm import LLMBackend
+from engine.backend_madlad import MADLADBackend
 from engine.core import (
     mask_glossary_terms,
     mask_numbers,
@@ -21,6 +22,7 @@ from engine.core import (
     unmask_protected_text,
     verify_placeholders,
 )
+from engine.madlad_manager import check_madlad_installed
 from engine.ollama_manager import get_ollama_manager
 from engine.preflight import check_ollama_status
 from gui.dnd_helper import is_point_in_widget
@@ -32,6 +34,10 @@ from gui.theme import (
     THEME,
     parse_glossary_text,
 )
+
+QUICK_MODE_MT = "⚡ Machine Translation (MADLAD-400 3B)"
+QUICK_MODE_AI = "🤖 AI Translation (Ollama)"
+QUICK_MODE_OPTIONS = [QUICK_MODE_MT, QUICK_MODE_AI]
 
 
 class QuickView(ctk.CTkFrame):
@@ -45,9 +51,15 @@ class QuickView(ctk.CTkFrame):
     glossary_drawer: Any = None
     glossary_text: Any = None
     pane: Any = None
+    _is_locked: bool = False
+    controller: Any = None
+    madlad_backend: Any = None
 
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, controller=None, madlad_backend=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
+        self.controller = controller
+        self.madlad_backend = madlad_backend or MADLADBackend()
+        self._is_locked = False
         self._glossary_open = False
 
         self._build_ui()
@@ -89,7 +101,7 @@ class QuickView(ctk.CTkFrame):
             tb_inner,
             values=dir_display_values,
             variable=ctk.StringVar(value=dir_display_values[0]),
-            width=180,
+            width=160,
             state="readonly",
             font=ctk.CTkFont(size=12),
             command=self._on_quick_dir_changed,
@@ -108,18 +120,40 @@ class QuickView(ctk.CTkFrame):
             border_width=1,
             border_color=THEME["card_border"],
             command=self._swap_quick_dir,
-        ).pack(side="left", padx=(0, 14))
+        ).pack(side="left", padx=(0, 12))
 
-        # Model Selector
+        # Engine Mode Selector
         ctk.CTkLabel(
-            tb_inner, text="Model:", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME["text_secondary"]
+            tb_inner, text="Engine:", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME["text_secondary"]
         ).pack(side="left", padx=(0, 4))
+
+        self.quick_mode_var = ctk.StringVar(value=QUICK_MODE_MT)
+        self.quick_mode_combo = ctk.CTkComboBox(
+            tb_inner,
+            values=QUICK_MODE_OPTIONS,
+            variable=self.quick_mode_var,
+            width=230,
+            state="readonly",
+            font=ctk.CTkFont(size=12),
+            command=self._on_quick_mode_changed,
+        )
+        self.quick_mode_combo.pack(side="left", padx=(0, 8))
+
+        # Model Selector (only active when AI Translation is chosen)
+        self.quick_model_label = ctk.CTkLabel(
+            tb_inner, text="Model:", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME["text_secondary"]
+        )
 
         self.model_var = ctk.StringVar(value=GEMMA_PRESETS[0])
         self.quick_model_combo = ctk.CTkComboBox(
-            tb_inner, values=GEMMA_PRESETS, variable=self.model_var, width=180, font=ctk.CTkFont(size=12)
+            tb_inner,
+            values=GEMMA_PRESETS,
+            variable=self.model_var,
+            width=160,
+            font=ctk.CTkFont(size=12),
+            command=lambda _: self._on_quick_mode_changed(),
         )
-        self.quick_model_combo.pack(side="left")
+        # Note: Model selector starts hidden since default is MT mode
 
         # Copy & Clear
         ctk.CTkButton(
@@ -233,12 +267,13 @@ class QuickView(ctk.CTkFrame):
         tgt_card.rowconfigure(1, weight=1)
         tgt_card.columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
+        self.target_header_label = ctk.CTkLabel(
             tgt_card,
-            text="Translation Output (Ollama)",
+            text="Translation Output (Google MADLAD-400 3B)",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color=THEME["text_secondary"],
-        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 4))
+        )
+        self.target_header_label.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 4))
 
         self.quick_target = ctk.CTkTextbox(
             tgt_card, font=ctk.CTkFont(size=13), wrap="word", fg_color="transparent", border_width=0, state="disabled"
@@ -270,6 +305,38 @@ class QuickView(ctk.CTkFrame):
         )
         self.quick_status.pack(side="left")
 
+    def _on_quick_mode_changed(self, choice: str = "") -> None:
+        """Toggles between Machine Translation (MADLAD) and AI Translation (Ollama)."""
+        is_ai = "AI Translation" in self.quick_mode_var.get()
+        if is_ai:
+            self.quick_model_label.pack(side="left", padx=(0, 4))
+            self.quick_model_combo.pack(side="left")
+            model_name = self.model_var.get().strip() or "gemma4:e2b-it-qat"
+            if hasattr(self, "target_header_label"):
+                self.target_header_label.configure(text=f"Translation Output (Ollama - {model_name})")
+        else:
+            self.quick_model_label.pack_forget()
+            self.quick_model_combo.pack_forget()
+            if hasattr(self, "target_header_label"):
+                self.target_header_label.configure(text="Translation Output (Google MADLAD-400 3B)")
+
+    def set_locked_state(self, locked: bool, job_name: str | None = None) -> None:
+        """Locks or unlocks the translate button depending on background queue activity."""
+        self._is_locked = locked
+        if locked:
+            self.quick_translate_btn.configure(state="disabled", text="⏸  Document Active")
+            filename = os.path.basename(job_name) if job_name else "document"
+            self.quick_status.configure(
+                text=f"⏸ Document translation active ({filename}). Quick translate paused to protect RAM & CPU.",
+                text_color=THEME["warning"],
+            )
+        else:
+            self.quick_translate_btn.configure(state="normal", text="▶   Translate Text")
+            self.quick_status.configure(
+                text="Press Ctrl+Enter or click 'Translate Text'",
+                text_color=THEME["text_secondary"],
+            )
+
     def update_models(self, model_list: list[str]) -> None:
         """Updates available models in the combo dropdown."""
         if model_list:
@@ -277,44 +344,85 @@ class QuickView(ctk.CTkFrame):
             self.quick_model_combo.configure(values=all_models)
             if self.model_var.get() not in all_models:
                 self.model_var.set(all_models[0])
+            if "AI Translation" in self.quick_mode_var.get() and hasattr(self, "target_header_label"):
+                self.target_header_label.configure(text=f"Translation Output (Ollama - {self.model_var.get()})")
 
     def _start_quick_translate(self) -> None:
+        if getattr(self, "_is_locked", False) is True or (
+            getattr(self, "controller", None) is not None and getattr(self.controller, "is_busy", False) is True
+        ):
+            self.quick_status.configure(
+                text="⏸ A document translation is currently in progress. Please wait for it to finish.",
+                text_color=THEME["warning"],
+            )
+            return
+
         source_text = self.quick_source.get("0.0", "end").strip()
         if not source_text:
             self.quick_status.configure(text="Please enter or paste text to translate.", text_color=THEME["warning"])
             return
 
         direction = self.quick_dir_var.get()
+        is_ai = "AI Translation" in self.quick_mode_var.get()
         model_name = self.model_var.get().strip() or "gemma4:e2b-it-qat"
 
-        if not check_ollama_status():
-            start_now = messagebox.askyesno(
-                "Ollama Offline",
-                "Quick Translate requires Ollama, but the background service is currently offline.\n\n"
-                "Would you like to start Ollama in the background now?",
-            )
-            if start_now:
-                self.quick_status.configure(text="Starting Ollama in background...", text_color=THEME["primary"])
-                mgr = get_ollama_manager()
-                success, msg = mgr.start_service(timeout=15.0)
-                if not success:
-                    messagebox.showerror("Ollama Startup Failed", f"Could not start Ollama:\n{msg}")
+        if is_ai:
+            if not check_ollama_status():
+                start_now = messagebox.askyesno(
+                    "Ollama Offline",
+                    "AI Translation requires Ollama, but the background service is currently offline.\n\n"
+                    "Would you like to start Ollama in the background now?",
+                )
+                if start_now:
+                    self.quick_status.configure(text="Starting Ollama in background...", text_color=THEME["primary"])
+                    mgr = get_ollama_manager()
+                    success, msg = mgr.start_service(timeout=15.0)
+                    if not success:
+                        messagebox.showerror("Ollama Startup Failed", f"Could not start Ollama:\n{msg}")
+                        return
+                else:
                     return
-            else:
+        else:
+            if not check_madlad_installed():
+                messagebox.showerror(
+                    "MADLAD Not Installed",
+                    "The Google MADLAD-400 3B neural model is not installed yet (~3.0 GB).\n\n"
+                    "Please download or import the model files in the System Diagnostics tab before translating.",
+                )
                 return
 
         self.quick_translate_btn.configure(state="disabled", text="Translating...")
-        self.quick_status.configure(text=f"Connecting to Ollama ({model_name})...", text_color=THEME["primary"])
+        engine_label = f"Ollama ({model_name})" if is_ai else "Google MADLAD-400 3B"
+        self.quick_status.configure(text=f"Translating via {engine_label}...", text_color=THEME["primary"])
 
         thread = threading.Thread(
-            target=self._quick_translate_worker, args=(source_text, direction, model_name), daemon=True
+            target=self._quick_translate_worker,
+            args=(source_text, direction, is_ai, model_name),
+            daemon=True,
         )
         thread.start()
 
-    def _quick_translate_worker(self, text: str, direction: str, model: str) -> None:
+    def _quick_translate_worker(
+        self,
+        text: str,
+        direction: str,
+        is_ai_or_model: bool | str = True,
+        model: str = "gemma4:e2b-it-qat",
+    ) -> None:
+        if isinstance(is_ai_or_model, str):
+            is_ai = True
+            model = is_ai_or_model
+        else:
+            is_ai = bool(is_ai_or_model)
+
         try:
-            if not check_ollama_status():
-                self.after(0, self._set_quick_result, "", "⚠ Ollama is offline. Please start Ollama service.")
+            if getattr(self, "controller", None) is not None and getattr(self.controller, "is_busy", False) is True:
+                self.after(
+                    0,
+                    self._set_quick_result,
+                    "",
+                    "⏸ Document translation started. Quick translate cancelled to protect memory.",
+                )
                 return
 
             if not should_translate(text, direction):
@@ -326,35 +434,54 @@ class QuickView(ctk.CTkFrame):
                 )
                 return
 
+            # Custom Glossary and numeric masking preserved for both MT and AI
             glossary = parse_glossary_text(self.glossary_text.get("0.0", "end"))
             masked_text, glossary_map = mask_glossary_terms(text, glossary)
             masked_text, number_map = mask_numbers(masked_text)
             placeholder_map = {**number_map, **glossary_map}
 
-            backend = LLMBackend(model_name=model, context_window=4096)
-            result, elapsed = backend.translate_single(
-                masked_text=masked_text,
-                number_map=placeholder_map,
-                direction=direction,
-            )
+            if is_ai:
+                if not check_ollama_status():
+                    self.after(0, self._set_quick_result, "", "⚠ Ollama is offline. Please start Ollama service.")
+                    return
+
+                # Evict MADLAD from memory if resident
+                if self.madlad_backend and hasattr(self.madlad_backend, "unload"):
+                    self.madlad_backend.unload()
+
+                backend = LLMBackend(model_name=model, context_window=2048)
+                result, elapsed = backend.translate_single(
+                    masked_text=masked_text,
+                    number_map=placeholder_map,
+                    direction=direction,
+                )
+                engine_name = model
+            else:
+                # Evict Ollama models from memory if resident
+                mgr = get_ollama_manager()
+                mgr.unload_all_models()
+
+                # Dispatch via MADLAD (re-samples live available memory headroom)
+                backend = self.madlad_backend or MADLADBackend()
+                result, elapsed = backend.translate(
+                    text=masked_text,
+                    direction=direction,
+                    placeholder_map=placeholder_map,
+                )
+                engine_name = "MADLAD-400 3B"
 
             if result and verify_placeholders(result, placeholder_map, masked_text):
                 final = unmask_protected_text(result, number_map, glossary_map)
-                info_parts = [f"✓ Translated in {elapsed:.1f}s via {model}"]
+                info_parts = [f"✓ Translated in {elapsed:.1f}s via {engine_name}"]
                 if glossary_map:
                     info_parts.append(f"({len(glossary_map)} glossary term{'s' if len(glossary_map) != 1 else ''})")
-                self.after(
-                    0,
-                    self._set_quick_result,
-                    final,
-                    " ".join(info_parts),
-                )
+                self.after(0, self._set_quick_result, final, " ".join(info_parts))
             else:
                 self.after(
                     0,
                     self._set_quick_result,
                     "",
-                    "⚠ Translation failed — model returned no valid output.",
+                    "⚠ Translation failed — engine returned invalid output.",
                 )
 
         except requests.exceptions.ConnectionError:
@@ -366,7 +493,10 @@ class QuickView(ctk.CTkFrame):
         finally:
             self.after(
                 0,
-                lambda: self.quick_translate_btn.configure(state="normal", text="▶   Translate Text"),
+                lambda: self.quick_translate_btn.configure(
+                    state="disabled" if getattr(self, "_is_locked", False) else "normal",
+                    text="⏸  Document Active" if getattr(self, "_is_locked", False) else "▶   Translate Text",
+                ),
             )
 
     def _set_quick_result(self, text: str, status: str) -> None:

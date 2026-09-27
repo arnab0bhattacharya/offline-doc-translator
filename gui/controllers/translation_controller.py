@@ -114,6 +114,12 @@ class TranslationController:
         """Returns the set of job IDs in the current active batch."""
         return set(self._current_batch_ids)
 
+    @property
+    def is_busy(self) -> bool:
+        """Returns True if any translation job is currently running or queued in the background."""
+        jobs = self.queue.get_all_jobs()
+        return any(j.status in (JobStatus.QUEUED, JobStatus.RUNNING) for j in jobs)
+
     def is_batch_complete(self, batch_ids: set[str] | None = None) -> bool:
         """Returns True if all jobs in the batch have reached a terminal status."""
         ids = batch_ids if batch_ids is not None else self._current_batch_ids

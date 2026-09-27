@@ -59,7 +59,7 @@ class TestQuickViewDualEngineAndGuard(unittest.TestCase):
         self.assertFalse(view._is_locked)
         view.quick_translate_btn.configure.assert_called_with(state="normal", text="▶   Translate Text")
 
-    @patch("gui.views.quick_view.get_ollama_manager")
+    @patch("engine.ollama_manager.get_ollama_manager")
     def test_worker_mt_mode_evicts_ollama_and_uses_madlad(self, mock_get_mgr):
         view = MagicMock(spec=QuickView)
         view.after = MagicMock(side_effect=lambda delay, fn, *args: fn(*args))
@@ -72,26 +72,39 @@ class TestQuickViewDualEngineAndGuard(unittest.TestCase):
         mock_get_mgr.return_value = mock_mgr
 
         mock_madlad = MagicMock()
-        mock_madlad.translate.return_value = ("これは[[GLOSSARY_A]]と[[N0]]です。", 0.35)
+
+        def fake_translate(text="", direction="en2ja", **kwargs):
+            if text == "API":
+                return "API", 0.05
+            return "これはAPIと100です。", 0.35
+
+        def fake_translate_single(text="", direction="en2ja", **kwargs):
+            if text == "API":
+                return "API"
+            return "これはAPIと100です。"
+
+        mock_madlad.translate.side_effect = fake_translate
+        mock_madlad.translate_single.side_effect = fake_translate_single
+        mock_madlad.is_ready.return_value = True
         view.madlad_backend = mock_madlad
 
         # Run worker with is_ai=False (MT Mode)
         QuickView._quick_translate_worker(view, "This is API and 100.", "en2ja", is_ai_or_model=False)
 
-        # 1. Ollama models must be evicted from RAM
+        # 1. Ollama models must be evicted from RAM via mutual exclusivity
         mock_mgr.unload_all_models.assert_called_once()
 
-        # 2. MADLAD backend must be invoked
-        mock_madlad.translate.assert_called_once()
-        kwargs = mock_madlad.translate.call_args.kwargs
-        self.assertIn("[[GLOSSARY_A]]", kwargs["text"])
-        self.assertIn("[[N0]]", kwargs["text"])
+        # 2. MADLAD backend must be invoked with clean natural text (NO synthetic brackets [[N0]])
+        kwargs = mock_madlad.translate.call_args_list[0].kwargs
+        self.assertEqual(kwargs["text"], "This is API and 100.")
+        self.assertNotIn("[[N0]]", kwargs["text"])
+        self.assertNotIn("[[GLOSSARY", kwargs["text"])
 
-        # 3. Result unmasked
+        # 3. Post-translation glossary substitution applied cleanly
         view._set_quick_result.assert_called_once()
         final_text, status = view._set_quick_result.call_args[0]
         self.assertEqual(final_text, "これはインターフェースと100です。")
-        self.assertIn("MADLAD-400 3B", status)
+        self.assertIn("Google MADLAD-400 3B", status)
         self.assertIn("1 glossary term", status)
 
     @patch("gui.views.quick_view.check_ollama_status", return_value=True)
@@ -107,9 +120,9 @@ class TestQuickViewDualEngineAndGuard(unittest.TestCase):
         view.madlad_backend = mock_madlad
 
         mock_llm = MagicMock()
-        mock_llm.translate_single.return_value = ("こんにちは世界", 0.8)
+        mock_llm.translate.return_value = ("こんにちは世界", 0.8)
 
-        with patch("gui.views.quick_view.LLMBackend", return_value=mock_llm):
+        with patch("engine.backend_llm.LLMBackend", return_value=mock_llm):
             QuickView._quick_translate_worker(
                 view, "Hello world", "en2ja", is_ai_or_model=True, model="gemma4:e2b-it-qat"
             )
@@ -118,7 +131,7 @@ class TestQuickViewDualEngineAndGuard(unittest.TestCase):
         mock_madlad.unload.assert_called_once()
 
         # 2. LLM backend must be invoked
-        mock_llm.translate_single.assert_called_once()
+        mock_llm.translate.assert_called_once()
 
         # 3. Result verified
         view._set_quick_result.assert_called_once()

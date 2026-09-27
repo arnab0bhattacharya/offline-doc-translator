@@ -13,14 +13,11 @@ from typing import Any
 import customtkinter as ctk
 import requests
 
-from engine.backend_llm import LLMBackend
 from engine.backend_madlad import MADLADBackend
 from engine.core import (
-    mask_glossary_terms,
-    mask_numbers,
+    TranslationEngine,
+    TranslationMode,
     should_translate,
-    unmask_protected_text,
-    verify_placeholders,
 )
 from engine.madlad_manager import check_madlad_installed
 from engine.ollama_manager import get_ollama_manager
@@ -392,8 +389,12 @@ class QuickView(ctk.CTkFrame):
                 return
 
         self.quick_translate_btn.configure(state="disabled", text="Translating...")
-        engine_label = f"Ollama ({model_name})" if is_ai else "Google MADLAD-400 3B"
-        self.quick_status.configure(text=f"Translating via {engine_label}...", text_color=THEME["primary"])
+        if not is_ai and self.madlad_backend and not self.madlad_backend.is_model_loaded():
+            status_msg = "⚡ Loading MADLAD-400 3B into memory (first-time warm-up)..."
+        else:
+            engine_label = f"Ollama ({model_name})" if is_ai else "Google MADLAD-400 3B"
+            status_msg = f"Translating via {engine_label}..."
+        self.quick_status.configure(text=status_msg, text_color=THEME["primary"])
 
         thread = threading.Thread(
             target=self._quick_translate_worker,
@@ -434,48 +435,37 @@ class QuickView(ctk.CTkFrame):
                 )
                 return
 
-            # Custom Glossary and numeric masking preserved for both MT and AI
+            if is_ai and not check_ollama_status():
+                self.after(0, self._set_quick_result, "", "⚠ Ollama is offline. Please start Ollama service.")
+                return
+
             glossary = parse_glossary_text(self.glossary_text.get("0.0", "end"))
-            masked_text, glossary_map = mask_glossary_terms(text, glossary)
-            masked_text, number_map = mask_numbers(masked_text)
-            placeholder_map = {**number_map, **glossary_map}
+            mode = TranslationMode.AI_TRANSLATION if is_ai else TranslationMode.MACHINE_TRANSLATION
 
-            if is_ai:
-                if not check_ollama_status():
-                    self.after(0, self._set_quick_result, "", "⚠ Ollama is offline. Please start Ollama service.")
-                    return
+            # Instantiate unified TranslationEngine (exact same pipeline as document translator)
+            engine = TranslationEngine(
+                mode=mode,
+                model_name=model,
+                glossary=glossary,
+                context_window=2048,
+            )
+            if self.madlad_backend is not None:
+                engine.set_backend(self.madlad_backend, mode=TranslationMode.MACHINE_TRANSLATION)
 
-                # Evict MADLAD from memory if resident
-                if self.madlad_backend and hasattr(self.madlad_backend, "unload"):
-                    self.madlad_backend.unload()
+            result = engine.translate_chunk(
+                text=text,
+                direction=direction,
+                location_id="quick_translate",
+            )
 
-                backend = LLMBackend(model_name=model, context_window=2048)
-                result, elapsed = backend.translate_single(
-                    masked_text=masked_text,
-                    number_map=placeholder_map,
-                    direction=direction,
-                )
-                engine_name = model
-            else:
-                # Evict Ollama models from memory if resident
-                mgr = get_ollama_manager()
-                mgr.unload_all_models()
-
-                # Dispatch via MADLAD (re-samples live available memory headroom)
-                backend = self.madlad_backend or MADLADBackend()
-                result, elapsed = backend.translate(
-                    text=masked_text,
-                    direction=direction,
-                    placeholder_map=placeholder_map,
-                )
-                engine_name = "MADLAD-400 3B"
-
-            if result and verify_placeholders(result, placeholder_map, masked_text):
-                final = unmask_protected_text(result, number_map, glossary_map)
-                info_parts = [f"✓ Translated in {elapsed:.1f}s via {engine_name}"]
-                if glossary_map:
-                    info_parts.append(f"({len(glossary_map)} glossary term{'s' if len(glossary_map) != 1 else ''})")
-                self.after(0, self._set_quick_result, final, " ".join(info_parts))
+            if result.was_translated and not result.was_reverted:
+                engine_name = "Google MADLAD-400 3B" if not is_ai else model
+                info_parts = [f"✓ Translated in {result.elapsed:.1f}s via {engine_name}"]
+                if glossary:
+                    active_terms = sum(1 for k in glossary if k in text)
+                    if active_terms:
+                        info_parts.append(f"({active_terms} glossary term{'s' if active_terms != 1 else ''})")
+                self.after(0, self._set_quick_result, result.text, " ".join(info_parts))
             else:
                 self.after(
                     0,

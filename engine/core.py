@@ -682,11 +682,11 @@ class TranslationEngine:
         try:
             if hasattr(backend, "translate_single"):
                 res = backend.translate_single(term, direction)
-                val = (res or "").strip()
+                val = str(res).strip() if isinstance(res, str) else ""
             elif hasattr(backend, "translate"):
                 res_tuple = backend.translate(text=term, direction=direction)
                 res = res_tuple[0] if isinstance(res_tuple, tuple) else res_tuple
-                val = (res or "").strip()
+                val = str(res).strip() if isinstance(res, str) else ""
         except Exception:
             val = ""
 

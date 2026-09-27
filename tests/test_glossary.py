@@ -309,20 +309,20 @@ def test_quick_view_worker_glossary_and_number_masking():
     mock_backend = MagicMock()
     # Masked text will have [[GLOSSARY_A]] for AI and [[N0]] for 42
     # Mock backend returns translation containing the exact placeholders
-    mock_backend.translate_single.return_value = ("これは[[GLOSSARY_A]]と[[N0]]です。", 1.25)
+    mock_backend.translate.return_value = ("これは[[GLOSSARY_A]]と[[N0]]です。", 1.25)
 
     with (
         patch("gui.views.quick_view.check_ollama_status", return_value=True),
-        patch("gui.views.quick_view.LLMBackend", return_value=mock_backend),
+        patch("engine.backend_llm.LLMBackend", return_value=mock_backend),
     ):
         QuickView._quick_translate_worker(view, "This is AI and 42.", "en2ja", "gemma4:e2b-it-qat")
 
-    assert mock_backend.translate_single.called
-    kwargs = mock_backend.translate_single.call_args.kwargs
-    assert "[[GLOSSARY_A]]" in kwargs["masked_text"]
-    assert "[[N0]]" in kwargs["masked_text"]
-    assert kwargs["number_map"]["[[GLOSSARY_A]]"] == "人工知能"
-    assert kwargs["number_map"]["[[N0]]"] == "42"
+    assert mock_backend.translate.called
+    kwargs = mock_backend.translate.call_args.kwargs
+    assert "[[GLOSSARY_A]]" in kwargs["text"]
+    assert "[[N0]]" in kwargs["text"]
+    assert kwargs["placeholder_map"]["[[GLOSSARY_A]]"] == "人工知能"
+    assert kwargs["placeholder_map"]["[[N0]]"] == "42"
 
     view._set_quick_result.assert_called_once()
     final_text, status = view._set_quick_result.call_args[0]

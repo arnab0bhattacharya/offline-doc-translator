@@ -32,6 +32,7 @@ from engine.preflight import (
     check_ram,
     list_installed_models,
 )
+from engine.system_specs import get_hardware_specs
 from gui.theme import THEME
 
 
@@ -569,37 +570,25 @@ class SystemView(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def refresh_hw_status(self) -> None:
-        """Checks available RAM, disk space, and hardware detection."""
-        ram_ok, ram_avail_mb = check_ram()
-        disk_ok, disk_free_mb = check_disk_space()
+        """Queries and displays host machine specifications and translation engine resource allocation."""
+        ram_ok, _ = check_ram()
+        disk_ok, _ = check_disk_space()
+        specs = get_hardware_specs()
 
-        ram_avail_gb = ram_avail_mb / 1024.0
-        disk_free_gb = disk_free_mb / 1024.0
+        gpu_str = ", ".join(specs.gpus) if specs.gpus else "Integrated Graphics"
+        if specs.cuda_available and specs.cuda_device_name:
+            accel_str = f"NVIDIA CUDA Enabled ({specs.cuda_device_name}, {specs.cuda_vram_gb} GB VRAM)"
+        else:
+            accel_str = f"{gpu_str} (CPU Execution — No NVIDIA CUDA GPU detected)"
 
-        try:
-            import psutil
-
-            total_ram_gb = psutil.virtual_memory().total / (1024.0**3)
-            ram_str = f"{ram_avail_gb:.2f} GB / {total_ram_gb:.2f} GB"
-        except Exception:
-            ram_str = f"{ram_avail_gb:.2f} GB"
-
-        try:
-            import shutil
-
-            total_disk, _, _ = shutil.disk_usage(".")
-            total_disk_gb = total_disk / (1024.0**3)
-            disk_str = f"{disk_free_gb:.2f} GB / {total_disk_gb:.2f} GB"
-        except Exception:
-            disk_str = f"{disk_free_gb:.2f} GB"
-
-        dev_desc = getattr(self.madlad_backend, "active_device_description", "CPU INT8")
+        allocated_threads = getattr(self.madlad_backend, "intra_threads", min(4, specs.logical_threads))
 
         txt = (
-            f"Available System RAM: {ram_str} ({'Healthy' if ram_ok else 'Low'})\n"
-            f"Available Disk Space: {disk_str} ({'Healthy' if disk_ok else 'Low'})\n"
-            f"Detected Acceleration: {dev_desc}\n"
-            f"Active Memory Guard: Dynamic model flush active."
+            f"Processor: {specs.cpu_name} ({specs.physical_cores} Physical Cores, {specs.logical_threads} Logical Processors)\n"
+            f"System Memory: {specs.ram_available_gb:.2f} GB available / {specs.ram_total_gb:.2f} GB total ({'Healthy' if ram_ok else 'Low'})\n"
+            f"Disk Storage: {specs.disk_free_gb:.2f} GB free / {specs.disk_total_gb:.2f} GB total ({'Healthy' if disk_ok else 'Low'})\n"
+            f"Graphics & Compute: {accel_str}\n"
+            f"Engine Allocation: {allocated_threads} of {specs.logical_threads} threads allocated (safe memory limit for 8 GB RAM)"
         )
         self.sys_hw_desc.configure(text=txt)
 

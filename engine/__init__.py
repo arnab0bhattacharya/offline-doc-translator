@@ -62,6 +62,7 @@ from .preflight import (
     run_mt_preflight,
     run_preflight,
 )
+from .system_specs import HardwareSpecs, get_hardware_specs
 
 
 def __getattr__(name: str):
@@ -78,6 +79,7 @@ __all__ = [
     "ERROR_MESSAGES",
     "EncryptedFileCache",
     "ErrorCode",
+    "HardwareSpecs",
     "JSONFileCache",
     "LLMBackend",
     "MADLADBackend",
@@ -107,6 +109,7 @@ __all__ = [
     "execute_translation",
     "extract_numeric_tokens",
     "find_ollama_binary",
+    "get_hardware_specs",
     "get_logger",
     "get_madlad_model_dir",
     "get_madlad_model_info",

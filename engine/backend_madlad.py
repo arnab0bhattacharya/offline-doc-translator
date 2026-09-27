@@ -70,7 +70,7 @@ def detect_hardware() -> tuple[str, str, str]:
     # Safe CPU baseline (optimized for 8 GB RAM systems)
     cpu_cores = os.cpu_count() or 4
     threads = min(4, cpu_cores)
-    return "cpu", "int8", f"CPU Execution ({threads} threads)"
+    return "cpu", "int8", f"CPU Execution (Allocated {threads} of {cpu_cores} threads to preserve RAM stability)"
 
 
 class MADLADBackend(TranslationBackend):

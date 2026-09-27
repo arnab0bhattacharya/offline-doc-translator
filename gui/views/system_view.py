@@ -570,13 +570,34 @@ class SystemView(ctk.CTkFrame):
 
     def refresh_hw_status(self) -> None:
         """Checks available RAM, disk space, and hardware detection."""
-        ram_ok, ram_avail = check_ram()
-        disk_ok, disk_free = check_disk_space()
+        ram_ok, ram_avail_mb = check_ram()
+        disk_ok, disk_free_mb = check_disk_space()
+
+        ram_avail_gb = ram_avail_mb / 1024.0
+        disk_free_gb = disk_free_mb / 1024.0
+
+        try:
+            import psutil
+
+            total_ram_gb = psutil.virtual_memory().total / (1024.0**3)
+            ram_str = f"{ram_avail_gb:.2f} GB / {total_ram_gb:.2f} GB"
+        except Exception:
+            ram_str = f"{ram_avail_gb:.2f} GB"
+
+        try:
+            import shutil
+
+            total_disk, _, _ = shutil.disk_usage(".")
+            total_disk_gb = total_disk / (1024.0**3)
+            disk_str = f"{disk_free_gb:.2f} GB / {total_disk_gb:.2f} GB"
+        except Exception:
+            disk_str = f"{disk_free_gb:.2f} GB"
+
         dev_desc = getattr(self.madlad_backend, "active_device_description", "CPU INT8")
 
         txt = (
-            f"Available System RAM: {ram_avail:.2f} GB ({'Healthy' if ram_ok else 'Low'})\n"
-            f"Available Disk Space: {disk_free:.2f} GB ({'Healthy' if disk_ok else 'Low'})\n"
+            f"Available System RAM: {ram_str} ({'Healthy' if ram_ok else 'Low'})\n"
+            f"Available Disk Space: {disk_str} ({'Healthy' if disk_ok else 'Low'})\n"
             f"Detected Acceleration: {dev_desc}\n"
             f"Active Memory Guard: Dynamic model flush active."
         )

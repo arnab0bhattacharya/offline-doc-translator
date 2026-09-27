@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from engine.backend_base import TranslationBackend
 from engine.backend_llm import LLMBackend
-from engine.backend_nmt import NMTBackend
+from engine.backend_madlad import MADLADBackend
 from engine.core import TranslationEngine, TranslationMode, TranslationResult
 from engine.errors import ErrorCode, TranslatorError
 
@@ -61,10 +61,10 @@ class IncompleteBackend:
 class TestTranslationBackendProtocol(unittest.TestCase):
     """Verifies that TranslationBackend protocol behaves as a strict runtime contract."""
 
-    def test_nmt_backend_implements_protocol(self):
-        backend = NMTBackend()
+    def test_madlad_backend_implements_protocol(self):
+        backend = MADLADBackend()
         self.assertTrue(isinstance(backend, TranslationBackend))
-        self.assertEqual(backend.name, "nmt")
+        self.assertEqual(backend.name, "madlad")
         self.assertTrue(hasattr(backend, "is_available"))
         self.assertTrue(hasattr(backend, "is_ready"))
         self.assertTrue(hasattr(backend, "translate"))
@@ -84,21 +84,21 @@ class TestTranslationBackendProtocol(unittest.TestCase):
         incomplete = IncompleteBackend()
         self.assertFalse(isinstance(incomplete, TranslationBackend))
 
-    def test_nmt_translate_method_success(self):
-        backend = NMTBackend()
+    def test_madlad_translate_method_success(self):
+        backend = MADLADBackend()
         with patch.object(backend, "translate_single", return_value="Translated text with [[N0]]"):
             res, elapsed = backend.translate("Source text with [[N0]]", "ja2en")
             self.assertEqual(res, "Translated text with [[N0]]")
             self.assertGreaterEqual(elapsed, 0.0)
 
-    def test_nmt_translate_method_error_handling(self):
-        backend = NMTBackend()
+    def test_madlad_translate_method_error_handling(self):
+        backend = MADLADBackend()
         logs = []
         with patch.object(backend, "translate_single", side_effect=RuntimeError("Engine failure")):
             res, elapsed = backend.translate("Failed text", "ja2en", log_cb=logs.append)
             self.assertIsNone(res)
             self.assertGreaterEqual(elapsed, 0.0)
-            self.assertTrue(any("NMT backend error" in log for log in logs))
+            self.assertTrue(any("MADLAD" in log for log in logs))
 
     def test_llm_translate_method_routes_to_translate_single(self):
         backend = LLMBackend()
@@ -131,11 +131,11 @@ class TestEnginePolymorphicDispatch(unittest.TestCase):
     """Verifies that TranslationEngine uniformly dispatches to TranslationBackend instances."""
 
     def test_get_backend_by_mode(self):
-        engine_nmt = TranslationEngine(mode=TranslationMode.FAST_NMT)
-        self.assertIsInstance(engine_nmt.get_backend(), TranslationBackend)
-        self.assertEqual(engine_nmt.get_backend().name, "nmt")
+        engine_mt = TranslationEngine(mode=TranslationMode.MACHINE_TRANSLATION)
+        self.assertIsInstance(engine_mt.get_backend(), TranslationBackend)
+        self.assertEqual(engine_mt.get_backend().name, "madlad")
 
-        engine_llm = TranslationEngine(mode=TranslationMode.PURE_LLM)
+        engine_llm = TranslationEngine(mode=TranslationMode.AI_TRANSLATION)
         self.assertIsInstance(engine_llm.get_backend(), TranslationBackend)
         self.assertEqual(engine_llm.get_backend().name, "llm")
 
@@ -145,7 +145,7 @@ class TestEnginePolymorphicDispatch(unittest.TestCase):
         self.assertIs(engine.get_backend(), custom)
 
     def test_engine_set_backend(self):
-        engine = TranslationEngine(mode=TranslationMode.FAST_NMT)
+        engine = TranslationEngine(mode=TranslationMode.MACHINE_TRANSLATION)
         custom = MockCustomBackend()
         engine.set_backend(custom)
         self.assertIs(engine.get_backend(), custom)
@@ -162,14 +162,14 @@ class TestEnginePolymorphicDispatch(unittest.TestCase):
         self.assertEqual(res.text, "[CUSTOM: これはテストです。]")
         self.assertEqual(len(custom.call_history), 1)
 
-    def test_translate_chunk_unready_nmt_raises_error(self):
+    def test_translate_chunk_unready_mt_raises_error(self):
         class UnreadyBackend(MockCustomBackend):
-            name = "nmt"
+            name = "madlad"
 
             def is_ready(self, direction: str) -> bool:
                 return False
 
-        engine = TranslationEngine(mode=TranslationMode.FAST_NMT, backend=UnreadyBackend(ready=False))
+        engine = TranslationEngine(mode=TranslationMode.MACHINE_TRANSLATION, backend=UnreadyBackend(ready=False))
         with self.assertRaises(TranslatorError) as ctx:
             engine.translate_chunk("これはテストです。", "ja2en")
         self.assertEqual(ctx.exception.code, ErrorCode.E08)

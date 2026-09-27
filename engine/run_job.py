@@ -17,7 +17,7 @@ from .cache_locations import get_job_cache_path
 from .core import TranslationEngine, TranslationMode
 from .errors import ErrorCode, TranslatorError
 from .logging import TranslationLogger
-from .preflight import run_madlad_preflight, run_nllb_preflight, run_nmt_preflight, run_preflight
+from .preflight import run_mt_preflight, run_preflight
 
 
 def execute_translation(
@@ -53,7 +53,7 @@ def execute_translation(
     if cancel_event and cancel_event.is_set():
         raise TranslatorError(ErrorCode.E09, detail="Translation cancelled before execution.")
 
-    llm_available = mode == TranslationMode.PURE_LLM
+    llm_available = mode in (TranslationMode.AI_TRANSLATION, TranslationMode.PURE_LLM, "ai_translation", "pure_llm")
     review_log_path = f"{output_path}.needs_review.log"
 
     if logger is not None and log_cb is not None:
@@ -70,12 +70,19 @@ def execute_translation(
         check_model=llm_available,
         require_ollama=llm_available,
     )
-    if mode == TranslationMode.FAST_NMT:
-        run_nmt_preflight(direction)
-    elif mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
-        run_nllb_preflight(direction)
-    elif mode == TranslationMode.MADLAD_3B:
-        run_madlad_preflight(direction)
+    if mode in (
+        TranslationMode.MACHINE_TRANSLATION,
+        TranslationMode.FAST_NMT,
+        TranslationMode.QUALITY_NMT,
+        TranslationMode.NLLB_3B,
+        TranslationMode.MADLAD_3B,
+        "machine_translation",
+        "fast_nmt",
+        "quality_nmt",
+        "nllb_3b",
+        "madlad_3b",
+    ):
+        run_mt_preflight(direction)
 
     if cancel_event and cancel_event.is_set():
         raise TranslatorError(ErrorCode.E09, detail="Translation cancelled after preflight.")

@@ -1,17 +1,13 @@
 """
 engine package initialization.
+Streamlined for 2-engine enterprise architecture:
+- Machine Translation (Google MADLAD-400 3B via CTranslate2 INT8)
+- AI Translation (Google Gemma 4 E2B via Ollama)
 """
 
 from .backend_base import TranslationBackend
 from .backend_llm import LLMBackend
 from .backend_madlad import MADLADBackend
-from .backend_nllb import NLLBBackend
-from .backend_nmt import (
-    NMTBackend,
-    compute_file_sha256,
-    load_trusted_packages,
-    verify_package_archive,
-)
 from .cache import (
     EncryptedFileCache,
     JSONFileCache,
@@ -49,13 +45,6 @@ from .madlad_manager import (
     get_madlad_model_info,
     import_local_madlad_folder,
 )
-from .nllb_manager import (
-    check_nllb_installed,
-    download_nllb_model,
-    get_nllb_model_dir,
-    get_nllb_model_info,
-    import_local_model_folder,
-)
 from .ollama_manager import (
     OllamaManager,
     find_ollama_binary,
@@ -65,14 +54,12 @@ from .preflight import (
     check_disk_space,
     check_madlad_ready,
     check_model_installed,
-    check_nllb_ready,
-    check_nmt_ready,
+    check_mt_ready,
     check_ollama_status,
     check_ram,
     list_installed_models,
     run_madlad_preflight,
-    run_nllb_preflight,
-    run_nmt_preflight,
+    run_mt_preflight,
     run_preflight,
 )
 
@@ -94,8 +81,6 @@ __all__ = [
     "JSONFileCache",
     "LLMBackend",
     "MADLADBackend",
-    "NLLBBackend",
-    "NMTBackend",
     "NullCache",
     "OllamaManager",
     "TranslationBackend",
@@ -110,18 +95,14 @@ __all__ = [
     "check_madlad_installed",
     "check_madlad_ready",
     "check_model_installed",
-    "check_nllb_installed",
-    "check_nllb_ready",
-    "check_nmt_ready",
+    "check_mt_ready",
     "check_ollama_status",
     "check_ram",
-    "compute_file_sha256",
     "contains_japanese",
     "contains_latin",
     "derive_fernet_key",
     "derive_machine_key",
     "download_madlad_model",
-    "download_nllb_model",
     "escape_xml",
     "execute_translation",
     "extract_numeric_tokens",
@@ -129,25 +110,19 @@ __all__ = [
     "get_logger",
     "get_madlad_model_dir",
     "get_madlad_model_info",
-    "get_nllb_model_dir",
-    "get_nllb_model_info",
     "get_ollama_manager",
     "hash_text",
     "import_local_madlad_folder",
-    "import_local_model_folder",
     "list_installed_models",
-    "load_trusted_packages",
     "mask_glossary_terms",
     "mask_numbers",
     "run_madlad_preflight",
-    "run_nllb_preflight",
-    "run_nmt_preflight",
+    "run_mt_preflight",
     "run_preflight",
     "should_translate",
     "unescape_xml",
     "unmask_numbers",
     "unmask_protected_text",
     "verify_nmt_numbers",
-    "verify_package_archive",
     "verify_placeholders",
 ]

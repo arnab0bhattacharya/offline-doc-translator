@@ -57,6 +57,21 @@ class TestPreflight(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, ErrorCode.E04)
 
+    def test_mt_preflight_checks(self):
+        from unittest.mock import patch
+
+        from engine.preflight import check_mt_ready, run_mt_preflight
+
+        with patch("engine.backend_madlad.MADLADBackend.is_ready", return_value=True):
+            self.assertTrue(check_mt_ready("ja2en"))
+            run_mt_preflight("ja2en")
+
+        with patch("engine.backend_madlad.MADLADBackend.is_ready", return_value=False):
+            self.assertFalse(check_mt_ready("ja2en"))
+            with self.assertRaises(TranslatorError) as ctx:
+                run_mt_preflight("ja2en")
+            self.assertEqual(ctx.exception.code, ErrorCode.E08)
+
 
 if __name__ == "__main__":
     unittest.main()

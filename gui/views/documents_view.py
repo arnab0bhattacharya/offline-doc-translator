@@ -194,14 +194,14 @@ class DocumentsView(ctk.CTkFrame):
             text_color=THEME["text_secondary"],
         ).pack(anchor="w", pady=(0, 4))
 
-        self.mode_var = ctk.StringVar(value=TranslationMode.FAST_NMT.value)
+        self.mode_var = ctk.StringVar(value=TranslationMode.MACHINE_TRANSLATION.value)
         self.mode_seg = ctk.CTkSegmentedButton(
             engine_box,
-            values=["⚡ Fast (Argos)", "🌐 NLLB 3.3B", "🎯 MADLAD 3B", "🧠 Ollama"],
+            values=["⚡ Machine Translation", "🧠 AI Translation"],
             command=self._on_mode_seg_changed,
             font=ctk.CTkFont(size=12, weight="bold"),
         )
-        self.mode_seg.set("⚡ Fast (Argos)")
+        self.mode_seg.set("⚡ Machine Translation")
         self.mode_seg.pack()
 
         # Direction Box
@@ -523,17 +523,11 @@ class DocumentsView(ctk.CTkFrame):
     # ── Mode & Direction Handlers ──
 
     def _on_mode_seg_changed(self, value: str):
-        if "Ollama" in value or "Creative" in value or "Pure LLM" in value:
-            self.mode_var.set(TranslationMode.PURE_LLM.value)
+        if "AI" in value or "Ollama" in value or "Creative" in value or "Pure LLM" in value:
+            self.mode_var.set(TranslationMode.AI_TRANSLATION.value)
             self.model_combo.configure(state="normal")
-        elif "MADLAD" in value:
-            self.mode_var.set(TranslationMode.MADLAD_3B.value)
-            self.model_combo.configure(state="disabled")
-        elif "Quality" in value or "NLLB" in value:
-            self.mode_var.set(TranslationMode.NLLB_3B.value)
-            self.model_combo.configure(state="disabled")
         else:
-            self.mode_var.set(TranslationMode.FAST_NMT.value)
+            self.mode_var.set(TranslationMode.MACHINE_TRANSLATION.value)
             self.model_combo.configure(state="disabled")
 
     def _on_direction_changed(self, display_value: str):
@@ -779,34 +773,32 @@ class DocumentsView(ctk.CTkFrame):
         else:
             cache_policy = CachePolicy.ENCRYPTED_PERSISTENT
 
-        if mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
-            from engine.nllb_manager import check_nllb_installed
-
-            if not check_nllb_installed():
-                messagebox.showwarning(
-                    "NLLB Model Required",
-                    "The NLLB-200 3.3B neural model is not installed yet (~3.4 GB).\n\n"
-                    "Please navigate to 'System & AI Diagnostics' to download the model "
-                    "or import an existing local model folder.",
-                )
-                return
-
-        if mode == TranslationMode.MADLAD_3B:
+        if mode in (
+            TranslationMode.MACHINE_TRANSLATION,
+            TranslationMode.FAST_NMT,
+            TranslationMode.QUALITY_NMT,
+            TranslationMode.NLLB_3B,
+            TranslationMode.MADLAD_3B,
+            "machine_translation",
+        ):
             from engine.madlad_manager import check_madlad_installed
 
             if not check_madlad_installed():
                 messagebox.showwarning(
-                    "MADLAD Model Required",
-                    "The Google Research MADLAD-400 3B neural model is not installed yet (~3.0 GB).\n\n"
+                    "Machine Translation Model Required",
+                    "The Google MADLAD-400 3B neural model is not installed yet (~3.0 GB).\n\n"
                     "Please navigate to 'System & AI Diagnostics' to download the model "
                     "or import an existing local model folder.",
                 )
                 return
 
-        if mode == TranslationMode.PURE_LLM and not check_ollama_status():
+        if (
+            mode in (TranslationMode.AI_TRANSLATION, TranslationMode.PURE_LLM, "ai_translation", "pure_llm")
+            and not check_ollama_status()
+        ):
             start_now = messagebox.askyesno(
                 "Ollama Offline",
-                "Pure LLM mode requires Ollama, but the background service is currently offline.\n\n"
+                "AI Translation mode requires Ollama, but the background service is currently offline.\n\n"
                 "Would you like to start Ollama in the background now?",
             )
             if start_now:

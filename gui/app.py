@@ -28,8 +28,6 @@ if sys.platform == "win32":
         pass
 
 from engine.backend_madlad import MADLADBackend
-from engine.backend_nllb import NLLBBackend
-from engine.backend_nmt import NMTBackend
 from engine.queue_manager import JobStatus, TranslationJob
 from gui.controllers import TranslationController
 from gui.theme import THEME
@@ -53,8 +51,6 @@ class TranslatorApp:
         self._setup_window_icon()
 
         # Engine & Controller state
-        self.nmt_backend = NMTBackend()
-        self.nllb_backend = NLLBBackend()
         self.madlad_backend = MADLADBackend()
         self.controller = TranslationController(
             on_job_update=self._on_job_update,
@@ -160,11 +156,9 @@ class TranslatorApp:
         self.quick_view = QuickView(self.content_area)
         self.system_view = SystemView(
             self.content_area,
-            nmt_backend=self.nmt_backend,
-            nllb_backend=self.nllb_backend,
             madlad_backend=self.madlad_backend,
             on_ollama_status=self._on_ollama_status,
-            on_argos_status=self._on_argos_status,
+            on_mt_status=self._on_mt_status,
         )
 
         self.tab_frames["docs"] = self.docs_view
@@ -247,9 +241,9 @@ class TranslatorApp:
             text_color=THEME["text_secondary"],
         ).pack(anchor="w", padx=10, pady=(8, 4))
 
-        self.side_argos_btn = ctk.CTkButton(
+        self.side_mt_btn = ctk.CTkButton(
             status_card,
-            text="● Argos: Checking...",
+            text="● MT: Checking...",
             height=24,
             anchor="w",
             font=ctk.CTkFont(size=11),
@@ -258,7 +252,7 @@ class TranslatorApp:
             hover_color=THEME["btn_secondary"],
             command=lambda: self._switch_tab("system"),
         )
-        self.side_argos_btn.pack(fill="x", padx=6, pady=2)
+        self.side_mt_btn.pack(fill="x", padx=6, pady=2)
 
         self.side_ollama_btn = ctk.CTkButton(
             status_card,
@@ -347,8 +341,11 @@ class TranslatorApp:
         else:
             self.side_ollama_btn.configure(text="● Ollama: Offline", text_color=THEME["error"])
 
+    def _on_mt_status(self, ready: bool, summary: str):
+        self.side_mt_btn.configure(text=summary, text_color=THEME["success"] if ready else THEME["warning"])
+
     def _on_argos_status(self, ready: bool, summary: str):
-        self.side_argos_btn.configure(text=summary, text_color=THEME["success"] if ready else THEME["warning"])
+        self._on_mt_status(ready, summary)
 
     # ══════════════════════════════════════════════════════════════
     #  EVENT DISPATCH & QUEUE UPDATES
@@ -479,13 +476,6 @@ class TranslatorApp:
             from engine.ollama_manager import get_ollama_manager
 
             get_ollama_manager().cleanup_on_exit()
-        except Exception:
-            pass
-
-        # Evict NLLB-200 model from RAM if resident
-        try:
-            if hasattr(self, "nllb_backend") and self.nllb_backend:
-                self.nllb_backend.unload()
         except Exception:
             pass
 

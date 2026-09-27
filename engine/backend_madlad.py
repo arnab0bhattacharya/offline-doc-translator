@@ -1,12 +1,14 @@
 """
 engine/backend_madlad.py
 ========================
-High-fidelity Neural Machine Translation (NMT) backend powered by Google Research's MADLAD-400 3B.
+High-fidelity Machine Translation (MT) backend powered by Google Research's MADLAD-400 3B (Apache 2.0).
 Executes INT8 quantized inference via CTranslate2 (T5 architecture) and SentencePiece.
 
 Architectural Guarantees:
+- Model Pinning: Every device runs identical model weights and quantization for enterprise-wide consistency.
+- Adaptive Runtime: Auto-detects NVIDIA CUDA GPUs with sufficient VRAM, gracefully falling back to CPU.
 - Strict Lazy Loading: Model weights and SentencePiece tables are never loaded until first user translation.
-- Deterministic Unload: Memory is completely evicted from RAM/C++ runtime on unload() or process exit.
+- Deterministic Unload: Memory is completely evicted from RAM/VRAM on unload() or process exit.
 - Clean Text Pipeline: Operates natively on clean natural text without synthetic bracket fragmentation.
 """
 
@@ -34,9 +36,46 @@ MADLAD_LANG_MAP = {
 }
 
 
+def detect_hardware() -> tuple[str, str, str]:
+    """
+    Detects system compute hardware and determines optimal CTranslate2 runtime settings.
+    Returns: (device, compute_type, description)
+      - device: "cuda" or "cpu"
+      - compute_type: "int8_float16" for CUDA, "int8" for CPU
+      - description: human-readable hardware descriptor
+    """
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            free_vram_mb = 0
+            gpu_name = "NVIDIA GPU"
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    gpu_name = torch.cuda.get_device_name(0)
+                    total_vram = torch.cuda.get_device_properties(0).total_memory
+                    free_vram_mb = int(total_vram / (1024 * 1024))
+            except Exception:
+                pass
+
+            if free_vram_mb >= 3500:
+                return "cuda", "int8_float16", f"{gpu_name} ({free_vram_mb} MB VRAM) — CUDA Accelerated"
+            elif free_vram_mb == 0 and ctranslate2.get_cuda_device_count() > 0:
+                return "cuda", "int8_float16", "CUDA Hardware Acceleration"
+    except Exception:
+        pass
+
+    # Safe CPU baseline (optimized for 8 GB RAM systems)
+    cpu_cores = os.cpu_count() or 4
+    threads = min(4, cpu_cores)
+    return "cpu", "int8", f"CPU Execution ({threads} threads)"
+
+
 class MADLADBackend(TranslationBackend):
     """
-    Polymorphic translation backend for MADLAD-400 3B (INT8) via CTranslate2.
+    Polymorphic translation backend for Google MADLAD-400 3B (INT8) via CTranslate2.
     """
 
     name = "madlad"
@@ -44,17 +83,49 @@ class MADLADBackend(TranslationBackend):
     def __init__(
         self,
         model_dir: str | None = None,
-        compute_type: str = "int8",
+        device: str | None = None,
+        compute_type: str | None = None,
         intra_threads: int | None = None,
     ):
         self.model_dir = model_dir or get_madlad_model_dir()
-        self.compute_type = compute_type
+        self._user_device = device
+        self._user_compute_type = compute_type
         self.intra_threads = intra_threads or min(4, os.cpu_count() or 4)
+
+        # Hardware runtime selection
+        self._active_device = "cpu"
+        self._active_compute_type = "int8"
+        self._hardware_desc = "CPU"
+        self._refresh_hardware_config()
 
         # STRICT LAZY LOADING: zero memory allocated at initialization
         self._translator: Any | None = None
         self._sp_processor: Any | None = None
         self._is_loaded = False
+
+    def _refresh_hardware_config(self) -> None:
+        """Determines active device and compute type based on user override or auto-detection."""
+        if self._user_device:
+            self._active_device = self._user_device
+            self._active_compute_type = self._user_compute_type or (
+                "int8_float16" if self._user_device == "cuda" else "int8"
+            )
+            self._hardware_desc = f"{self._active_device.upper()} (Manual Override)"
+        else:
+            dev, comp, desc = detect_hardware()
+            self._active_device = dev
+            self._active_compute_type = comp
+            self._hardware_desc = desc
+
+    @property
+    def active_device(self) -> str:
+        """Returns the active execution device ('cpu' or 'cuda')."""
+        return self._active_device
+
+    @property
+    def active_device_description(self) -> str:
+        """Returns a human-readable description of the compute backend."""
+        return self._hardware_desc
 
     def is_available(self) -> bool:
         """Returns True if CTranslate2, SentencePiece, and model weights are present."""
@@ -77,7 +148,7 @@ class MADLADBackend(TranslationBackend):
         return src_code in MADLAD_LANG_MAP and tgt_code in MADLAD_LANG_MAP
 
     def is_model_loaded(self) -> bool:
-        """Returns True if the model weights are currently resident in RAM."""
+        """Returns True if the model weights are currently resident in RAM/VRAM."""
         return self._is_loaded and self._translator is not None
 
     def _get_spiece_path(self) -> str:
@@ -89,7 +160,7 @@ class MADLADBackend(TranslationBackend):
         raise FileNotFoundError(f"SentencePiece model file missing in: {self.model_dir}")
 
     def _ensure_loaded(self) -> None:
-        """Loads CTranslate2 translator and SentencePiece tokenizer into RAM on first use."""
+        """Loads CTranslate2 translator and SentencePiece tokenizer into memory on first use."""
         if self._is_loaded and self._translator is not None:
             return
 
@@ -107,18 +178,41 @@ class MADLADBackend(TranslationBackend):
         sp.load(sp_path)
         self._sp_processor = sp
 
-        self._translator = ctranslate2.Translator(
-            self.model_dir,
-            device="cpu",
-            compute_type=self.compute_type,
-            intra_threads=self.intra_threads,
-            inter_threads=1,
-        )
+        self._refresh_hardware_config()
+        device = self._active_device
+        compute_type = self._active_compute_type
+
+        try:
+            self._translator = ctranslate2.Translator(
+                self.model_dir,
+                device=device,
+                compute_type=compute_type,
+                intra_threads=self.intra_threads if device == "cpu" else 1,
+                inter_threads=1,
+            )
+        except Exception as e:
+            # If CUDA initialization failed, gracefully fall back to CPU execution
+            if device == "cuda":
+                device = "cpu"
+                compute_type = "int8"
+                self._active_device = "cpu"
+                self._active_compute_type = "int8"
+                self._hardware_desc = f"CPU Execution ({self.intra_threads} threads) [CUDA fallback: {e}]"
+                self._translator = ctranslate2.Translator(
+                    self.model_dir,
+                    device=device,
+                    compute_type=compute_type,
+                    intra_threads=self.intra_threads,
+                    inter_threads=1,
+                )
+            else:
+                raise
+
         self._is_loaded = True
 
     def unload(self) -> None:
         """
-        Evicts the CTranslate2 model and SentencePiece tokenizer from system RAM immediately.
+        Evicts the CTranslate2 model and SentencePiece tokenizer from system memory immediately.
         Calls garbage collection to reclaim memory.
         """
         if self._translator is not None:

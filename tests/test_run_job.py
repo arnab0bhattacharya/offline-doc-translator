@@ -27,7 +27,7 @@ class TestRunJob(unittest.TestCase):
 
     @patch("engine.run_job.get_handler")
     @patch("engine.run_job.TranslationEngine")
-    @patch("engine.run_job.run_nmt_preflight")
+    @patch("engine.run_job.run_mt_preflight")
     @patch("engine.run_job.run_preflight")
     def test_execute_translation_fast_nmt(self, mock_preflight, mock_nmt_preflight, mock_engine_cls, mock_get_handler):
         mock_handler = MagicMock()
@@ -78,7 +78,7 @@ class TestRunJob(unittest.TestCase):
 
     @patch("engine.run_job.get_handler")
     @patch("engine.run_job.TranslationEngine")
-    @patch("engine.run_job.run_nmt_preflight")
+    @patch("engine.run_job.run_mt_preflight")
     @patch("engine.run_job.run_preflight")
     def test_execute_translation_pure_llm(self, mock_preflight, mock_nmt_preflight, mock_engine_cls, mock_get_handler):
         mock_handler = MagicMock()
@@ -178,7 +178,7 @@ class TestRunJob(unittest.TestCase):
 
     @patch("engine.run_job.get_handler")
     @patch("engine.run_job.TranslationEngine")
-    @patch("engine.run_job.run_nmt_preflight")
+    @patch("engine.run_job.run_mt_preflight")
     @patch("engine.run_job.run_preflight")
     def test_execute_translation_plaintext_cache_policy(
         self, mock_preflight, mock_nmt_preflight, mock_engine_cls, mock_get_handler
@@ -221,7 +221,7 @@ class TestRunJob(unittest.TestCase):
 
     @patch("engine.run_job.get_handler")
     @patch("engine.run_job.TranslationEngine")
-    @patch("engine.run_job.run_nmt_preflight")
+    @patch("engine.run_job.run_mt_preflight")
     @patch("engine.run_job.run_preflight")
     def test_execute_translation_memory_only_cache_policy(
         self, mock_preflight, mock_nmt_preflight, mock_engine_cls, mock_get_handler

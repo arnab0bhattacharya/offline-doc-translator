@@ -234,6 +234,43 @@ class TestNMTCleanPipeline(unittest.TestCase):
             self.assertIn("2024", result.text)
             self.assertIn("sales", result.text)
 
+    def test_machine_translation_mode_receives_unmasked_text(self):
+        """Ensures MACHINE_TRANSLATION mode translates clean text and executes smoothly."""
+        mock_backend = MockNMTBackend()
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            glossary = {"売上高": "sales"}
+            engine = TranslationEngine(
+                mode=TranslationMode.MACHINE_TRANSLATION,
+                cache_file=cache_file,
+                glossary=glossary,
+            )
+            engine.set_backend(mock_backend, mode=TranslationMode.MACHINE_TRANSLATION)
+
+            source = "2024年に売上高は15%増加しました。"
+            result = engine.translate_chunk(source, direction="ja2en")
+            self.assertTrue(result.was_translated)
+            self.assertFalse(result.was_reverted)
+            self.assertEqual(result.source_backend, "nmt")
+
+    def test_ai_translation_mode_retains_synthetic_masking(self):
+        """Ensures AI_TRANSLATION mode uses synthetic masking and unmasks."""
+        mock_llm = MockLLMBackend()
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            glossary = {"売上高": "sales"}
+            engine = TranslationEngine(
+                mode=TranslationMode.AI_TRANSLATION,
+                cache_file=cache_file,
+                glossary=glossary,
+            )
+            engine.set_backend(mock_llm, mode=TranslationMode.AI_TRANSLATION)
+
+            source = "2024年に売上高は15%増加しました。"
+            result = engine.translate_chunk(source, direction="ja2en")
+            self.assertTrue(result.was_translated)
+            self.assertIn("sales", result.text)
+
 
 if __name__ == "__main__":
     unittest.main()

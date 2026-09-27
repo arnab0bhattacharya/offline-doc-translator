@@ -3,8 +3,8 @@ engine/core.py
 ==============
 Core format-agnostic translation engine.
 Orchestrates two translation modes:
-  - Fast NMT Mode (ArgosTranslate / CTranslate2) for high-speed offline translation
-  - Pure LLM Mode (Ollama) with isomorphic retry & custom glossary enforcement
+  - Machine Translation Mode (CTranslate2 / Google MADLAD-400 3B, Apache 2.0)
+  - AI Translation Mode (Local LLM via Ollama, Google Gemma 4 E2B IT QAT, Apache 2.0)
   - Unified atomic caching, single-pass number masking, and bidirectional gates.
 """
 
@@ -53,11 +53,15 @@ class TranslationResult:
 
 
 class TranslationMode(str, Enum):
-    FAST_NMT = "fast_nmt"  # 100% CTranslate2 / Argos (blazing fast, 0.02s/chunk)
-    NLLB_3B = "nllb_3b"  # 100% CTranslate2 / NLLB-200 3.3B INT8 (~3.4 GB)
-    MADLAD_3B = "madlad_3b"  # 100% CTranslate2 / Google MADLAD-400 3B INT8 (~3.0 GB)
-    PURE_LLM = "pure_llm"  # 100% Local LLM via Ollama
-    QUALITY_NMT = "quality_nmt"  # Backward-compatible alias (routes to NLLB 3.3B)
+    MACHINE_TRANSLATION = "machine_translation"  # 100% CTranslate2 / Google MADLAD-400 3B (Apache 2.0)
+    AI_TRANSLATION = "ai_translation"  # 100% Local LLM via Ollama (Gemma 4, Apache 2.0)
+
+    # Backward-compatible aliases for existing caches
+    FAST_NMT = "fast_nmt"
+    QUALITY_NMT = "quality_nmt"
+    NLLB_3B = "nllb_3b"
+    MADLAD_3B = "madlad_3b"
+    PURE_LLM = "pure_llm"
 
 
 def contains_japanese(text: str) -> bool:
@@ -334,7 +338,7 @@ class TranslationEngine:
         self,
         model_name: str = "gemma4:e2b-it-qat",
         ollama_url: str = "http://localhost:11434",
-        mode: TranslationMode = TranslationMode.FAST_NMT,
+        mode: TranslationMode = TranslationMode.MACHINE_TRANSLATION,
         glossary: dict[str, str] | None = None,
         min_free_ram_mb: int = 150,
         context_window: int = 2048,
@@ -415,8 +419,6 @@ class TranslationEngine:
                 self._cache_mgr = NullCache()
 
         # Lazy-loaded backend instances
-        self._nmt_backend = None
-        self._nllb_backend = None
         self._madlad_backend = None
         self._llm_backend = None
         self._custom_backend = backend
@@ -439,28 +441,28 @@ class TranslationEngine:
             self._cache_mgr.data = value
 
     @property
-    def nmt_backend(self):
-        if self._nmt_backend is None:
-            from engine.backend_nmt import NMTBackend
-
-            self._nmt_backend = NMTBackend()
-        return self._nmt_backend
-
-    @property
-    def nllb_backend(self):
-        if self._nllb_backend is None:
-            from engine.backend_nllb import NLLBBackend
-
-            self._nllb_backend = NLLBBackend()
-        return self._nllb_backend
-
-    @property
     def madlad_backend(self):
         if self._madlad_backend is None:
             from engine.backend_madlad import MADLADBackend
 
             self._madlad_backend = MADLADBackend()
         return self._madlad_backend
+
+    @property
+    def _nmt_backend(self):
+        return self.madlad_backend
+
+    @_nmt_backend.setter
+    def _nmt_backend(self, backend):
+        self._madlad_backend = backend
+
+    @property
+    def _nllb_backend(self):
+        return self.madlad_backend
+
+    @_nllb_backend.setter
+    def _nllb_backend(self, backend):
+        self._madlad_backend = backend
 
     @property
     def llm_backend(self):
@@ -472,40 +474,48 @@ class TranslationEngine:
             )
         return self._llm_backend
 
-    def get_backend(self, mode: TranslationMode | None = None) -> TranslationBackend:
+    def get_backend(self, mode: TranslationMode | str | None = None) -> TranslationBackend:
         """Returns the active or requested translation backend instance."""
         if mode is None and self._custom_backend is not None:
             return self._custom_backend
         effective_mode = mode if mode is not None else self.mode
-        if effective_mode == TranslationMode.FAST_NMT:
-            return self.nmt_backend
-        if effective_mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
-            if self._madlad_backend is not None and getattr(self._madlad_backend, "is_model_loaded", lambda: False)():
-                self._madlad_backend.unload()
-            return self.nllb_backend
-        if effective_mode == TranslationMode.MADLAD_3B:
-            if self._nllb_backend is not None and getattr(self._nllb_backend, "is_model_loaded", lambda: False)():
-                self._nllb_backend.unload()
+        if effective_mode in (
+            TranslationMode.MACHINE_TRANSLATION,
+            TranslationMode.FAST_NMT,
+            TranslationMode.QUALITY_NMT,
+            TranslationMode.NLLB_3B,
+            TranslationMode.MADLAD_3B,
+            "machine_translation",
+            "fast_nmt",
+            "quality_nmt",
+            "nllb_3b",
+            "madlad_3b",
+        ):
             return self.madlad_backend
         return self.llm_backend
 
-    def set_backend(self, backend: TranslationBackend, mode: TranslationMode | None = None) -> None:
+    def set_backend(self, backend: TranslationBackend, mode: TranslationMode | str | None = None) -> None:
         """Registers a custom or replacement translation backend."""
         if mode is None:
             self._custom_backend = backend
-        elif mode == TranslationMode.FAST_NMT:
-            self._nmt_backend = backend
-        elif mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
-            self._nllb_backend = backend
-        elif mode == TranslationMode.MADLAD_3B:
+        elif mode in (
+            TranslationMode.MACHINE_TRANSLATION,
+            TranslationMode.FAST_NMT,
+            TranslationMode.QUALITY_NMT,
+            TranslationMode.NLLB_3B,
+            TranslationMode.MADLAD_3B,
+            "machine_translation",
+            "fast_nmt",
+            "quality_nmt",
+            "nllb_3b",
+            "madlad_3b",
+        ):
             self._madlad_backend = backend
         else:
             self._llm_backend = backend
 
     def unload_backends(self) -> None:
-        """Unloads in-memory backends (such as NLLB and MADLAD) and frees model RAM."""
-        if self._nllb_backend is not None and hasattr(self._nllb_backend, "unload"):
-            self._nllb_backend.unload()
+        """Unloads in-memory backends (such as MADLAD) and frees model memory."""
         if self._madlad_backend is not None and hasattr(self._madlad_backend, "unload"):
             self._madlad_backend.unload()
         if self._custom_backend is not None and hasattr(self._custom_backend, "unload"):
@@ -572,7 +582,7 @@ class TranslationEngine:
 
     def flush_model(self) -> None:
         """Explicitly unloads model from VRAM/RAM after a document completes."""
-        if self.mode != TranslationMode.PURE_LLM:
+        if self.mode not in (TranslationMode.PURE_LLM, TranslationMode.AI_TRANSLATION, "pure_llm", "ai_translation"):
             return
         try:
             requests.post(
@@ -746,12 +756,7 @@ class TranslationEngine:
 
         # 3. Check backend readiness
         if not backend.is_ready(direction):
-            if self.mode == TranslationMode.MADLAD_3B:
-                engine_label = "MADLAD-400 3B"
-            elif self.mode in (TranslationMode.NLLB_3B, TranslationMode.QUALITY_NMT):
-                engine_label = "NLLB-200 3.3B"
-            else:
-                engine_label = "Fast NMT (Argos)"
+            engine_label = "Machine Translation (MADLAD-400 3B)"
             raise TranslatorError(
                 ErrorCode.E08,
                 detail=f"{engine_label} cannot translate {direction}: the language model package is not installed.",
@@ -779,8 +784,8 @@ class TranslationEngine:
                     ErrorCode.E03,
                     detail=(
                         f"Out of memory during {backend_name.upper()} translation: {e}. "
-                        "The system ran out of RAM for this 3B model. Please close other applications "
-                        "or switch to ⚡ Fast (Argos) mode."
+                        "The system ran out of RAM for this model. Please close other applications "
+                        "or ensure enough system memory is free."
                     ),
                 ) from e
             if self.logger:
@@ -840,12 +845,7 @@ class TranslationEngine:
                 details={"source_backend": backend_name},
             )
         if log_cb:
-            if self.mode == TranslationMode.FAST_NMT:
-                tag = "⚡ Fast NMT"
-            elif self.mode == TranslationMode.MADLAD_3B:
-                tag = "🎯 MADLAD 3B"
-            else:
-                tag = "🌐 NLLB 3.3B"
+            tag = "⚡ Machine Translation"
             log_cb(f'  [{tag} in {elapsed:.2f}s] {location_id}: "{preview_src}" => "{preview_res}"')
 
         return TranslationResult(
@@ -1090,10 +1090,16 @@ class TranslationEngine:
             return TranslationResult(text=text, was_translated=False, was_reverted=False)
 
         if self.mode in (
+            TranslationMode.MACHINE_TRANSLATION,
             TranslationMode.FAST_NMT,
             TranslationMode.QUALITY_NMT,
             TranslationMode.NLLB_3B,
             TranslationMode.MADLAD_3B,
+            "machine_translation",
+            "fast_nmt",
+            "quality_nmt",
+            "nllb_3b",
+            "madlad_3b",
         ):
             return self._translate_chunk_nmt(
                 text=text,

@@ -179,6 +179,30 @@ class DocumentsView(ctk.CTkFrame):
         opt_inner = ctk.CTkFrame(card_opt, fg_color="transparent")
         opt_inner.pack(fill="x", padx=16, pady=14)
 
+        # ── Card 2 Header: Defaults & Quick Bulk Apply ──
+        opt_head = ctk.CTkFrame(opt_inner, fg_color="transparent")
+        opt_head.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            opt_head,
+            text="Default Translation Configuration",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        self.apply_all_btn = ctk.CTkButton(
+            opt_head,
+            text="Apply to All Staged",
+            width=140,
+            height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color=THEME["btn_secondary"],
+            hover_color=THEME["btn_sec_hover"],
+            text_color=THEME["btn_sec_text"],
+            command=self._apply_preset_to_all_staged,
+        )
+        self.apply_all_btn.pack(side="right")
+
         # Controls Row
         ctrl_row = ctk.CTkFrame(opt_inner, fg_color="transparent")
         ctrl_row.pack(fill="x")
@@ -264,6 +288,7 @@ class DocumentsView(ctk.CTkFrame):
             width=190,
             state="disabled",
             font=ctk.CTkFont(size=12),
+            command=lambda _: self._sync_card2_presets_to_staged_defaults(),
         )
         self.model_combo.pack()
 
@@ -293,6 +318,8 @@ class DocumentsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
         )
         self.cache_policy_combo.pack()
+
+        self._sync_card2_presets_to_staged_defaults()
 
         # Collapsible Glossary in Card 2
         glossary_toggle_frame = ctk.CTkFrame(opt_inner, fg_color="transparent")
@@ -346,7 +373,16 @@ class DocumentsView(ctk.CTkFrame):
         self.glossary_text.pack(fill="x", pady=(6, 0))
         self.glossary_text.insert("0.0", "# Term -> Translation (one per line)\n")
 
-        # ── Primary Action Row ──
+        # ── Primary Action Row & Live Staging Summary ──
+        self.staged_summary_label = ctk.CTkLabel(
+            scroll,
+            text="",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=THEME["primary"],
+            anchor="w",
+        )
+        self.staged_summary_label.pack(fill="x", pady=(2, 4))
+
         action_bar = ctk.CTkFrame(scroll, fg_color="transparent")
         action_bar.pack(fill="x", pady=(2, 14))
 
@@ -519,6 +555,40 @@ class DocumentsView(ctk.CTkFrame):
             self.start_btn.configure(text=f"▶   Start Translation ({count})")
         else:
             self.start_btn.configure(text="▶   Start Translation")
+            if hasattr(self, "staged_summary_label") and self.staged_summary_label:
+                self.staged_summary_label.configure(text="")
+            return
+
+        if hasattr(self, "staged_summary_label") and self.staged_summary_label and hasattr(self, "staged_list"):
+            staged_specs = self.staged_list.get_staged_specs()
+            from collections import Counter
+
+            breakdown = Counter()
+            for s in staged_specs:
+                mode_str = s.get("mode", "")
+                is_mt = "machine" in mode_str.lower() or "nmt" in mode_str.lower() or "madlad" in mode_str.lower()
+                eng_str = "⚡ MT" if is_mt else "🤖 AI"
+                dir_str = "JA→EN" if s.get("direction") == "ja2en" else "EN→JA"
+                breakdown[f"{eng_str} ({dir_str})"] += 1
+
+            parts = [f"{cnt} via {label}" for label, cnt in breakdown.items()]
+            summary_text = f"Ready to queue {count} document{'s' if count != 1 else ''}: " + ", ".join(parts)
+            self.staged_summary_label.configure(text=summary_text)
+
+    def _sync_card2_presets_to_staged_defaults(self):
+        if not hasattr(self, "staged_list"):
+            return
+        direction = self.direction_var.get()
+        mode = self.mode_var.get()
+        model = self.model_var.get().strip() or GEMMA_PRESETS[0]
+        self.staged_list.set_default_preset(direction, mode, model)
+
+    def _apply_preset_to_all_staged(self):
+        direction = self.direction_var.get()
+        mode = self.mode_var.get()
+        model = self.model_var.get().strip() or GEMMA_PRESETS[0]
+        self.staged_list.apply_preset_to_all(direction, mode, model)
+        self.log(f"[Config] Applied preset ({mode}, {direction}) to all staged documents.")
 
     # ── Mode & Direction Handlers ──
 
@@ -529,12 +599,14 @@ class DocumentsView(ctk.CTkFrame):
         else:
             self.mode_var.set(TranslationMode.MACHINE_TRANSLATION.value)
             self.model_combo.configure(state="disabled")
+        self._sync_card2_presets_to_staged_defaults()
 
     def _on_direction_changed(self, display_value: str):
         for label, code in LANGUAGE_PAIRS:
             if label == display_value:
                 self.direction_var.set(code)
                 break
+        self._sync_card2_presets_to_staged_defaults()
 
     def _swap_doc_direction(self):
         current = self.direction_var.get()
@@ -542,6 +614,7 @@ class DocumentsView(ctk.CTkFrame):
         new_idx = (idx + 1) % len(LANGUAGE_PAIRS)
         self.direction_var.set(LANGUAGE_PAIRS[new_idx][1])
         self.direction_combo.set(LANGUAGE_PAIRS[new_idx][0])
+        self._sync_card2_presets_to_staged_defaults()
 
     def _toggle_glossary(self):
         if self._glossary_open:
@@ -746,12 +819,13 @@ class DocumentsView(ctk.CTkFrame):
             self.model_combo.configure(values=all_models)
             if self.model_var.get() not in all_models:
                 self.model_var.set(all_models[0])
+            self._sync_card2_presets_to_staged_defaults()
 
     # ── Job Dispatch & Execution ──
 
     def start_translation_flow(self):
-        staged = self.staged_list.get_files()
-        if not staged:
+        staged_specs = self.staged_list.get_staged_specs()
+        if not staged_specs:
             messagebox.showwarning("No Documents", "Please select one or more documents to translate.")
             return
 
@@ -773,14 +847,28 @@ class DocumentsView(ctk.CTkFrame):
         else:
             cache_policy = CachePolicy.ENCRYPTED_PERSISTENT
 
-        if mode in (
-            TranslationMode.MACHINE_TRANSLATION,
-            TranslationMode.FAST_NMT,
-            TranslationMode.QUALITY_NMT,
-            TranslationMode.NLLB_3B,
-            TranslationMode.MADLAD_3B,
-            "machine_translation",
-        ):
+        modes_present = {s.get("mode") for s in staged_specs}
+        needs_madlad = any(
+            (m.value if hasattr(m, "value") else str(m)).lower()
+            in (
+                "machine_translation",
+                "fast_nmt",
+                "quality_nmt",
+                "madlad_3b",
+                "nllb_3b",
+            )
+            for m in modes_present
+        )
+        needs_ollama = any(
+            (m.value if hasattr(m, "value") else str(m)).lower()
+            in (
+                "ai_translation",
+                "pure_llm",
+            )
+            for m in modes_present
+        )
+
+        if needs_madlad:
             from engine.madlad_manager import check_madlad_installed
 
             if not check_madlad_installed():
@@ -792,10 +880,7 @@ class DocumentsView(ctk.CTkFrame):
                 )
                 return
 
-        if (
-            mode in (TranslationMode.AI_TRANSLATION, TranslationMode.PURE_LLM, "ai_translation", "pure_llm")
-            and not check_ollama_status()
-        ):
+        if needs_ollama and not check_ollama_status():
             start_now = messagebox.askyesno(
                 "Ollama Offline",
                 "AI Translation mode requires Ollama, but the background service is currently offline.\n\n"
@@ -813,7 +898,7 @@ class DocumentsView(ctk.CTkFrame):
                 return
 
         dispatched = self.controller.start_batch(
-            input_files=staged,
+            input_files=staged_specs,
             direction=direction,
             mode=mode,
             model_name=model,
@@ -830,12 +915,11 @@ class DocumentsView(ctk.CTkFrame):
             self._last_output_path = out_path
             self._last_review_log = f"{out_path}.needs_review.log"
 
-        self.log(f"[Queue] Dispatched {len(dispatched)} document(s) via {mode.value.upper()} ({direction}).")
+        self.log(f"[Queue] Dispatched {len(dispatched)} document(s) to translation queue.")
         self.staged_list.clear()
 
     def add_to_queue_only(self):
-        staged = self.staged_list.get_files()
-        if not staged:
+        if not self.staged_list.get_files():
             messagebox.showwarning("No Documents", "Please select one or more documents first.")
             return
         self.start_translation_flow()

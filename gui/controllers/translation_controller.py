@@ -73,36 +73,50 @@ class TranslationController:
 
     def start_batch(
         self,
-        input_files: list[str],
-        direction: str,
-        mode: TranslationMode | str,
-        model_name: str,
-        glossary: dict[str, str],
+        input_files: list[str] | list[dict[str, Any]],
+        direction: str = "ja2en",
+        mode: TranslationMode | str = TranslationMode.MACHINE_TRANSLATION,
+        model_name: str = "gemma4:e2b-it-qat",
+        glossary: dict[str, str] | None = None,
         include_source_text: bool = False,
         cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
     ) -> list[tuple[str, str, str]]:
         """
         Calculates output paths and adds multiple documents to the queue.
+        Supports list of file path strings or list of specification dicts:
+        {"path": str, "direction": str, "mode": TranslationMode|str, "model_name": str}.
         Returns list of (job_id, input_path, output_path).
         """
         if not self._current_batch_ids or self.is_batch_complete():
             self._current_batch_ids = set()
             self._batch_start_time = time.time()
 
+        effective_glossary = glossary or {}
         dispatched: list[tuple[str, str, str]] = []
-        for input_path in input_files:
+        for item in input_files:
+            if isinstance(item, dict):
+                input_path = item["path"]
+                item_direction = item.get("direction", direction)
+                item_mode = item.get("mode", mode)
+                item_model = item.get("model_name", model_name)
+            else:
+                input_path = item
+                item_direction = direction
+                item_mode = mode
+                item_model = model_name
+
             if not os.path.exists(input_path):
                 continue
             base, ext = os.path.splitext(input_path)
-            output_path = f"{base}_{direction}{ext}"
+            output_path = f"{base}_{item_direction}{ext}"
 
             job_id = self.add_job(
                 input_path=input_path,
                 output_path=output_path,
-                direction=direction,
-                mode=mode,
-                model_name=model_name,
-                glossary=glossary,
+                direction=item_direction,
+                mode=item_mode,
+                model_name=item_model,
+                glossary=effective_glossary,
                 include_source_text=include_source_text,
                 cache_policy=cache_policy,
             )

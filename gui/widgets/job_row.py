@@ -33,6 +33,8 @@ class JobRow(ctk.CTkFrame):
     progress_bar: ctk.CTkProgressBar | None = None
     name_label: ctk.CTkLabel | None = None
     badge_label: ctk.CTkLabel | None = None
+    direction_badge: ctk.CTkLabel | None = None
+    engine_badge: ctk.CTkLabel | None = None
 
     def __init__(self, master, job: TranslationJob, on_cancel: Callable[[str], None] | None = None, **kwargs):
         super().__init__(master, fg_color=THEME["staging_bg"], corner_radius=8, **kwargs)
@@ -61,11 +63,44 @@ class JobRow(ctk.CTkFrame):
             self,
             text=name,
             font=ctk.CTkFont(size=11, weight="bold"),
-            width=200,
+            width=180,
             anchor="w",
             text_color=THEME["text_primary"],
         )
         self.name_label.pack(side="left", padx=4)
+
+        # Direction Badge
+        dir_val = getattr(job, "direction", "ja2en") or "ja2en"
+        dir_disp = "JA → EN" if dir_val == "ja2en" else "EN → JA"
+        self.direction_badge = ctk.CTkLabel(
+            self,
+            text=f" {dir_disp} ",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            corner_radius=4,
+        )
+        self.direction_badge.pack(side="left", padx=(2, 4))
+
+        # Engine Badge
+        mode_val = getattr(job, "mode", "") or ""
+        mode_str = mode_val.value if hasattr(mode_val, "value") else str(mode_val)
+        is_mt = "machine" in mode_str.lower() or "nmt" in mode_str.lower() or "madlad" in mode_str.lower()
+        if is_mt:
+            engine_text = "⚡ MT"
+        else:
+            model = getattr(job, "model_name", "") or "AI"
+            short_model = model.split(":")[0]
+            engine_text = f"🤖 {short_model}"
+        self.engine_badge = ctk.CTkLabel(
+            self,
+            text=f" {engine_text} ",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            fg_color=THEME["btn_secondary"],
+            text_color=THEME["btn_sec_text"],
+            corner_radius=4,
+        )
+        self.engine_badge.pack(side="left", padx=(0, 6))
 
         # Progress Bar
         self.progress_bar = ctk.CTkProgressBar(self, height=8, corner_radius=4)
@@ -151,6 +186,8 @@ class JobRow(ctk.CTkFrame):
             "open_file_btn": self.open_file_btn,
             "open_folder_btn": self.open_folder_btn,
             "review_btn": self.review_btn,
+            "direction_badge": self.direction_badge,
+            "engine_badge": self.engine_badge,
         }
         if key in aliases:
             return aliases[key]

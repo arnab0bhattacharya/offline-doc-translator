@@ -163,6 +163,7 @@ class TranslatorApp:
             madlad_backend=self.madlad_backend,
             on_ollama_status=self._on_ollama_status,
             on_mt_status=self._on_mt_status,
+            controller=self.controller,
         )
 
         self.tab_frames["docs"] = self.docs_view
@@ -367,9 +368,16 @@ class TranslatorApp:
     def _on_job_update(self, job: TranslationJob):
         self.root.after(0, self._update_job_widget, job)
         if hasattr(self, "quick_view") and hasattr(self.quick_view, "set_locked_state"):
-            is_busy = self.controller.is_busy
-            job_name = job.input_path if is_busy else None
-            self.root.after(0, lambda: self.quick_view.set_locked_state(is_busy, job_name))
+
+            def _update_quick_view_lock():
+                try:
+                    is_busy = self.controller.is_busy
+                    job_name = job.input_path if is_busy else None
+                    self.quick_view.set_locked_state(is_busy, job_name)
+                except Exception:
+                    pass
+
+            self.root.after(0, _update_quick_view_lock)
 
     def _on_job_log(self, job_id: str, message: str):
         self.root.after(0, self._log, message)

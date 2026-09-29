@@ -909,3 +909,49 @@ def test_documents_view_multi_job_post_action_summary(tmp_path):
             assert mock_startfile.call_count == 2
         else:
             assert mock_popen.call_count == 2
+
+
+def test_cancel_running_job_reentrant_deadlock_prevention(queue_mgr):
+    """
+    Verifies that calling queue queries (get_all_jobs, get_job) within on_job_update
+    when cancel_job is invoked does not cause a recursive lock deadlock.
+    """
+    reentrant_called = []
+
+    def on_update_callback(job: TranslationJob):
+        # Query queue methods that acquire the queue lock
+        all_jobs = queue_mgr.get_all_jobs()
+        job_check = queue_mgr.get_job(job.id)
+        assert len(all_jobs) >= 1
+        assert job_check is not None
+        reentrant_called.append(job.status)
+
+    queue_mgr.on_job_update = on_update_callback
+
+    with patch("engine.queue_manager.execute_translation") as mock_exec:
+
+        def fake_exec(*args, cancel_event=None, **kwargs):
+            if cancel_event:
+                cancel_event.wait(timeout=2.0)
+                raise TranslatorError(ErrorCode.E09, detail="Cancelled by user")
+            return {"total": 0, "translated": 0, "reverted": 0, "skipped": 0}
+
+        mock_exec.side_effect = fake_exec
+
+        job_id = queue_mgr.add_job("reentrant.docx", "out_reentrant.docx", "ja2en", "fast_nmt", "test", {})
+        job = queue_mgr.get_job(job_id)
+
+        timeout = time.time() + 2.0
+        while job.status != JobStatus.RUNNING and time.time() < timeout:
+            time.sleep(0.02)
+
+        # Cancel while running - should NOT deadlock despite on_update calling get_all_jobs()
+        success = queue_mgr.cancel_job(job_id)
+        assert success is True
+
+        timeout = time.time() + 2.0
+        while job.status != JobStatus.CANCELLED and time.time() < timeout:
+            time.sleep(0.02)
+
+        assert job.status == JobStatus.CANCELLED
+        assert len(reentrant_called) > 0

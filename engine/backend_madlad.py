@@ -335,14 +335,16 @@ class MADLADBackend(TranslationBackend):
             pieces.append("</s>")
             tokenized_batch.append(pieces)
 
+        beam_size = 1 if self._active_device == "cpu" else 4
         step_results = translator.translate_batch(
             tokenized_batch,
             batch_type="examples",
             max_batch_size=len(texts),
-            beam_size=4,
+            beam_size=beam_size,
             repetition_penalty=1.2,
             no_repeat_ngram_size=3,
             max_input_length=1024,
+            max_decoding_length=256,
         )
 
         translated_texts = []

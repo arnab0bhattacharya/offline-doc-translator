@@ -89,7 +89,7 @@ class TranslationQueue:
         self.on_job_update = on_job_update
         self.on_log = on_log
         self._jobs: list[TranslationJob] = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._queue = queue.Queue()
 
         self._shutdown_event = threading.Event()
@@ -150,20 +150,25 @@ class TranslationQueue:
 
     def cancel_job(self, job_id: str) -> bool:
         """Cancel a queued or running job."""
+        target_job: TranslationJob | None = None
         with self._lock:
             for job in self._jobs:
                 if job.id == job_id:
                     if job.status == JobStatus.QUEUED:
                         job.status = JobStatus.CANCELLED
                         job.progress_message = "Cancelled"
-                        self._trigger_update(job)
-                        return True
+                        target_job = job
+                        break
                     elif job.status == JobStatus.RUNNING:
                         job.cancel_event.set()
                         job.progress_message = "Cancelling..."
-                        self._trigger_update(job)
-                        return True
+                        target_job = job
+                        break
                     return False
+
+        if target_job is not None:
+            self._trigger_update(target_job)
+            return True
         return False
 
     def get_all_jobs(self) -> list[TranslationJob]:

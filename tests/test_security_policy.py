@@ -32,7 +32,7 @@ class TestDiskAwareZipAdmission(unittest.TestCase):
     def test_default_security_policy_extended_fields(self):
         policy = DEFAULT_POLICY
         self.assertEqual(policy.min_free_disk_after_extract_bytes, 500 * 1024 * 1024)
-        self.assertEqual(policy.max_compression_ratio, 100.0)
+        self.assertEqual(policy.max_compression_ratio, 0.0)
         self.assertEqual(policy.max_archive_metadata_bytes, 10 * 1024 * 1024)
 
     def test_zip_security_error_type_hierarchy(self):
@@ -61,14 +61,26 @@ class TestDiskAwareZipAdmission(unittest.TestCase):
         fake_info = zipfile.ZipInfo("huge.xml")
         fake_info.file_size = 500_000
         fake_info.compress_size = 100  # 5000:1 ratio > 100:1 limit
+        policy = DocumentSecurityPolicy(max_compression_ratio=100.0)
 
         with patch.object(zipfile.ZipFile, "infolist", return_value=[fake_info]):
             with self.assertRaises(TranslatorError) as ctx:
-                BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir)
+                BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir, policy=policy)
 
             self.assertEqual(ctx.exception.code, ErrorCode.E04)
             self.assertIn("maximum compression ratio", ctx.exception.detail)
             self.assertFalse(os.path.exists(self.extract_dir))
+
+    def test_extract_zip_allows_high_compression_ratio_by_default(self):
+        # High ratio member should not raise error with default policy (max_compression_ratio = 0.0)
+        fake_info = zipfile.ZipInfo("word/document.xml")
+        fake_info.file_size = 500_000
+        fake_info.compress_size = 100  # 5000:1 ratio
+
+        with patch.object(zipfile.ZipFile, "infolist", return_value=[fake_info]):
+            with patch.object(zipfile.ZipFile, "extractall"):
+                # Should not raise TranslatorError
+                BaseFormatHandler.extract_zip(self.dummy_zip, self.extract_dir)
 
     def test_extract_zip_handles_zero_compress_size_safely(self):
         # Stored entry with 0 compress size (e.g. empty file) must not divide by zero

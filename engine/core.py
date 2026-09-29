@@ -341,7 +341,7 @@ class TranslationEngine:
         mode: TranslationMode = TranslationMode.MACHINE_TRANSLATION,
         glossary: dict[str, str] | None = None,
         min_free_ram_mb: int = 150,
-        context_window: int = 2048,
+        context_window: int = 4096,
         cache_file: str | None = None,
         allow_llm: bool | None = None,
         include_source_text: bool = False,

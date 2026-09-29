@@ -435,7 +435,7 @@ class QuickView(ctk.CTkFrame):
                 mode=mode,
                 model_name=model,
                 glossary=glossary,
-                context_window=2048,
+                context_window=4096,
             )
             if self.madlad_backend is not None:
                 engine.set_backend(self.madlad_backend, mode=TranslationMode.MACHINE_TRANSLATION)

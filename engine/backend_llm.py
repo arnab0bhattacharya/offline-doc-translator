@@ -25,7 +25,7 @@ class LLMBackend:
         self,
         model_name: str = "gemma4:e2b-it-qat",
         ollama_url: str = "http://localhost:11434",
-        context_window: int = 2048,
+        context_window: int = 4096,
     ):
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")

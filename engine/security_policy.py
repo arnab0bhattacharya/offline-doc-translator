@@ -21,7 +21,7 @@ class DocumentSecurityPolicy:
     max_pdf_pages: int = 5_000  # 5,000 pages
     max_single_entry_bytes: int = 100 * 1024 * 1024  # 100 MB per archive entry
     min_free_disk_after_extract_bytes: int = 500 * 1024 * 1024  # 500 MB minimum reserve after extraction
-    max_compression_ratio: float = 100.0  # 100:1 max ratio per member (decompression bomb guard)
+    max_compression_ratio: float = 0.0  # 0.0 disables compression ratio limit (removed)
     max_archive_metadata_bytes: int = 10 * 1024 * 1024  # 10 MB archive directory metadata limit
 
 

@@ -2,15 +2,19 @@
 
 A desktop application for translating Japanese ↔ English Office documents **entirely offline** — no cloud API, no subscription, no data leaving your machine.
 
-Supports `.docx`, `.pptx`, `.xlsx`, and `.pdf` files with two translation engines: a local neural machine translation (NMT) model via Argos Translate, and a local LLM via Ollama.
+Supports `.docx`, `.pptx`, and `.xlsx` files with two translation engines: local Machine Translation (Google MADLAD-400 3B via CTranslate2) and local AI Translation (Gemma 4 via Ollama).
+
+> [!WARNING]
+> **PDF TRANSLATION IS NOT OPERATIONAL (UNDER DEVELOPMENT)**
+> PDF translation is currently under active development and is **not functional**. **Do not attempt to translate PDF files.** Only Word (`.docx`), PowerPoint (`.pptx`), and Excel (`.xlsx`) files are supported for translation.
 
 ---
 
 ## Features
 
 - **Offline-first** — works without an internet connection once set up
-- **Dual engine** — fast NMT (Argos/CTranslate2) or high-quality LLM (Ollama/Gemma)
-- **Four formats** — Word, PowerPoint, Excel, and PDF
+- **Dual engine** — fast Machine Translation (Google MADLAD-400 3B) or high-quality AI Translation (Ollama / Gemma 4)
+- **Supported formats** — Word (`.docx`), PowerPoint (`.pptx`), and Excel (`.xlsx`) *(PDF is under development)*
 - **Batch translation** — stage multiple files, queue and monitor all jobs
 - **Glossary support** — custom term pairs with file save/load and cross-session persistence
 - **Encrypted cache** — machine-bound AES cache so repeated segments translate instantly
@@ -154,10 +158,10 @@ python lint.py --fix    # Auto-fix safe issues
 
 ## Limitations
 
-- **Scanned PDFs are not supported** — only digitally-born PDFs with selectable text. For scanned documents, run OCR first (e.g. with [ocrmypdf](https://ocrmypdf.readthedocs.io/), NAPS2, or Adobe Acrobat) then translate the resulting PDF.
-- **Japanese ↔ English only** — the NMT models and LLM prompts are tuned for this pair. Other languages require different Argos models and prompt updates.
-- **Windows only** — the GUI uses Windows-specific APIs (`AppUserModelID`, `os.startfile`, DPAPI). The CLI and engine run cross-platform.
-- **LLM quality depends on model** — larger Gemma models produce better translations but require more VRAM/RAM.
+- **PDF translation is NOT operational** — PDF translation is currently non-functional and under active development. **Do not try to translate PDFs.** Use Word (`.docx`), PowerPoint (`.pptx`), or Excel (`.xlsx`) documents instead.
+- **Japanese ↔ English only** — the translation models and LLM prompts are optimized for this pair.
+- **Windows only** — the desktop GUI uses Windows-specific APIs (`AppUserModelID`, `os.startfile`, DPAPI). The CLI and engine core run cross-platform.
+- **LLM quality depends on model** — Gemma 4 E2B QAT is recommended for fast, high-quality offline AI translation.
 
 ---
 

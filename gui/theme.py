@@ -51,10 +51,10 @@ LANGUAGE_PAIRS = [
     ("English → Japanese", "en2ja"),
 ]
 
+PINNED_OLLAMA_MODEL = "gemma4:e2b-it-qat"
+
 GEMMA_PRESETS = [
-    "gemma4:e2b-it-qat",
-    "gemma4:12b-it-qat",
-    "gemma4:27b-it-qat",
+    PINNED_OLLAMA_MODEL,
 ]
 
 import logging

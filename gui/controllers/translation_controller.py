@@ -28,6 +28,9 @@ class TranslationController:
         self.on_log = on_log
         self._current_batch_ids: set[str] = set()
         self._batch_start_time: float | None = None
+        self.default_cache_policy: CachePolicy = CachePolicy.ENCRYPTED_PERSISTENT
+        self.last_review_log: str | None = None
+        self.completed_review_logs: list[str] = []
 
         self.queue = TranslationQueue(
             on_job_update=self._handle_job_update,
@@ -35,6 +38,13 @@ class TranslationController:
         )
 
     def _handle_job_update(self, job: TranslationJob) -> None:
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+            if getattr(job, "review_log_path", None):
+                self.last_review_log = job.review_log_path
+                if os.path.exists(job.review_log_path) and os.path.getsize(job.review_log_path) > 0:
+                    if job.review_log_path not in self.completed_review_logs:
+                        self.completed_review_logs.append(job.review_log_path)
+
         if self.on_job_update:
             try:
                 self.on_job_update(job)
@@ -57,9 +67,10 @@ class TranslationController:
         model_name: str,
         glossary: dict[str, str],
         include_source_text: bool = False,
-        cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
+        cache_policy: CachePolicy | str | None = None,
     ) -> str:
         """Enqueues a single translation job."""
+        effective_cache_policy = cache_policy if cache_policy is not None else self.default_cache_policy
         return self.queue.add_job(
             input_path=input_path,
             output_path=output_path,
@@ -68,7 +79,7 @@ class TranslationController:
             model_name=model_name,
             glossary=glossary,
             include_source_text=include_source_text,
-            cache_policy=cache_policy,
+            cache_policy=effective_cache_policy,
         )
 
     def start_batch(
@@ -79,7 +90,7 @@ class TranslationController:
         model_name: str = "gemma4:e2b-it-qat",
         glossary: dict[str, str] | None = None,
         include_source_text: bool = False,
-        cache_policy: CachePolicy | str = CachePolicy.ENCRYPTED_PERSISTENT,
+        cache_policy: CachePolicy | str | None = None,
     ) -> list[tuple[str, str, str]]:
         """
         Calculates output paths and adds multiple documents to the queue.
@@ -92,6 +103,7 @@ class TranslationController:
             self._batch_start_time = time.time()
 
         effective_glossary = glossary or {}
+        effective_cache_policy = cache_policy if cache_policy is not None else self.default_cache_policy
         dispatched: list[tuple[str, str, str]] = []
         for item in input_files:
             if isinstance(item, dict):
@@ -118,7 +130,7 @@ class TranslationController:
                 model_name=item_model,
                 glossary=effective_glossary,
                 include_source_text=include_source_text,
-                cache_policy=cache_policy,
+                cache_policy=effective_cache_policy,
             )
             dispatched.append((job_id, input_path, output_path))
             self._current_batch_ids.add(job_id)

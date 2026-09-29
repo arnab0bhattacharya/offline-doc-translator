@@ -14,7 +14,7 @@ from typing import Any
 import customtkinter as ctk
 
 from formats.registry import SUPPORTED_EXTENSIONS
-from gui.theme import THEME
+from gui.theme import PINNED_OLLAMA_MODEL, THEME
 
 
 @dataclass
@@ -24,7 +24,7 @@ class StagedItem:
     path: str
     direction: str = "ja2en"
     mode: str = "machine_translation"
-    model_name: str = "gemma4:e2b-it-qat"
+    model_name: str = PINNED_OLLAMA_MODEL
 
 
 class StagedFileList(ctk.CTkFrame):
@@ -38,7 +38,7 @@ class StagedFileList(ctk.CTkFrame):
         self.on_files_changed = on_files_changed
         self.default_direction: str = "ja2en"
         self.default_mode: str = "machine_translation"
-        self.default_model: str = "gemma4:e2b-it-qat"
+        self.default_model: str = PINNED_OLLAMA_MODEL
         self.staged_items: list[StagedItem] = []
 
         # ── Staged Header ──
@@ -301,6 +301,7 @@ class StagedFileList(ctk.CTkFrame):
 
             def on_mode_change(new_disp: str, target_item=item):
                 target_item.mode = "machine_translation" if "MT" in new_disp else "ai_translation"
+                target_item.model_name = PINNED_OLLAMA_MODEL
                 self._notify_changed()
 
             mode_combo = ctk.CTkComboBox(

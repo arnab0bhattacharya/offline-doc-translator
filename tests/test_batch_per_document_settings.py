@@ -126,12 +126,23 @@ class TestJobRowBadges(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.root = ctk.CTk()
-        cls.root.withdraw()
+        try:
+            cls.root = ctk.CTk()
+            cls.root.withdraw()
+        except Exception:
+            cls.root = None
 
     @classmethod
     def tearDownClass(cls):
-        cls.root.destroy()
+        if cls.root:
+            try:
+                cls.root.destroy()
+            except Exception:
+                pass
+
+    def setUp(self):
+        if self.root is None:
+            self.skipTest("Tkinter display/library unavailable in test environment")
 
     def test_job_row_badges_mt(self):
         job = TranslationJob(
@@ -239,15 +250,6 @@ class TestControllerBatchSpecs(unittest.TestCase):
 class TestDocumentsViewStagingIntegration(unittest.TestCase):
     """Tests that DocumentsView correctly synchronizes presets and updates the live summary."""
 
-    @classmethod
-    def setUpClass(cls):
-        cls.root = ctk.CTk()
-        cls.root.withdraw()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.root.destroy()
-
     def test_live_summary_formatting_mixed_specs(self):
         from gui.views.documents_view import DocumentsView
 
@@ -284,29 +286,31 @@ class TestDocumentsViewStagingIntegration(unittest.TestCase):
         view.staged_summary_label.configure.assert_called_with(text="")
 
     def test_sync_presets_to_staged_defaults(self):
+        from gui.theme import PINNED_OLLAMA_MODEL
         from gui.views.documents_view import DocumentsView
 
         view = MagicMock(spec=DocumentsView)
         view.direction_var = MagicMock(get=lambda: "en2ja")
         view.mode_var = MagicMock(get=lambda: "ai_translation")
-        view.model_var = MagicMock(get=lambda: "gemma4:12b")
+        view.model_var = MagicMock(get=lambda: PINNED_OLLAMA_MODEL)
         view.staged_list = MagicMock()
 
         DocumentsView._sync_card2_presets_to_staged_defaults(view)
-        view.staged_list.set_default_preset.assert_called_with("en2ja", "ai_translation", "gemma4:12b")
+        view.staged_list.set_default_preset.assert_called_with("en2ja", "ai_translation", PINNED_OLLAMA_MODEL)
 
     def test_apply_preset_to_all_staged(self):
+        from gui.theme import PINNED_OLLAMA_MODEL
         from gui.views.documents_view import DocumentsView
 
         view = MagicMock(spec=DocumentsView)
         view.direction_var = MagicMock(get=lambda: "ja2en")
         view.mode_var = MagicMock(get=lambda: "machine_translation")
-        view.model_var = MagicMock(get=lambda: "default")
+        view.model_var = MagicMock(get=lambda: PINNED_OLLAMA_MODEL)
         view.staged_list = MagicMock()
         view.log = MagicMock()
 
         DocumentsView._apply_preset_to_all_staged(view)
-        view.staged_list.apply_preset_to_all.assert_called_with("ja2en", "machine_translation", "default")
+        view.staged_list.apply_preset_to_all.assert_called_with("ja2en", "machine_translation", PINNED_OLLAMA_MODEL)
 
 
 if __name__ == "__main__":

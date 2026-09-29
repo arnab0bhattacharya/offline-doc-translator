@@ -22,8 +22,8 @@ from engine.queue_manager import JobStatus, TranslationJob, format_eta
 from gui.controllers.translation_controller import TranslationController
 from gui.dnd_helper import WindowsDropHook, is_point_in_widget
 from gui.theme import (
-    GEMMA_PRESETS,
     LANGUAGE_PAIRS,
+    PINNED_OLLAMA_MODEL,
     THEME,
     parse_glossary_text,
 )
@@ -269,55 +269,14 @@ class DocumentsView(ctk.CTkFrame):
             command=self._swap_doc_direction,
         ).pack(side="left")
 
-        # Model Box (Dims when Fast NMT)
-        self.model_box = ctk.CTkFrame(ctrl_row, fg_color="transparent")
-        self.model_box.pack(side="left", fill="y")
-
-        ctk.CTkLabel(
-            self.model_box,
-            text="OLLAMA MODEL",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=THEME["text_secondary"],
-        ).pack(anchor="w", pady=(0, 4))
-
-        self.model_var = ctk.StringVar(value=GEMMA_PRESETS[0])
-        self.model_combo = ctk.CTkComboBox(
-            self.model_box,
-            values=GEMMA_PRESETS,
-            variable=self.model_var,
-            width=190,
-            state="disabled",
-            font=ctk.CTkFont(size=12),
-            command=lambda _: self._sync_card2_presets_to_staged_defaults(),
-        )
-        self.model_combo.pack()
-
-        # Cache Policy Box
-        self.cache_box = ctk.CTkFrame(ctrl_row, fg_color="transparent")
-        self.cache_box.pack(side="left", fill="y", padx=(14, 0))
-
-        ctk.CTkLabel(
-            self.cache_box,
-            text="CACHE POLICY",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=THEME["text_secondary"],
-        ).pack(anchor="w", pady=(0, 4))
-
+        # Internal compatibility variables (pinned model and cache policy display)
+        self.model_var = ctk.StringVar(value=PINNED_OLLAMA_MODEL)
         self.cache_policy_display = [
             "Encrypted (Default)",
             "In-Memory (Privacy)",
             "Plaintext (Compatibility)",
         ]
         self.cache_policy_var = ctk.StringVar(value=self.cache_policy_display[0])
-        self.cache_policy_combo = ctk.CTkComboBox(
-            self.cache_box,
-            values=self.cache_policy_display,
-            variable=self.cache_policy_var,
-            width=180,
-            state="readonly",
-            font=ctk.CTkFont(size=12),
-        )
-        self.cache_policy_combo.pack()
 
         self._sync_card2_presets_to_staged_defaults()
 
@@ -491,17 +450,7 @@ class DocumentsView(ctk.CTkFrame):
         )
         self.open_dir_btn.pack(side="left", padx=(0, 8))
 
-        self.review_btn = ctk.CTkButton(
-            bottom_box,
-            text="⚠  Review Log",
-            width=120,
-            height=32,
-            state="disabled",
-            fg_color=THEME["warning"],
-            hover_color=THEME["review_hover"],
-            command=self.view_review_log,
-        )
-        self.review_btn.pack(side="left")
+        self.review_btn = None
 
         self.log_drawer_btn = ctk.CTkButton(
             bottom_box,
@@ -580,14 +529,12 @@ class DocumentsView(ctk.CTkFrame):
             return
         direction = self.direction_var.get()
         mode = self.mode_var.get()
-        model = self.model_var.get().strip() or GEMMA_PRESETS[0]
-        self.staged_list.set_default_preset(direction, mode, model)
+        self.staged_list.set_default_preset(direction, mode, PINNED_OLLAMA_MODEL)
 
     def _apply_preset_to_all_staged(self):
         direction = self.direction_var.get()
         mode = self.mode_var.get()
-        model = self.model_var.get().strip() or GEMMA_PRESETS[0]
-        self.staged_list.apply_preset_to_all(direction, mode, model)
+        self.staged_list.apply_preset_to_all(direction, mode, PINNED_OLLAMA_MODEL)
         self.log(f"[Config] Applied preset ({mode}, {direction}) to all staged documents.")
 
     # ── Mode & Direction Handlers ──
@@ -595,10 +542,8 @@ class DocumentsView(ctk.CTkFrame):
     def _on_mode_seg_changed(self, value: str):
         if "AI" in value or "Ollama" in value or "Creative" in value or "Pure LLM" in value:
             self.mode_var.set(TranslationMode.AI_TRANSLATION.value)
-            self.model_combo.configure(state="normal")
         else:
             self.mode_var.set(TranslationMode.MACHINE_TRANSLATION.value)
-            self.model_combo.configure(state="disabled")
         self._sync_card2_presets_to_staged_defaults()
 
     def _on_direction_changed(self, display_value: str):
@@ -814,12 +759,8 @@ class DocumentsView(ctk.CTkFrame):
             self._log_open = True
 
     def update_model_choices(self, models: list[str]):
-        if models:
-            all_models = list(dict.fromkeys(GEMMA_PRESETS + models))
-            self.model_combo.configure(values=all_models)
-            if self.model_var.get() not in all_models:
-                self.model_var.set(all_models[0])
-            self._sync_card2_presets_to_staged_defaults()
+        """Compatibility no-op: model is pinned to PINNED_OLLAMA_MODEL."""
+        pass
 
     # ── Job Dispatch & Execution ──
 
@@ -831,7 +772,7 @@ class DocumentsView(ctk.CTkFrame):
 
         direction = self.direction_var.get()
         mode = TranslationMode(self.mode_var.get())
-        model = self.model_var.get().strip() or GEMMA_PRESETS[0]
+        model = PINNED_OLLAMA_MODEL
         raw_glossary = self.glossary_text.get("0.0", "end")
         glossary_warnings: list[str] = []
         glossary = parse_glossary_text(raw_glossary, on_warning=lambda w: glossary_warnings.append(w))
@@ -839,13 +780,7 @@ class DocumentsView(ctk.CTkFrame):
             self.log(f"[Glossary Warning] {'; '.join(glossary_warnings)}")
         self.persist_glossary()
 
-        cache_sel = self.cache_policy_var.get()
-        if "In-Memory" in cache_sel:
-            cache_policy = CachePolicy.MEMORY_ONLY
-        elif "Plaintext" in cache_sel:
-            cache_policy = CachePolicy.PLAINTEXT_PERSISTENT
-        else:
-            cache_policy = CachePolicy.ENCRYPTED_PERSISTENT
+        cache_policy = getattr(self.controller, "default_cache_policy", CachePolicy.ENCRYPTED_PERSISTENT)
 
         modes_present = {s.get("mode") for s in staged_specs}
         needs_madlad = any(
@@ -880,21 +815,32 @@ class DocumentsView(ctk.CTkFrame):
                 )
                 return
 
-        if needs_ollama and not check_ollama_status():
-            start_now = messagebox.askyesno(
-                "Ollama Offline",
-                "AI Translation mode requires Ollama, but the background service is currently offline.\n\n"
-                "Would you like to start Ollama in the background now?",
-            )
-            if start_now:
-                self.log("[AI Engine] Starting Ollama background service...")
-                mgr = get_ollama_manager()
-                success, msg = mgr.start_service(timeout=15.0)
-                if not success:
-                    messagebox.showerror("Ollama Startup Failed", f"Could not start Ollama:\n{msg}")
+        if needs_ollama:
+            if not check_ollama_status():
+                start_now = messagebox.askyesno(
+                    "Ollama Offline",
+                    "AI Translation mode requires Ollama, but the background service is currently offline.\n\n"
+                    "Would you like to start Ollama in the background now?",
+                )
+                if start_now:
+                    self.log("[AI Engine] Starting Ollama background service...")
+                    mgr = get_ollama_manager()
+                    success, msg = mgr.start_service(timeout=15.0)
+                    if not success:
+                        messagebox.showerror("Ollama Startup Failed", f"Could not start Ollama:\n{msg}")
+                        return
+                    self.log(f"[AI Engine] {msg}")
+                else:
                     return
-                self.log(f"[AI Engine] {msg}")
-            else:
+
+            from engine.preflight import check_model_installed
+
+            if not check_model_installed(PINNED_OLLAMA_MODEL):
+                messagebox.showwarning(
+                    "Gemma 4 Model Required",
+                    f"The Google Gemma 4 model ({PINNED_OLLAMA_MODEL}) is not installed yet (~1.6 GB).\n\n"
+                    "Please navigate to 'System & AI Diagnostics' to download the model.",
+                )
                 return
 
         dispatched = self.controller.start_batch(
@@ -1055,20 +1001,21 @@ class DocumentsView(ctk.CTkFrame):
             self.open_file_btn.configure(text=f"📄  Open All Outputs ({num_out})", state="normal")
             self.open_dir_btn.configure(text="📁  Open Output Folders", state="normal")
 
-        num_rev = len(self._completed_review_logs)
-        if num_rev == 0:
-            if (
-                self._last_review_log
-                and os.path.exists(self._last_review_log)
-                and os.path.getsize(self._last_review_log) > 0
-            ):
+        if hasattr(self, "review_btn") and self.review_btn is not None:
+            num_rev = len(self._completed_review_logs)
+            if num_rev == 0:
+                if (
+                    self._last_review_log
+                    and os.path.exists(self._last_review_log)
+                    and os.path.getsize(self._last_review_log) > 0
+                ):
+                    self.review_btn.configure(text="⚠  Review Log", state="normal")
+                else:
+                    self.review_btn.configure(text="⚠  Review Log", state="disabled")
+            elif num_rev == 1:
                 self.review_btn.configure(text="⚠  Review Log", state="normal")
             else:
-                self.review_btn.configure(text="⚠  Review Log", state="disabled")
-        elif num_rev == 1:
-            self.review_btn.configure(text="⚠  Review Log", state="normal")
-        else:
-            self.review_btn.configure(text=f"⚠  Review Logs ({num_rev})", state="normal")
+                self.review_btn.configure(text=f"⚠  Review Logs ({num_rev})", state="normal")
 
     # ── Batch Summary Card ──
 

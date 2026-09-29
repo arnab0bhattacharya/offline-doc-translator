@@ -24,10 +24,10 @@ from engine.ollama_manager import get_ollama_manager
 from engine.preflight import check_ollama_status
 from gui.dnd_helper import is_point_in_widget
 from gui.theme import (
-    GEMMA_PRESETS,
     GLOSSARY_DIR,
     LANGUAGE_PAIRS,
     LAST_GLOSSARY_PATH,
+    PINNED_OLLAMA_MODEL,
     THEME,
     parse_glossary_text,
 )
@@ -136,21 +136,8 @@ class QuickView(ctk.CTkFrame):
         )
         self.quick_mode_combo.pack(side="left", padx=(0, 8))
 
-        # Model Selector (only active when AI Translation is chosen)
-        self.quick_model_label = ctk.CTkLabel(
-            tb_inner, text="Model:", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME["text_secondary"]
-        )
-
-        self.model_var = ctk.StringVar(value=GEMMA_PRESETS[0])
-        self.quick_model_combo = ctk.CTkComboBox(
-            tb_inner,
-            values=GEMMA_PRESETS,
-            variable=self.model_var,
-            width=160,
-            font=ctk.CTkFont(size=12),
-            command=lambda _: self._on_quick_mode_changed(),
-        )
-        # Note: Model selector starts hidden since default is MT mode
+        # Pinned model variable (Ollama Gemma 4 E2B QAT)
+        self.model_var = ctk.StringVar(value=PINNED_OLLAMA_MODEL)
 
         # Copy & Clear
         ctk.CTkButton(
@@ -305,21 +292,18 @@ class QuickView(ctk.CTkFrame):
     def _on_quick_mode_changed(self, choice: str = "") -> None:
         """Toggles between Machine Translation (MADLAD) and AI Translation (Ollama)."""
         is_ai = "AI Translation" in self.quick_mode_var.get()
-        if is_ai:
-            self.quick_model_label.pack(side="left", padx=(0, 4))
-            self.quick_model_combo.pack(side="left")
-            model_name = self.model_var.get().strip() or "gemma4:e2b-it-qat"
-            if hasattr(self, "target_header_label"):
-                self.target_header_label.configure(text=f"Translation Output (Ollama - {model_name})")
-        else:
-            self.quick_model_label.pack_forget()
-            self.quick_model_combo.pack_forget()
-            if hasattr(self, "target_header_label"):
+        if hasattr(self, "target_header_label"):
+            if is_ai:
+                self.target_header_label.configure(text="Translation Output (Google Gemma 4 E2B QAT)")
+            else:
                 self.target_header_label.configure(text="Translation Output (Google MADLAD-400 3B)")
 
     def set_locked_state(self, locked: bool, job_name: str | None = None) -> None:
         """Locks or unlocks the translate button depending on background queue activity."""
+        if getattr(self, "_is_locked", None) == locked and getattr(self, "_locked_job_name", None) == job_name:
+            return
         self._is_locked = locked
+        self._locked_job_name = job_name
         if locked:
             self.quick_translate_btn.configure(state="disabled", text="⏸  Document Active")
             filename = os.path.basename(job_name) if job_name else "document"
@@ -335,14 +319,8 @@ class QuickView(ctk.CTkFrame):
             )
 
     def update_models(self, model_list: list[str]) -> None:
-        """Updates available models in the combo dropdown."""
-        if model_list:
-            all_models = list(dict.fromkeys(GEMMA_PRESETS + model_list))
-            self.quick_model_combo.configure(values=all_models)
-            if self.model_var.get() not in all_models:
-                self.model_var.set(all_models[0])
-            if "AI Translation" in self.quick_mode_var.get() and hasattr(self, "target_header_label"):
-                self.target_header_label.configure(text=f"Translation Output (Ollama - {self.model_var.get()})")
+        """Compatibility no-op: model is pinned to PINNED_OLLAMA_MODEL."""
+        pass
 
     def _start_quick_translate(self) -> None:
         if getattr(self, "_is_locked", False) is True or (
@@ -361,7 +339,7 @@ class QuickView(ctk.CTkFrame):
 
         direction = self.quick_dir_var.get()
         is_ai = "AI Translation" in self.quick_mode_var.get()
-        model_name = self.model_var.get().strip() or "gemma4:e2b-it-qat"
+        model_name = PINNED_OLLAMA_MODEL
 
         if is_ai:
             if not check_ollama_status():
@@ -379,6 +357,16 @@ class QuickView(ctk.CTkFrame):
                         return
                 else:
                     return
+
+            from engine.preflight import check_model_installed
+
+            if not check_model_installed(PINNED_OLLAMA_MODEL):
+                messagebox.showwarning(
+                    "Gemma 4 Model Required",
+                    f"The Google Gemma 4 model ({PINNED_OLLAMA_MODEL}) is not installed yet (~1.6 GB).\n\n"
+                    "Please navigate to 'System & AI Diagnostics' to download the model.",
+                )
+                return
         else:
             if not check_madlad_installed():
                 messagebox.showerror(

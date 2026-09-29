@@ -6,16 +6,18 @@ Provides headless process launching, loaded model discovery (/api/ps),
 instant VRAM eviction (keep_alive: 0), and clean shutdown cleanup.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 import requests
 
-from .preflight import check_ollama_status
+from .preflight import check_model_installed, check_ollama_status
 
 
 def find_ollama_binary() -> str | None:
@@ -198,6 +200,70 @@ class OllamaManager:
                 return True, "Ollama background service stopped."
 
             return False, "Ollama was not launched by this application; model memory evicted."
+
+    def pull_model(
+        self,
+        model_name: str,
+        progress_callback: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[bool, str]:
+        """
+        Pulls a model via Ollama's /api/pull endpoint with streaming progress.
+        Ensures Ollama service is running before attempting the download.
+        Supports cooperative cancellation via cancel_event.
+        """
+        # 1. Ensure Ollama service is running
+        if not self.is_running():
+            ok, msg = self.start_service(timeout=15.0)
+            if not ok:
+                return False, f"Could not start Ollama: {msg}"
+
+        # 2. Issue streaming POST to /api/pull
+        url = f"{self.ollama_url}/api/pull"
+        payload = {"name": model_name, "stream": True}
+        try:
+            with requests.post(url, json=payload, stream=True, timeout=(10.0, None)) as resp:
+                if resp.status_code != 200:
+                    return False, f"Ollama pull returned HTTP {resp.status_code}: {resp.text}"
+
+                for line in resp.iter_lines():
+                    if cancel_event and cancel_event.is_set():
+                        return False, "Download cancelled by user."
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line.decode("utf-8"))
+                    except Exception:
+                        continue
+
+                    if "error" in data:
+                        return False, f"Ollama error: {data['error']}"
+
+                    status = data.get("status", "")
+                    total = data.get("total", 0)
+                    completed = data.get("completed", 0)
+
+                    pct = 0.0
+                    if total > 0:
+                        pct = min(1.0, max(0.0, completed / total))
+
+                    status_msg = status
+                    if total > 0:
+                        mb_completed = completed / (1024 * 1024)
+                        mb_total = total / (1024 * 1024)
+                        status_msg = f"{status} ({mb_completed:.1f} / {mb_total:.1f} MB)"
+
+                    if progress_callback:
+                        progress_callback(pct, status_msg)
+
+            # Check if model is now installed
+            if check_model_installed(model_name, self.ollama_url):
+                return True, f"Model '{model_name}' downloaded and verified successfully."
+            return True, f"Model '{model_name}' download finished."
+        except requests.exceptions.RequestException as e:
+            if cancel_event and cancel_event.is_set():
+                return False, "Download cancelled."
+            return False, f"Connection error during model pull: {e}"
 
     def cleanup_on_exit(self) -> None:
         """

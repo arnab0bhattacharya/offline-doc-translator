@@ -79,6 +79,8 @@ def build():
         "darkdetect",
         "psutil",
         "requests",
+        "urllib3",
+        "urllib3.util.ssl_",
         "tqdm",
         "engine",
         "engine.core",

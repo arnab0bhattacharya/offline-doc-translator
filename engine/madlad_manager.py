@@ -32,10 +32,10 @@ REQUIRED_MODEL_FILES = {
     "config.json": 50,  # minimum 50 bytes (actual 224 bytes)
     "shared_vocabulary.json": 50 * 1024,  # minimum 50 KB (actual ~5.48 MB)
     "spiece.model": 1 * 1024 * 1024,  # minimum 1 MB (actual ~4.43 MB)
-    "model.bin": 1500 * 1024 * 1024,  # minimum 1.5 GB (actual ~2.95 GB)
+    "model.bin": 2_950_000_000,  # minimum ~2.95 GB (actual 2,950,208,329 bytes)
 }
 
-# Exact byte sizes for downloads and strict verification
+# Exact byte sizes for downloads and strict cryptographic verification
 EXACT_MODEL_FILES = {
     "config.json": 224,  # exact 224 bytes
     "shared_vocabulary.json": 5_477_099,  # exact ~5.48 MB
@@ -63,20 +63,84 @@ MADLAD_DOWNLOAD_MANIFEST = {
 }
 
 
+def _compute_file_sha256(file_path: str, chunk_size: int = 1024 * 1024) -> str:
+    """Computes SHA-256 hex digest for a file streaming in chunks."""
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(chunk_size):
+            hasher.update(chunk)
+    return hasher.hexdigest().lower()
+
+
+def verify_madlad_integrity(model_dir: str | None = None) -> tuple[bool, list[str]]:
+    """
+    Performs full cryptographic integrity check of installed MADLAD-400 3B model files.
+    Checks exact file sizes and SHA-256 hashes against pinned release manifest.
+
+    Returns:
+        tuple[bool, list[str]]: (is_valid, list_of_error_messages)
+    """
+    target_dir = model_dir or get_madlad_model_dir()
+    if not os.path.isdir(target_dir):
+        return False, [f"Model directory does not exist: {target_dir}"]
+
+    if not check_madlad_installed(target_dir, verify_hashes=False):
+        return False, ["One or more required model files are missing or incomplete."]
+
+    errors: list[str] = []
+    for filename, exact_size in EXACT_MODEL_FILES.items():
+        file_path = os.path.join(target_dir, filename)
+        if not os.path.isfile(file_path):
+            errors.append(f"Missing file: {filename}")
+            continue
+
+        try:
+            actual_size = os.path.getsize(file_path)
+            if actual_size != exact_size:
+                errors.append(
+                    f"{filename}: size mismatch (got {actual_size} bytes, expected {exact_size} bytes)"
+                )
+                continue
+        except OSError as e:
+            errors.append(f"{filename}: could not read file size ({e})")
+            continue
+
+        expected_hash = MODEL_FILE_SHA256.get(filename)
+        if expected_hash:
+            try:
+                actual_hash = _compute_file_sha256(file_path)
+                if actual_hash != expected_hash.lower():
+                    errors.append(
+                        f"{filename}: SHA256 checksum mismatch (got {actual_hash[:8]}..., expected {expected_hash[:8]}...)"
+                    )
+            except OSError as e:
+                errors.append(f"{filename}: could not compute checksum ({e})")
+
+    return len(errors) == 0, errors
+
+
 class _SystemSSLAdapter(HTTPAdapter):
     """
     HTTPAdapter that incorporates native OS (Windows / Linux / macOS) root CA certificates.
-    This resolves SSLCertVerificationError on Windows systems without disabling verification.
+    This resolves SSLCertVerificationError on Windows systems without disabling verification,
+    and supports corporate environments with custom proxy or root CAs.
     """
 
-    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+    def _get_ssl_context(self) -> ssl.SSLContext:
         ctx = create_urllib3_context()
         try:
             ctx.load_default_certs()
         except Exception:
             pass
-        kwargs["ssl_context"] = ctx
+        return ctx
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["ssl_context"] = self._get_ssl_context()
         super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
+        proxy_kwargs["ssl_context"] = self._get_ssl_context()
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
 
 
 def create_secure_session() -> requests.Session:
@@ -117,19 +181,24 @@ def get_madlad_model_dir(custom_path: str | None = None) -> str:
     return os.path.join(get_models_root_dir(), MADLAD_3B_DIR_NAME)
 
 
-def check_madlad_installed(model_dir: str | None = None) -> bool:
+def check_madlad_installed(model_dir: str | None = None, verify_hashes: bool = False) -> bool:
     """
     Verifies if MADLAD-400 3B model files are present and valid on disk.
     Checks existence and non-trivial file sizes for all required CTranslate2 files.
+    If verify_hashes is True, executes full cryptographic integrity validation.
     Accepts either shared_vocabulary.json or shared_vocabulary.txt, and spiece.model or sentencepiece.model.
     """
+    if verify_hashes:
+        valid, _ = verify_madlad_integrity(model_dir)
+        return valid
+
     target_dir = model_dir or get_madlad_model_dir()
     if not os.path.isdir(target_dir):
         return False
 
     core_files = {
         "config.json": REQUIRED_MODEL_FILES.get("config.json", 50),
-        "model.bin": REQUIRED_MODEL_FILES.get("model.bin", 1500 * 1024 * 1024),
+        "model.bin": REQUIRED_MODEL_FILES.get("model.bin", 2_950_000_000),
     }
     for filename, min_bytes in core_files.items():
         file_path = os.path.join(target_dir, filename)
@@ -183,7 +252,7 @@ def get_madlad_model_info(model_dir: str | None = None) -> dict[str, Any]:
 
     core_files = {
         "config.json": REQUIRED_MODEL_FILES.get("config.json", 50),
-        "model.bin": REQUIRED_MODEL_FILES.get("model.bin", 1500 * 1024 * 1024),
+        "model.bin": REQUIRED_MODEL_FILES.get("model.bin", 2_950_000_000),
     }
     min_sp = REQUIRED_MODEL_FILES.get("spiece.model", REQUIRED_MODEL_FILES.get("sentencepiece.model", 1 * 1024 * 1024))
     min_vocab = REQUIRED_MODEL_FILES.get(
@@ -198,7 +267,7 @@ def get_madlad_model_info(model_dir: str | None = None) -> dict[str, Any]:
                     size = os.path.getsize(file_path)
                     total_bytes += size
                     if size < min_bytes:
-                        missing.append(f"{filename} (corrupted/truncated)")
+                        missing.append(f"{filename} (corrupted/truncated: {size} B < {min_bytes} B)")
                 except OSError:
                     missing.append(f"{filename} (unreadable)")
             else:
@@ -255,7 +324,7 @@ def download_madlad_model(
 ) -> tuple[bool, str]:
     """
     Downloads MADLAD-400 3B INT8 model files from Hugging Face with chunked streaming.
-    Streams to .tmp files, verifies integrity (size and SHA256 checksum), and renames atomically upon completion.
+    Streams to .tmp files, verifies exact sizes and SHA256 checksums, and renames atomically upon completion.
 
     Args:
         target_dir: Destination folder. Defaults to get_madlad_model_dir().
@@ -269,9 +338,9 @@ def download_madlad_model(
     dest_dir = target_dir or get_madlad_model_dir()
     os.makedirs(dest_dir, exist_ok=True)
 
-    if check_madlad_installed(dest_dir):
+    if check_madlad_installed(dest_dir, verify_hashes=True):
         if log_cb:
-            log_cb("[✓] MADLAD-400 3B model is already installed.")
+            log_cb("[✓] MADLAD-400 3B model is already installed and verified.")
         if progress_cb:
             progress_cb(100.0, "Model installed.")
         return True, "MADLAD-400 3B model is already installed."
@@ -287,13 +356,38 @@ def download_madlad_model(
         for filename, url in MADLAD_DOWNLOAD_MANIFEST.items():
             final_path = os.path.join(dest_dir, filename)
             tmp_path = final_path + ".tmp"
-            expected_size = REQUIRED_MODEL_FILES.get(filename, 1)
+            exact_size = EXACT_MODEL_FILES.get(filename)
+            min_size = REQUIRED_MODEL_FILES.get(filename, 1)
             expected_hash = MODEL_FILE_SHA256.get(filename)
 
-            # Skip if already downloaded and valid
-            if os.path.exists(final_path) and os.path.getsize(final_path) >= expected_size:
-                accumulated_bytes += os.path.getsize(final_path)
-                continue
+            # Check if file is already downloaded and fully valid on disk
+            if os.path.exists(final_path):
+                file_size = os.path.getsize(final_path)
+                size_valid = (file_size == exact_size) if exact_size else (file_size >= min_size)
+                if size_valid:
+                    if expected_hash:
+                        if _compute_file_sha256(final_path) == expected_hash.lower():
+                            accumulated_bytes += file_size
+                            continue
+                        else:
+                            if log_cb:
+                                log_cb(f"[!] Existing {filename} checksum mismatch; re-downloading...")
+                            try:
+                                os.remove(final_path)
+                            except OSError:
+                                pass
+                    else:
+                        accumulated_bytes += file_size
+                        continue
+                else:
+                    if log_cb:
+                        log_cb(
+                            f"[!] Existing {filename} is truncated or incomplete ({file_size} B, expected {exact_size or min_size} B); re-downloading..."
+                        )
+                    try:
+                        os.remove(final_path)
+                    except OSError:
+                        pass
 
             if log_cb:
                 log_cb(f"[*] Downloading {filename} from Hugging Face...")
@@ -333,14 +427,18 @@ def download_madlad_model(
                                 progress_cb(pct, f"Downloading {filename} ({mb_done} MB, {speed_mb:.1f} MB/s)...")
 
                 actual_size = os.path.getsize(tmp_path)
-                if actual_size < expected_size:
+                if exact_size and actual_size != exact_size:
                     raise RuntimeError(
-                        f"Downloaded file {filename} is too small ({actual_size} bytes, expected at least {expected_size} bytes)."
+                        f"Downloaded file {filename} size mismatch ({actual_size} bytes, expected {exact_size} bytes)."
+                    )
+                elif actual_size < min_size:
+                    raise RuntimeError(
+                        f"Downloaded file {filename} is too small ({actual_size} bytes, expected at least {min_size} bytes)."
                     )
 
                 if expected_hash:
-                    actual_hash = hasher.hexdigest()
-                    if actual_hash.lower() != expected_hash.lower():
+                    actual_hash = hasher.hexdigest().lower()
+                    if actual_hash != expected_hash.lower():
                         raise RuntimeError(
                             f"Integrity check failed for {filename}: SHA256 mismatch (got {actual_hash[:8]}..., expected {expected_hash[:8]}...)."
                         )
@@ -361,7 +459,7 @@ def download_madlad_model(
                         pass
                 raise
 
-        if check_madlad_installed(dest_dir):
+        if check_madlad_installed(dest_dir, verify_hashes=True):
             if log_cb:
                 log_cb("[✓] MADLAD-400 3B model successfully installed and ready.")
             if progress_cb:

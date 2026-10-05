@@ -19,11 +19,15 @@ from engine.backend_madlad import MADLAD_LANG_MAP, MADLADBackend
 from engine.core import TranslationEngine, TranslationMode
 from engine.errors import ErrorCode, TranslatorError
 from engine.madlad_manager import (
+    EXACT_MODEL_FILES,
+    MODEL_FILE_SHA256,
     REQUIRED_MODEL_FILES,
+    _SystemSSLAdapter,
     check_madlad_installed,
     download_madlad_model,
     get_madlad_model_info,
     import_local_madlad_folder,
+    verify_madlad_integrity,
 )
 from engine.preflight import check_madlad_ready, run_madlad_preflight
 
@@ -121,13 +125,14 @@ class TestMADLADManager(unittest.TestCase):
         }
         with (
             tempfile.TemporaryDirectory() as td,
-            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required),
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required, clear=True),
+            patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", test_required, clear=True),
+            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", {}, clear=True),
         ):
             for fname, min_bytes in test_required.items():
                 fpath = os.path.join(td, fname)
                 with open(fpath, "wb") as f:
-                    f.seek(min_bytes + 10)
-                    f.write(b"0")
+                    f.write(b"0" * min_bytes)
             ok, msg = download_madlad_model(target_dir=td)
             self.assertTrue(ok)
             self.assertIn("already installed", msg)
@@ -140,12 +145,20 @@ class TestMADLADManager(unittest.TestCase):
             "spiece.model": 100,
             "model.bin": 100,
         }
+        cfg_content = b'{"format_version": 1, "model_type": "madlad400-3b"}'
+        test_exact = {
+            "config.json": len(cfg_content),
+            "shared_vocabulary.json": 200,
+            "spiece.model": 200,
+            "model.bin": 200,
+        }
         mock_session = MagicMock()
         mock_create_session.return_value = mock_session
 
         with (
             tempfile.TemporaryDirectory() as td,
             patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required, clear=True),
+            patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", test_exact, clear=True),
             patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", {}, clear=True),
         ):
 
@@ -158,8 +171,8 @@ class TestMADLADManager(unittest.TestCase):
                     mock_resp.iter_content.return_value = [b"v" * 200]
                 elif "spiece" in url:
                     mock_resp.iter_content.return_value = [b"s" * 200]
-                else:  # config.json (min 50 bytes)
-                    mock_resp.iter_content.return_value = [b'{"format_version": 1, "model_type": "madlad400-3b"}']
+                else:  # config.json
+                    mock_resp.iter_content.return_value = [cfg_content]
                 return mock_resp
 
             mock_session.get.side_effect = fake_get
@@ -208,13 +221,19 @@ class TestMADLADManager(unittest.TestCase):
     def test_download_madlad_model_sha256_mismatch(self, mock_create_session):
         mock_session = MagicMock()
         mock_create_session.return_value = mock_session
-        test_required = {"config.json": 10}
+        test_required = {
+            "config.json": 10,
+            "shared_vocabulary.json": 10,
+            "spiece.model": 10,
+            "model.bin": 10,
+        }
         test_hashes = {"config.json": "0000000000000000000000000000000000000000000000000000000000000000"}
 
         with (
             tempfile.TemporaryDirectory() as td,
-            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required),
-            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", test_hashes),
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required, clear=True),
+            patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", {}, clear=True),
+            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", test_hashes, clear=True),
         ):
             mock_resp = MagicMock()
             mock_resp.raise_for_status.return_value = None
@@ -227,6 +246,91 @@ class TestMADLADManager(unittest.TestCase):
             # Ensure .tmp file was deleted
             tmp_file = os.path.join(td, "config.json.tmp")
             self.assertFalse(os.path.exists(tmp_file))
+
+    @patch("engine.madlad_manager.create_secure_session")
+    def test_download_madlad_model_existing_truncated_file_redownloaded(self, mock_create_session):
+        """Verifies that an existing truncated file on disk is deleted and re-downloaded rather than skipped."""
+        mock_session = MagicMock()
+        mock_create_session.return_value = mock_session
+
+        test_exact = {
+            "config.json": 20,
+            "shared_vocabulary.json": 20,
+            "spiece.model": 20,
+            "model.bin": 200,
+        }
+
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_exact, clear=True),
+            patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", test_exact, clear=True),
+            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", {}, clear=True),
+        ):
+            # Create a truncated model.bin with only 50 bytes (less than 200 expected)
+            bad_model = os.path.join(td, "model.bin")
+            with open(bad_model, "wb") as f:
+                f.write(b"t" * 50)
+
+            def fake_get(url, **kwargs):
+                mock_resp = MagicMock()
+                mock_resp.raise_for_status.return_value = None
+                if "model.bin" in url:
+                    mock_resp.iter_content.return_value = [b"m" * 200]
+                else:
+                    mock_resp.iter_content.return_value = [b"x" * 20]
+                return mock_resp
+
+            mock_session.get.side_effect = fake_get
+
+            ok, msg = download_madlad_model(target_dir=td)
+            self.assertTrue(ok)
+            self.assertEqual(os.path.getsize(bad_model), 200)
+
+    def test_verify_madlad_integrity_valid_and_invalid(self):
+        """Verifies cryptographic validation helper across intact and corrupt states."""
+        with tempfile.TemporaryDirectory() as td:
+            # Empty dir fails
+            ok, errors = verify_madlad_integrity(td)
+            self.assertFalse(ok)
+            self.assertGreater(len(errors), 0)
+
+            # Create dummy files matching EXACT_MODEL_FILES
+            test_exact = {
+                "config.json": 10,
+                "shared_vocabulary.json": 10,
+                "spiece.model": 10,
+                "model.bin": 20,
+            }
+            test_hash = {
+                "config.json": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",  # sha256 of b'1234567890'
+                "model.bin": "0000000000000000000000000000000000000000000000000000000000000000",
+            }
+            with (
+                patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_exact, clear=True),
+                patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", test_exact, clear=True),
+                patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", test_hash, clear=True),
+            ):
+                with open(os.path.join(td, "config.json"), "wb") as f:
+                    f.write(b"1234567890")
+                with open(os.path.join(td, "shared_vocabulary.json"), "wb") as f:
+                    f.write(b"v" * 10)
+                with open(os.path.join(td, "spiece.model"), "wb") as f:
+                    f.write(b"s" * 10)
+                with open(os.path.join(td, "model.bin"), "wb") as f:
+                    f.write(b"a" * 20)
+
+                ok, errors = verify_madlad_integrity(td)
+                self.assertFalse(ok)  # model.bin hash fails
+                self.assertTrue(any("model.bin" in e and "checksum mismatch" in e for e in errors))
+
+    def test_system_ssl_adapter_proxy_manager(self):
+        """Verifies that _SystemSSLAdapter correctly attaches system SSL context to both pool and proxy managers."""
+        adapter = _SystemSSLAdapter()
+        adapter.init_poolmanager(connections=2, maxsize=2)
+        self.assertIsNotNone(adapter.poolmanager.connection_pool_kw.get("ssl_context"))
+
+        proxy_mgr = adapter.proxy_manager_for("http://proxy.internal:8080")
+        self.assertIsNotNone(proxy_mgr.connection_pool_kw.get("ssl_context"))
 
 
 class TestMADLADBackendLazyLoading(unittest.TestCase):

@@ -130,12 +130,12 @@ class MADLADBackend(TranslationBackend):
         return self._hardware_desc
 
     def is_available(self) -> bool:
-        """Returns True if CTranslate2, SentencePiece, and model weights are present."""
+        """Returns True if CTranslate2, SentencePiece, and model weights matching exact sizes are present."""
         try:
             import ctranslate2  # noqa: F401
             import sentencepiece  # noqa: F401
 
-            return check_madlad_installed(self.model_dir)
+            return check_madlad_installed(self.model_dir, exact_sizes=True)
         except ImportError:
             return False
 
@@ -166,11 +166,12 @@ class MADLADBackend(TranslationBackend):
         if self._is_loaded and self._translator is not None:
             return
 
-        if not check_madlad_installed(self.model_dir):
+        if not check_madlad_installed(self.model_dir, exact_sizes=True):
             raise RuntimeError(
-                f"MADLAD-400 3B model files not found or corrupted in: {self.model_dir}. "
-                "Please download the model before translating."
+                f"MADLAD-400 3B model files not found, truncated, or size mismatched in: {self.model_dir}. "
+                "Please download or repair the model before translating."
             )
+
 
         # Enforce mutual exclusivity: evict any resident Ollama models from RAM
         try:

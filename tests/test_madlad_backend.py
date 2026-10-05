@@ -7,6 +7,7 @@ manager diagnostics, and preflight validation.
 
 import os
 import sys
+import ssl
 import tempfile
 import threading
 import unittest
@@ -41,44 +42,54 @@ class TestMADLADManager(unittest.TestCase):
 
     def test_check_madlad_installed_valid_files(self):
         with tempfile.TemporaryDirectory() as td:
-            for fname, min_bytes in REQUIRED_MODEL_FILES.items():
+            for fname, exact_bytes in EXACT_MODEL_FILES.items():
                 fpath = os.path.join(td, fname)
                 with open(fpath, "wb") as f:
-                    f.seek(min_bytes + 10)
-                    f.write(b"0")
+                    f.truncate(exact_bytes)
             self.assertTrue(check_madlad_installed(td))
 
     def test_check_madlad_installed_with_txt_vocab(self):
         """Verifies that shared_vocabulary.txt is also accepted as a valid vocabulary format."""
         with tempfile.TemporaryDirectory() as td:
             for fname in ("config.json", "spiece.model", "model.bin"):
-                min_bytes = REQUIRED_MODEL_FILES[fname]
+                exact_bytes = EXACT_MODEL_FILES[fname]
                 fpath = os.path.join(td, fname)
                 with open(fpath, "wb") as f:
-                    f.seek(min_bytes + 10)
-                    f.write(b"0")
+                    f.truncate(exact_bytes)
             # Write shared_vocabulary.txt instead of shared_vocabulary.json
             vpath = os.path.join(td, "shared_vocabulary.txt")
             with open(vpath, "wb") as f:
-                f.seek(60 * 1024)
-                f.write(b"0")
+                f.truncate(60 * 1024)
             self.assertTrue(check_madlad_installed(td))
 
     def test_check_madlad_installed_with_alternate_sp_name(self):
         """Verifies sentencepiece.model is accepted if spiece.model is not found."""
         with tempfile.TemporaryDirectory() as td:
             for fname in ("config.json", "shared_vocabulary.json", "model.bin"):
-                min_bytes = REQUIRED_MODEL_FILES[fname]
+                exact_bytes = EXACT_MODEL_FILES[fname]
                 fpath = os.path.join(td, fname)
                 with open(fpath, "wb") as f:
-                    f.seek(min_bytes + 10)
-                    f.write(b"0")
+                    f.truncate(exact_bytes)
             # Write sentencepiece.model instead of spiece.model
             sp_path = os.path.join(td, "sentencepiece.model")
             with open(sp_path, "wb") as f:
-                f.seek(1 * 1024 * 1024 + 10)
-                f.write(b"0")
+                f.truncate(EXACT_MODEL_FILES["spiece.model"])
             self.assertTrue(check_madlad_installed(td))
+
+    def test_check_madlad_installed_size_mismatch(self):
+        """Verifies that a file exceeding minimum floor but not matching exact size is rejected by default."""
+        with tempfile.TemporaryDirectory() as td:
+            for fname, exact_bytes in EXACT_MODEL_FILES.items():
+                fpath = os.path.join(td, fname)
+                with open(fpath, "wb") as f:
+                    f.truncate(exact_bytes)
+            # Corrupt model.bin to 2.95 GB + 10 bytes (different from EXACT_MODEL_FILES)
+            bin_path = os.path.join(td, "model.bin")
+            with open(bin_path, "wb") as f:
+                f.truncate(2_950_000_010)
+            self.assertFalse(check_madlad_installed(td))
+            # But passes if exact_sizes=False
+            self.assertTrue(check_madlad_installed(td, exact_sizes=False))
 
     def test_check_madlad_installed_truncated_file(self):
         with tempfile.TemporaryDirectory() as td:
@@ -92,10 +103,22 @@ class TestMADLADManager(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             info = get_madlad_model_info(td)
             self.assertFalse(info["installed"])
+            self.assertEqual(info["status"], "not_installed")
+            self.assertFalse(info["exact_size_ok"])
             self.assertGreater(len(info["missing_files"]), 0)
 
+            # Write valid exact files
+            for fname, exact_bytes in EXACT_MODEL_FILES.items():
+                with open(os.path.join(td, fname), "wb") as f:
+                    f.truncate(exact_bytes)
+            info_ready = get_madlad_model_info(td)
+            self.assertTrue(info_ready["installed"])
+            self.assertEqual(info_ready["status"], "ready")
+            self.assertTrue(info_ready["exact_size_ok"])
+            self.assertFalse(info_ready["cryptographically_verified"])
+
     def test_import_local_madlad_folder(self):
-        test_required = {
+        test_exact = {
             "config.json": 50,
             "shared_vocabulary.json": 100,
             "spiece.model": 100,
@@ -104,17 +127,47 @@ class TestMADLADManager(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as src_dir,
             tempfile.TemporaryDirectory() as dst_dir,
-            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required),
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_exact, clear=True),
+            patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", test_exact, clear=True),
+            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", {}, clear=True),
         ):
-            for fname, min_bytes in test_required.items():
+            for fname, exact_size in test_exact.items():
                 fpath = os.path.join(src_dir, fname)
                 with open(fpath, "wb") as f:
-                    f.seek(min_bytes + 10)
-                    f.write(b"0")
+                    f.write(b"0" * exact_size)
 
             ok, msg = import_local_madlad_folder(src_dir, target_dir=dst_dir)
             self.assertTrue(ok)
             self.assertTrue(check_madlad_installed(dst_dir))
+
+    def test_import_local_madlad_folder_corrupted_rejected(self):
+        """Verifies that local folder import rejects source directory with corrupted/mismatched files."""
+        test_exact = {
+            "config.json": 50,
+            "shared_vocabulary.json": 100,
+            "spiece.model": 100,
+            "model.bin": 100,
+        }
+        with (
+            tempfile.TemporaryDirectory() as src_dir,
+            tempfile.TemporaryDirectory() as dst_dir,
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_exact, clear=True),
+            patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", test_exact, clear=True),
+            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", {}, clear=True),
+        ):
+            for fname, exact_size in test_exact.items():
+                fpath = os.path.join(src_dir, fname)
+                with open(fpath, "wb") as f:
+                    f.write(b"0" * exact_size)
+            # Corrupt model.bin in source folder
+            with open(os.path.join(src_dir, "model.bin"), "wb") as f:
+                f.write(b"corrupt")
+
+            ok, msg = import_local_madlad_folder(src_dir, target_dir=dst_dir)
+            self.assertFalse(ok)
+            self.assertIn("failed integrity verification", msg)
+            self.assertFalse(os.path.exists(os.path.join(dst_dir, "model.bin")))
+
 
     def test_download_madlad_model_already_installed(self):
         test_required = {
@@ -327,10 +380,59 @@ class TestMADLADManager(unittest.TestCase):
         """Verifies that _SystemSSLAdapter correctly attaches system SSL context to both pool and proxy managers."""
         adapter = _SystemSSLAdapter()
         adapter.init_poolmanager(connections=2, maxsize=2)
-        self.assertIsNotNone(adapter.poolmanager.connection_pool_kw.get("ssl_context"))
+        ctx = adapter.poolmanager.connection_pool_kw.get("ssl_context")
+        self.assertIsNotNone(ctx)
 
         proxy_mgr = adapter.proxy_manager_for("http://proxy.internal:8080")
         self.assertIsNotNone(proxy_mgr.connection_pool_kw.get("ssl_context"))
+
+    def test_system_ssl_adapter_loads_default_certs(self):
+        """Verifies that _get_ssl_context loads OS certificates without disabling TLS verification."""
+        adapter = _SystemSSLAdapter()
+        ctx = adapter._get_ssl_context()
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        if sys.platform == "win32":
+            # On Windows, verify that CryptoAPI root certs were loaded into OpenSSL context
+            ca_certs = ctx.get_ca_certs()
+            self.assertGreater(len(ca_certs), 0)
+
+    def test_create_secure_session_mounts_adapter(self):
+        """Verifies create_secure_session mounts _SystemSSLAdapter on both http and https."""
+        from engine.madlad_manager import create_secure_session
+        session = create_secure_session()
+        self.assertIsInstance(session.adapters.get("https://"), _SystemSSLAdapter)
+        self.assertIsInstance(session.adapters.get("http://"), _SystemSSLAdapter)
+        session.close()
+
+    def test_backend_readiness_enforces_exact_sizes(self):
+        """Verifies backend is_available and _ensure_loaded enforce exact model file sizes."""
+        test_exact = {
+            "config.json": 10,
+            "shared_vocabulary.json": 10,
+            "spiece.model": 10,
+            "model.bin": 20,
+        }
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_exact, clear=True),
+            patch.dict("engine.madlad_manager.EXACT_MODEL_FILES", test_exact, clear=True),
+        ):
+            for fname, exact_size in test_exact.items():
+                with open(os.path.join(td, fname), "wb") as f:
+                    f.write(b"0" * exact_size)
+
+            backend = MADLADBackend(model_dir=td)
+            self.assertTrue(backend.is_available())
+
+            # Corrupt model.bin size
+            with open(os.path.join(td, "model.bin"), "wb") as f:
+                f.write(b"0" * (test_exact["model.bin"] + 5))
+
+            self.assertFalse(backend.is_available())
+            with self.assertRaises(RuntimeError):
+                backend._ensure_loaded()
+
 
 
 class TestMADLADBackendLazyLoading(unittest.TestCase):

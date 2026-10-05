@@ -84,8 +84,8 @@ def verify_madlad_integrity(model_dir: str | None = None) -> tuple[bool, list[st
     if not os.path.isdir(target_dir):
         return False, [f"Model directory does not exist: {target_dir}"]
 
-    if not check_madlad_installed(target_dir, verify_hashes=False):
-        return False, ["One or more required model files are missing or incomplete."]
+    if not EXACT_MODEL_FILES:
+        return False, ["Model manifest definition is empty."]
 
     errors: list[str] = []
     for filename, exact_size in EXACT_MODEL_FILES.items():
@@ -117,6 +117,7 @@ def verify_madlad_integrity(model_dir: str | None = None) -> tuple[bool, list[st
                 errors.append(f"{filename}: could not compute checksum ({e})")
 
     return len(errors) == 0, errors
+
 
 
 class _SystemSSLAdapter(HTTPAdapter):
@@ -181,11 +182,16 @@ def get_madlad_model_dir(custom_path: str | None = None) -> str:
     return os.path.join(get_models_root_dir(), MADLAD_3B_DIR_NAME)
 
 
-def check_madlad_installed(model_dir: str | None = None, verify_hashes: bool = False) -> bool:
+def check_madlad_installed(
+    model_dir: str | None = None,
+    verify_hashes: bool = False,
+    exact_sizes: bool = True,
+) -> bool:
     """
     Verifies if MADLAD-400 3B model files are present and valid on disk.
-    Checks existence and non-trivial file sizes for all required CTranslate2 files.
-    If verify_hashes is True, executes full cryptographic integrity validation.
+    If exact_sizes is True (default), enforces exact byte matches against EXACT_MODEL_FILES.
+    If exact_sizes is False, falls back to non-trivial minimum size floors.
+    If verify_hashes is True, executes full cryptographic integrity validation (SHA-256).
     Accepts either shared_vocabulary.json or shared_vocabulary.txt, and spiece.model or sentencepiece.model.
     """
     if verify_hashes:
@@ -196,30 +202,54 @@ def check_madlad_installed(model_dir: str | None = None, verify_hashes: bool = F
     if not os.path.isdir(target_dir):
         return False
 
-    core_files = {
-        "config.json": REQUIRED_MODEL_FILES.get("config.json", 50),
-        "model.bin": REQUIRED_MODEL_FILES.get("model.bin", 2_950_000_000),
-    }
-    for filename, min_bytes in core_files.items():
-        file_path = os.path.join(target_dir, filename)
-        if not os.path.isfile(file_path):
+    if exact_sizes:
+        cfg_exact = EXACT_MODEL_FILES.get("config.json", 224)
+        bin_exact = EXACT_MODEL_FILES.get("model.bin", 2_950_208_329)
+        cfg_path = os.path.join(target_dir, "config.json")
+        bin_path = os.path.join(target_dir, "model.bin")
+        if not (os.path.isfile(cfg_path) and os.path.isfile(bin_path)):
             return False
         try:
-            if os.path.getsize(file_path) < min_bytes:
+            if os.path.getsize(cfg_path) != cfg_exact or os.path.getsize(bin_path) != bin_exact:
                 return False
         except OSError:
             return False
+    else:
+        core_files = {
+            "config.json": REQUIRED_MODEL_FILES.get("config.json", 50),
+            "model.bin": REQUIRED_MODEL_FILES.get("model.bin", 2_950_000_000),
+        }
+        for filename, min_bytes in core_files.items():
+            file_path = os.path.join(target_dir, filename)
+            if not os.path.isfile(file_path):
+                return False
+            try:
+                if os.path.getsize(file_path) < min_bytes:
+                    return False
+            except OSError:
+                return False
 
     # Check for SentencePiece model (spiece.model or sentencepiece.model)
     sp_ok = False
+    sp_exact = EXACT_MODEL_FILES.get("spiece.model", 4_427_844)
     min_sp = REQUIRED_MODEL_FILES.get("spiece.model", REQUIRED_MODEL_FILES.get("sentencepiece.model", 1 * 1024 * 1024))
     for sp_name in ("spiece.model", "sentencepiece.model", "sentencepiece.bpe.model"):
         sp_path = os.path.join(target_dir, sp_name)
         if os.path.isfile(sp_path):
             try:
-                if os.path.getsize(sp_path) >= min_sp:
-                    sp_ok = True
-                    break
+                actual_sp = os.path.getsize(sp_path)
+                if exact_sizes:
+                    if sp_name in EXACT_MODEL_FILES:
+                        if actual_sp == EXACT_MODEL_FILES[sp_name]:
+                            sp_ok = True
+                            break
+                    elif actual_sp == sp_exact or actual_sp >= min_sp:
+                        sp_ok = True
+                        break
+                else:
+                    if actual_sp >= min_sp:
+                        sp_ok = True
+                        break
             except OSError:
                 pass
     if not sp_ok:
@@ -227,6 +257,7 @@ def check_madlad_installed(model_dir: str | None = None, verify_hashes: bool = F
 
     # Check for vocabulary file (either .json or .txt)
     vocab_ok = False
+    vocab_exact = EXACT_MODEL_FILES.get("shared_vocabulary.json", 5_477_099)
     min_vocab = REQUIRED_MODEL_FILES.get(
         "shared_vocabulary.json", REQUIRED_MODEL_FILES.get("shared_vocabulary.txt", 50 * 1024)
     )
@@ -234,86 +265,148 @@ def check_madlad_installed(model_dir: str | None = None, verify_hashes: bool = F
         vpath = os.path.join(target_dir, vocab_name)
         if os.path.isfile(vpath):
             try:
-                if os.path.getsize(vpath) >= min_vocab:
-                    vocab_ok = True
-                    break
+                actual_v = os.path.getsize(vpath)
+                if exact_sizes:
+                    if vocab_name in EXACT_MODEL_FILES:
+                        if actual_v == EXACT_MODEL_FILES[vocab_name]:
+                            vocab_ok = True
+                            break
+                    elif actual_v >= min_vocab:
+                        vocab_ok = True
+                        break
+                else:
+                    if actual_v >= min_vocab:
+                        vocab_ok = True
+                        break
             except OSError:
                 pass
 
     return vocab_ok
 
 
-def get_madlad_model_info(model_dir: str | None = None) -> dict[str, Any]:
-    """Returns detailed diagnostic info about local MADLAD model status."""
+def get_madlad_model_info(
+    model_dir: str | None = None, check_hashes: bool = False
+) -> dict[str, Any]:
+    """
+    Returns detailed diagnostic info about local MADLAD model status.
+    Distinguishes between uninstalled, size-mismatched/corrupted, ready (exact sizes verified),
+    and cryptographically verified (SHA-256 validated).
+    """
     target_dir = model_dir or get_madlad_model_dir()
-    installed = check_madlad_installed(target_dir)
     total_bytes = 0
-    missing = []
+    missing: list[str] = []
+    integrity_errors: list[str] = []
+    exact_size_ok = False
+    cryptographically_verified = False
 
-    core_files = {
-        "config.json": REQUIRED_MODEL_FILES.get("config.json", 50),
-        "model.bin": REQUIRED_MODEL_FILES.get("model.bin", 2_950_000_000),
-    }
-    min_sp = REQUIRED_MODEL_FILES.get("spiece.model", REQUIRED_MODEL_FILES.get("sentencepiece.model", 1 * 1024 * 1024))
-    min_vocab = REQUIRED_MODEL_FILES.get(
-        "shared_vocabulary.json", REQUIRED_MODEL_FILES.get("shared_vocabulary.txt", 50 * 1024)
-    )
+    if not os.path.isdir(target_dir):
+        return {
+            "status": "not_installed",
+            "installed": False,
+            "exact_size_ok": False,
+            "cryptographically_verified": False,
+            "integrity_errors": [f"Model directory does not exist: {target_dir}"],
+            "path": target_dir,
+            "size_mb": 0.0,
+            "missing_files": list(EXACT_MODEL_FILES.keys()),
+        }
 
-    if os.path.isdir(target_dir):
-        for filename, min_bytes in core_files.items():
-            file_path = os.path.join(target_dir, filename)
-            if os.path.isfile(file_path):
-                try:
-                    size = os.path.getsize(file_path)
-                    total_bytes += size
-                    if size < min_bytes:
-                        missing.append(f"{filename} (corrupted/truncated: {size} B < {min_bytes} B)")
-                except OSError:
-                    missing.append(f"{filename} (unreadable)")
-            else:
-                missing.append(filename)
+    # Core config and model weights
+    for filename in ("config.json", "model.bin"):
+        expected_size = EXACT_MODEL_FILES.get(filename, REQUIRED_MODEL_FILES.get(filename, 0))
+        file_path = os.path.join(target_dir, filename)
+        if os.path.isfile(file_path):
+            try:
+                size = os.path.getsize(file_path)
+                total_bytes += size
+                if size != expected_size:
+                    integrity_errors.append(
+                        f"{filename}: size mismatch (got {size} B, expected {expected_size} B)"
+                    )
+            except OSError as e:
+                integrity_errors.append(f"{filename}: could not read size ({e})")
+        else:
+            missing.append(filename)
 
-        sp_found = False
-        for sp_name in ("spiece.model", "sentencepiece.model", "sentencepiece.bpe.model"):
-            sp_path = os.path.join(target_dir, sp_name)
-            if os.path.isfile(sp_path):
-                sp_found = True
-                try:
-                    size = os.path.getsize(sp_path)
-                    total_bytes += size
-                    if size < min_sp:
-                        missing.append(f"{sp_name} (corrupted/truncated)")
-                except OSError:
-                    missing.append(f"{sp_name} (unreadable)")
-                break
-        if not sp_found:
-            missing.append("spiece.model")
+    # SentencePiece model
+    sp_found = False
+    sp_expected = EXACT_MODEL_FILES.get("spiece.model", 4_427_844)
+    min_sp = REQUIRED_MODEL_FILES.get("spiece.model", 1 * 1024 * 1024)
+    for sp_name in ("spiece.model", "sentencepiece.model", "sentencepiece.bpe.model"):
+        sp_path = os.path.join(target_dir, sp_name)
+        if os.path.isfile(sp_path):
+            sp_found = True
+            try:
+                size = os.path.getsize(sp_path)
+                total_bytes += size
+                if sp_name in EXACT_MODEL_FILES and size != EXACT_MODEL_FILES[sp_name]:
+                    integrity_errors.append(
+                        f"{sp_name}: size mismatch (got {size} B, expected {EXACT_MODEL_FILES[sp_name]} B)"
+                    )
+                elif size < min_sp:
+                    integrity_errors.append(f"{sp_name}: truncated ({size} B < {min_sp} B)")
+            except OSError as e:
+                integrity_errors.append(f"{sp_name}: could not read size ({e})")
+            break
+    if not sp_found:
+        missing.append("spiece.model")
 
-        vocab_found = False
-        for vocab_name in ("shared_vocabulary.json", "shared_vocabulary.txt"):
-            vpath = os.path.join(target_dir, vocab_name)
-            if os.path.isfile(vpath):
-                vocab_found = True
-                try:
-                    size = os.path.getsize(vpath)
-                    total_bytes += size
-                    if size < min_vocab:
-                        missing.append(f"{vocab_name} (corrupted/truncated)")
-                except OSError:
-                    missing.append(f"{vocab_name} (unreadable)")
-                break
+    # Vocabulary file
+    vocab_found = False
+    vocab_expected = EXACT_MODEL_FILES.get("shared_vocabulary.json", 5_477_099)
+    min_vocab = REQUIRED_MODEL_FILES.get("shared_vocabulary.json", 50 * 1024)
+    for vocab_name in ("shared_vocabulary.json", "shared_vocabulary.txt"):
+        vpath = os.path.join(target_dir, vocab_name)
+        if os.path.isfile(vpath):
+            vocab_found = True
+            try:
+                size = os.path.getsize(vpath)
+                total_bytes += size
+                if vocab_name in EXACT_MODEL_FILES and size != EXACT_MODEL_FILES[vocab_name]:
+                    integrity_errors.append(
+                        f"{vocab_name}: size mismatch (got {size} B, expected {EXACT_MODEL_FILES[vocab_name]} B)"
+                    )
+                elif size < min_vocab:
+                    integrity_errors.append(f"{vocab_name}: truncated ({size} B < {min_vocab} B)")
+            except OSError as e:
+                integrity_errors.append(f"{vocab_name}: could not read size ({e})")
+            break
+    if not vocab_found:
+        missing.append("shared_vocabulary.json")
 
-        if not vocab_found:
-            missing.append("shared_vocabulary.json")
+    if missing:
+        status = "not_installed"
+        installed = False
+    elif integrity_errors:
+        status = "size_mismatch"
+        installed = False
     else:
-        missing = [*core_files.keys(), "spiece.model", "shared_vocabulary.json"]
+        exact_size_ok = True
+        if check_hashes:
+            valid_hash, hash_errors = verify_madlad_integrity(target_dir)
+            if valid_hash:
+                status = "verified"
+                cryptographically_verified = True
+                installed = True
+            else:
+                status = "corrupted"
+                integrity_errors.extend(hash_errors)
+                installed = False
+        else:
+            status = "ready"
+            installed = True
 
     return {
+        "status": status,
         "installed": installed,
+        "exact_size_ok": exact_size_ok,
+        "cryptographically_verified": cryptographically_verified,
+        "integrity_errors": integrity_errors,
         "path": target_dir,
         "size_mb": round(total_bytes / (1024 * 1024), 1),
         "missing_files": missing,
     }
+
 
 
 def download_madlad_model(
@@ -491,16 +584,21 @@ def import_local_madlad_folder(
 ) -> tuple[bool, str]:
     """
     Imports model files from a local directory (for offline/air-gapped environments).
-    Validates presence of required files, then copies them to application model directory.
+    Performs full integrity validation (exact sizes and cryptographic checksums) on both
+    source and destination directories.
     """
     src_abs = os.path.abspath(source_folder)
     if not os.path.isdir(src_abs):
         return False, f"Source folder not found: {src_abs}"
 
-    if not check_madlad_installed(src_abs):
-        info = get_madlad_model_info(src_abs)
-        missing_str = ", ".join(info.get("missing_files", []))
-        return False, f"Folder is missing required files or files are truncated: {missing_str}"
+    if log_cb:
+        log_cb(f"[*] Validating source folder integrity: {src_abs}...")
+    valid, errors = verify_madlad_integrity(src_abs)
+    if not valid:
+        err_msg = "; ".join(errors)
+        if log_cb:
+            log_cb(f"[!] Source folder validation failed: {err_msg}")
+        return False, f"Source folder failed integrity verification: {err_msg}"
 
     dest_dir = target_dir or get_madlad_model_dir()
     os.makedirs(dest_dir, exist_ok=True)
@@ -532,10 +630,16 @@ def import_local_madlad_folder(
                     log_cb(f"[*] Copying {vocab_name}...")
                 shutil.copy2(src_file, dst_file)
 
-        if check_madlad_installed(dest_dir):
+        if log_cb:
+            log_cb("[*] Verifying copied model files in destination...")
+        dst_valid, dst_errors = verify_madlad_integrity(dest_dir)
+        if dst_valid:
             if log_cb:
-                log_cb(f"[✓] MADLAD model imported successfully to {dest_dir}")
-            return True, f"Successfully imported model to {dest_dir}"
-        return False, "Model verification failed after copying."
+                log_cb(f"[✓] MADLAD model imported and verified successfully to {dest_dir}")
+            return True, f"Successfully imported and verified model to {dest_dir}"
+
+        dst_err_msg = "; ".join(dst_errors)
+        return False, f"Destination integrity verification failed after copying: {dst_err_msg}"
     except Exception as e:
         return False, f"Failed to copy model files: {e}"
+

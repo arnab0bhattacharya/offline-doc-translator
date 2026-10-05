@@ -739,6 +739,8 @@ class SystemView(ctk.CTkFrame):
         """Verifies presence, active device, and RAM status of MADLAD-400 3B model."""
         info = get_madlad_model_info()
         installed = info["installed"]
+        status = info.get("status", "ready" if installed else "not_installed")
+        integrity_errors = info.get("integrity_errors", [])
         is_loaded = self.madlad_backend.is_model_loaded()
         dev_desc = getattr(self.madlad_backend, "active_device_description", "CPU INT8")
 
@@ -748,9 +750,10 @@ class SystemView(ctk.CTkFrame):
                 if is_loaded
                 else f"Unloaded (0 MB in RAM, loads on-demand on {dev_desc})"
             )
+            verification_tag = "cryptographically verified" if status == "verified" else "ready (exact size verified)"
             self.sys_madlad_desc.configure(
                 text=(
-                    f"Status: Model installed and verified ({info['size_mb']} MB on disk).\n"
+                    f"Status: Model {verification_tag} ({info['size_mb']} MB on disk).\n"
                     f"Location: {info['path']}\n"
                     f"Compute Device: {dev_desc}\n"
                     f"Memory State: {loaded_str}"
@@ -762,6 +765,21 @@ class SystemView(ctk.CTkFrame):
                 self.sys_madlad_free_btn.configure(state="normal")
             else:
                 self.sys_madlad_free_btn.configure(state="disabled")
+        elif status in ("size_mismatch", "corrupted"):
+            err_summary = "; ".join(integrity_errors[:2])
+            if len(integrity_errors) > 2:
+                err_summary += f" (+{len(integrity_errors) - 2} more)"
+            self.sys_madlad_desc.configure(
+                text=(
+                    f"Status: Model integrity error ({err_summary}).\n"
+                    f"Location: {info['path']}\n"
+                    f"Target Compute Device: {dev_desc}\n"
+                    "Model weights do not match expected manifest. Re-download to repair."
+                ),
+                text_color=THEME["warning"],
+            )
+            self.sys_madlad_download_btn.configure(text="↻  Repair / Re-download Model")
+            self.sys_madlad_free_btn.configure(state="disabled")
         else:
             missing_str = ", ".join(info["missing_files"]) if info["missing_files"] else "weights missing"
             self.sys_madlad_desc.configure(
@@ -778,7 +796,10 @@ class SystemView(ctk.CTkFrame):
 
         if self.on_mt_status:
             if not installed:
-                status_label = "● MT: Not Installed"
+                if status in ("size_mismatch", "corrupted"):
+                    status_label = "● MT: Corrupted"
+                else:
+                    status_label = "● MT: Not Installed"
             elif is_loaded:
                 status_label = "● MT: Active (RAM)"
             else:

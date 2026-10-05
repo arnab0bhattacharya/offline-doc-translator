@@ -6,8 +6,10 @@ Handles model discovery, offline verification, chunked streaming download with p
 and local directory imports for air-gapped systems.
 """
 
+import hashlib
 import os
 import shutil
+import ssl
 import sys
 import threading
 import time
@@ -15,12 +17,17 @@ from collections.abc import Callable
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 
 APP_FOLDER_NAME = "OfflineDocumentTranslator"
 MODELS_SUBDIR = "models"
 MADLAD_3B_DIR_NAME = "madlad400-3b-ct2-int8"
 
-# Files required for CTranslate2 + SentencePiece execution
+# Pinned commit hash for reproducible and secure downloads
+MADLAD_REVISION = "aa32bbdeba7880eff2096ec044cb155a340a9400"
+
+# Files required for CTranslate2 + SentencePiece execution (minimum size floors)
 REQUIRED_MODEL_FILES = {
     "config.json": 50,  # minimum 50 bytes (actual 224 bytes)
     "shared_vocabulary.json": 50 * 1024,  # minimum 50 KB (actual ~5.48 MB)
@@ -28,17 +35,58 @@ REQUIRED_MODEL_FILES = {
     "model.bin": 1500 * 1024 * 1024,  # minimum 1.5 GB (actual ~2.95 GB)
 }
 
-# Approximate total bytes for progress calculation (~2.96 GB)
-TOTAL_MODEL_BYTES_APPROX = 2_960_000_000
+# Exact byte sizes for downloads and strict verification
+EXACT_MODEL_FILES = {
+    "config.json": 224,  # exact 224 bytes
+    "shared_vocabulary.json": 5_477_099,  # exact ~5.48 MB
+    "spiece.model": 4_427_844,  # exact ~4.43 MB
+    "model.bin": 2_950_208_329,  # exact ~2.95 GB
+}
 
-# Hugging Face CDN endpoints (Nextcloud-AI/madlad400-3b-mt-ct2-int8)
-HF_BASE_URL = "https://huggingface.co/Nextcloud-AI/madlad400-3b-mt-ct2-int8/resolve/main"
+MODEL_FILE_SHA256 = {
+    "config.json": "90fb54962455a4e0a0bc7235c0f063d7e46d9c1a1ae003af8059809abd6aeece",
+    "shared_vocabulary.json": "c327551ce3ca6efc7b437e11a267f79979893332dda8a1d146e2c950815193f8",
+    "spiece.model": "ef11ac9a22c7503492f56d48dce53be20e339b63605983e9f27d2cd0e0f3922c",
+    "model.bin": "77b9fd9ab97c1259d07089b5f854393dad81bc5fb5647d3f9a5d101c94f40daa",
+}
+
+# Approximate total bytes for progress calculation (~2.96 GB)
+TOTAL_MODEL_BYTES_APPROX = 2_960_113_496
+
+# Hugging Face CDN endpoints pinned to immutable commit revision (Nextcloud-AI/madlad400-3b-mt-ct2-int8)
+HF_BASE_URL = f"https://huggingface.co/Nextcloud-AI/madlad400-3b-mt-ct2-int8/resolve/{MADLAD_REVISION}"
 MADLAD_DOWNLOAD_MANIFEST = {
     "config.json": f"{HF_BASE_URL}/config.json",
     "shared_vocabulary.json": f"{HF_BASE_URL}/shared_vocabulary.json",
     "spiece.model": f"{HF_BASE_URL}/spiece.model",
     "model.bin": f"{HF_BASE_URL}/model.bin",
 }
+
+
+class _SystemSSLAdapter(HTTPAdapter):
+    """
+    HTTPAdapter that incorporates native OS (Windows / Linux / macOS) root CA certificates.
+    This resolves SSLCertVerificationError on Windows systems without disabling verification.
+    """
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        ctx = create_urllib3_context()
+        try:
+            ctx.load_default_certs()
+        except Exception:
+            pass
+        kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
+
+
+def create_secure_session() -> requests.Session:
+    """Creates a requests session configured with system trust store certificates."""
+    session = requests.Session()
+    adapter = _SystemSSLAdapter()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
 
 
 def get_models_root_dir() -> str:
@@ -207,7 +255,7 @@ def download_madlad_model(
 ) -> tuple[bool, str]:
     """
     Downloads MADLAD-400 3B INT8 model files from Hugging Face with chunked streaming.
-    Streams to .tmp files and renames atomically upon completion.
+    Streams to .tmp files, verifies integrity (size and SHA256 checksum), and renames atomically upon completion.
 
     Args:
         target_dir: Destination folder. Defaults to get_madlad_model_dir().
@@ -233,68 +281,85 @@ def download_madlad_model(
 
     accumulated_bytes = 0
     headers = {"User-Agent": "OfflineDocTranslator/1.0"}
+    session = create_secure_session()
 
     try:
         for filename, url in MADLAD_DOWNLOAD_MANIFEST.items():
             final_path = os.path.join(dest_dir, filename)
             tmp_path = final_path + ".tmp"
-            min_size = REQUIRED_MODEL_FILES.get(filename, 1)
+            expected_size = REQUIRED_MODEL_FILES.get(filename, 1)
+            expected_hash = MODEL_FILE_SHA256.get(filename)
 
             # Skip if already downloaded and valid
-            if os.path.exists(final_path) and os.path.getsize(final_path) >= min_size:
+            if os.path.exists(final_path) and os.path.getsize(final_path) >= expected_size:
                 accumulated_bytes += os.path.getsize(final_path)
                 continue
 
             if log_cb:
                 log_cb(f"[*] Downloading {filename} from Hugging Face...")
 
-            response = requests.get(url, headers=headers, stream=True, timeout=(10, 60))
-            response.raise_for_status()
+            try:
+                response = session.get(url, headers=headers, stream=True, timeout=(10, 60))
+                response.raise_for_status()
 
-            file_bytes_done = 0
-            t_start = time.time()
+                file_bytes_done = 0
+                hasher = hashlib.sha256()
+                t_start = time.time()
 
-            with open(tmp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1 MB chunks
-                    if cancel_event and cancel_event.is_set():
-                        if log_cb:
-                            log_cb("[!] Download cancelled by user.")
-                        try:
-                            f.close()
-                            os.remove(tmp_path)
-                        except OSError:
-                            pass
-                        return False, "Download cancelled by user."
+                with open(tmp_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1 MB chunks
+                        if cancel_event and cancel_event.is_set():
+                            if log_cb:
+                                log_cb("[!] Download cancelled by user.")
+                            try:
+                                f.close()
+                                if os.path.exists(tmp_path):
+                                    os.remove(tmp_path)
+                            except OSError:
+                                pass
+                            return False, "Download cancelled by user."
 
-                    if chunk:
-                        f.write(chunk)
-                        file_bytes_done += len(chunk)
-                        accumulated_bytes += len(chunk)
+                        if chunk:
+                            f.write(chunk)
+                            hasher.update(chunk)
+                            file_bytes_done += len(chunk)
+                            accumulated_bytes += len(chunk)
 
-                        if progress_cb:
-                            pct = min(99.0, (accumulated_bytes / TOTAL_MODEL_BYTES_APPROX) * 100)
-                            elapsed = time.time() - t_start
-                            speed_mb = (file_bytes_done / (1024 * 1024)) / max(0.1, elapsed)
-                            mb_done = round(accumulated_bytes / (1024 * 1024), 1)
-                            progress_cb(pct, f"Downloading {filename} ({mb_done} MB, {speed_mb:.1f} MB/s)...")
+                            if progress_cb:
+                                pct = min(99.0, (accumulated_bytes / TOTAL_MODEL_BYTES_APPROX) * 100)
+                                elapsed = time.time() - t_start
+                                speed_mb = (file_bytes_done / (1024 * 1024)) / max(0.1, elapsed)
+                                mb_done = round(accumulated_bytes / (1024 * 1024), 1)
+                                progress_cb(pct, f"Downloading {filename} ({mb_done} MB, {speed_mb:.1f} MB/s)...")
 
-            # Validate size floor before committing
-            actual_size = os.path.getsize(tmp_path)
-            if actual_size < min_size:
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-                raise RuntimeError(
-                    f"Downloaded file {filename} is too small ({actual_size} bytes, expected at least {min_size} bytes)."
-                )
+                actual_size = os.path.getsize(tmp_path)
+                if actual_size < expected_size:
+                    raise RuntimeError(
+                        f"Downloaded file {filename} is too small ({actual_size} bytes, expected at least {expected_size} bytes)."
+                    )
 
-            # Atomic move
-            if os.path.exists(final_path):
-                os.remove(final_path)
-            shutil.move(tmp_path, final_path)
-            if log_cb:
-                log_cb(f"[✓] {filename} verified and saved.")
+                if expected_hash:
+                    actual_hash = hasher.hexdigest()
+                    if actual_hash.lower() != expected_hash.lower():
+                        raise RuntimeError(
+                            f"Integrity check failed for {filename}: SHA256 mismatch (got {actual_hash[:8]}..., expected {expected_hash[:8]}...)."
+                        )
+
+                # Atomic move
+                if os.path.exists(final_path):
+                    os.remove(final_path)
+                shutil.move(tmp_path, final_path)
+                if log_cb:
+                    log_cb(f"[✓] {filename} verified and saved.")
+
+            except Exception:
+                # Clean up incomplete temp file on any error
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                raise
 
         if check_madlad_installed(dest_dir):
             if log_cb:
@@ -305,11 +370,22 @@ def download_madlad_model(
         else:
             return False, "Model verification failed after download."
 
+    except requests.exceptions.SSLError as ssl_err:
+        err_msg = (
+            f"SSL certificate verification failed while contacting Hugging Face: {ssl_err}\n"
+            "This typically happens on networks with TLS inspection or corporate proxies. "
+            "Ensure system root certificates are installed or set the SSL_CERT_FILE / REQUESTS_CA_BUNDLE environment variable."
+        )
+        if log_cb:
+            log_cb(f"[!] {err_msg}")
+        return False, err_msg
     except Exception as e:
         err_msg = str(e)
         if log_cb:
             log_cb(f"[!] Error downloading MADLAD model: {err_msg}")
         return False, f"Download failed: {err_msg}"
+    finally:
+        session.close()
 
 
 def import_local_madlad_folder(

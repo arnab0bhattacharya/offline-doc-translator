@@ -132,17 +132,21 @@ class TestMADLADManager(unittest.TestCase):
             self.assertTrue(ok)
             self.assertIn("already installed", msg)
 
-    @patch("engine.madlad_manager.requests.get")
-    def test_download_madlad_model_stream_success(self, mock_get):
+    @patch("engine.madlad_manager.create_secure_session")
+    def test_download_madlad_model_stream_success(self, mock_create_session):
         test_required = {
             "config.json": 50,
             "shared_vocabulary.json": 100,
             "spiece.model": 100,
             "model.bin": 100,
         }
+        mock_session = MagicMock()
+        mock_create_session.return_value = mock_session
+
         with (
             tempfile.TemporaryDirectory() as td,
-            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required),
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required, clear=True),
+            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", {}, clear=True),
         ):
 
             def fake_get(url, **kwargs):
@@ -158,7 +162,7 @@ class TestMADLADManager(unittest.TestCase):
                     mock_resp.iter_content.return_value = [b'{"format_version": 1, "model_type": "madlad400-3b"}']
                 return mock_resp
 
-            mock_get.side_effect = fake_get
+            mock_session.get.side_effect = fake_get
             progress_calls = []
 
             def prog_cb(pct, status):
@@ -170,8 +174,10 @@ class TestMADLADManager(unittest.TestCase):
             self.assertTrue(check_madlad_installed(td))
             self.assertGreater(len(progress_calls), 0)
 
-    @patch("engine.madlad_manager.requests.get")
-    def test_download_madlad_model_cancelled(self, mock_get):
+    @patch("engine.madlad_manager.create_secure_session")
+    def test_download_madlad_model_cancelled(self, mock_create_session):
+        mock_session = MagicMock()
+        mock_create_session.return_value = mock_session
         with tempfile.TemporaryDirectory() as td:
             cancel_evt = threading.Event()
             cancel_evt.set()
@@ -179,22 +185,48 @@ class TestMADLADManager(unittest.TestCase):
             mock_resp = MagicMock()
             mock_resp.raise_for_status.return_value = None
             mock_resp.iter_content.return_value = [b"chunk1"]
-            mock_get.return_value = mock_resp
+            mock_session.get.return_value = mock_resp
 
             ok, msg = download_madlad_model(target_dir=td, cancel_event=cancel_evt)
             self.assertFalse(ok)
             self.assertIn("cancelled", msg)
 
-    @patch("engine.madlad_manager.requests.get")
-    def test_download_madlad_model_http_error(self, mock_get):
+    @patch("engine.madlad_manager.create_secure_session")
+    def test_download_madlad_model_http_error(self, mock_create_session):
+        mock_session = MagicMock()
+        mock_create_session.return_value = mock_session
         with tempfile.TemporaryDirectory() as td:
             mock_resp = MagicMock()
             mock_resp.raise_for_status.side_effect = Exception("404 Client Error: Not Found")
-            mock_get.return_value = mock_resp
+            mock_session.get.return_value = mock_resp
 
             ok, msg = download_madlad_model(target_dir=td)
             self.assertFalse(ok)
             self.assertIn("404 Client Error", msg)
+
+    @patch("engine.madlad_manager.create_secure_session")
+    def test_download_madlad_model_sha256_mismatch(self, mock_create_session):
+        mock_session = MagicMock()
+        mock_create_session.return_value = mock_session
+        test_required = {"config.json": 10}
+        test_hashes = {"config.json": "0000000000000000000000000000000000000000000000000000000000000000"}
+
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch.dict("engine.madlad_manager.REQUIRED_MODEL_FILES", test_required),
+            patch.dict("engine.madlad_manager.MODEL_FILE_SHA256", test_hashes),
+        ):
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status.return_value = None
+            mock_resp.iter_content.return_value = [b"test data with different hash"]
+            mock_session.get.return_value = mock_resp
+
+            ok, msg = download_madlad_model(target_dir=td)
+            self.assertFalse(ok)
+            self.assertIn("SHA256 mismatch", msg)
+            # Ensure .tmp file was deleted
+            tmp_file = os.path.join(td, "config.json.tmp")
+            self.assertFalse(os.path.exists(tmp_file))
 
 
 class TestMADLADBackendLazyLoading(unittest.TestCase):

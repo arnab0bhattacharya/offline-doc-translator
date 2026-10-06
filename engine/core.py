@@ -189,6 +189,53 @@ def verify_placeholders(
     return actual == expected
 
 
+# Case-sensitive units (distinguish bytes B vs bits b, etc.)
+_CASE_SENSITIVE_UNITS = {
+    # Data units
+    "PB", "TB", "GB", "MB", "KB", "B",
+    "Pb", "Tb", "Gb", "Mb", "Kb", "b",
+    "Gbps", "Mbps", "Kbps", "bps",
+    # Power / Frequency / Electrical / Pressure
+    "GHz", "MHz", "kHz", "Hz",
+    "GW", "MW", "kW", "W",
+    "kV", "mV", "V",
+    "mA", "A",
+    "kWh", "MPa", "kPa", "Pa",
+}
+
+# Case-insensitive units (normalized to lowercase)
+_CASE_INSENSITIVE_UNITS = {
+    "kg", "mg", "g",
+    "km", "cm", "mm", "nm", "m",
+    "ml", "l",
+    "bar", "psi", "rpm", "db", "deg",
+    "ms", "ns", "min", "hr", "hrs",
+}
+
+# Attached single-letter scale suffixes (e.g. 42M, 10k, 1.5B, 1T)
+_ATTACHED_SCALE_SUFFIXES = {
+    "M": "M",
+    "k": "k",
+    "K": "k",
+    "B": "B",
+    "T": "T",
+}
+
+# Scale words mapped to canonical unit (e.g. 42 million -> 42M)
+_SCALE_WORDS_MAP = {
+    "million": "M",
+    "thousand": "k",
+    "billion": "B",
+    "trillion": "T",
+}
+
+# Spelled-out ordinals (first through tenth)
+_ORDINAL_WORDS_EN = {
+    "1": "first", "2": "second", "3": "third", "4": "fourth", "5": "fifth",
+    "6": "sixth", "7": "seventh", "8": "eighth", "9": "ninth", "10": "tenth",
+}
+_ORDINAL_WORD_TO_NUM = {v: k for k, v in _ORDINAL_WORDS_EN.items()}
+
 _MONTH_NAMES_EN = {
     "1": "january",
     "2": "february",
@@ -203,26 +250,120 @@ _MONTH_NAMES_EN = {
     "11": "november",
     "12": "december",
 }
+_MONTH_ABBRS_EN = {
+    "1": "jan", "2": "feb", "3": "mar", "4": "apr",
+    "6": "jun", "7": "jul", "8": "aug",
+    "9": "sep", "10": "oct", "11": "nov", "12": "dec",
+}
 
 
 def extract_numeric_tokens(text: str) -> list[str]:
-    """Extracts numeric values without commas, ordinals, or percentages for consistency checks."""
+    """
+    Extracts numeric tokens, preserving:
+    - Pure numbers: '2024', '1250000', '15.5'
+    - Units (case-sensitive or normalized): '500kg', '32GB', '10Gbps'
+    - Attached scales: '42M', '42k', '1.5B'
+    - Ordinals: '1', '2' (from '1st', '2nd')
+    - Percentage: '15.5' (with '%' stripped to match existing behavior)
+    Excludes identifier-like strings containing underscores (e.g. '500kg_v2').
+    """
     normalized = unicodedata.normalize("NFKC", text)
-    pattern = r"(?<![A-Za-z0-9])\d+(?:,\d{3})*(?:\.\d+)?(?:%|st|nd|rd|th)?(?![A-Za-z0-9])"
-    matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
-    cleaned = []
-    for m in matches:
-        val = re.sub(r"(?:%|st|nd|rd|th)$", "", m, flags=re.IGNORECASE)
-        val = val.replace(",", "").strip()
-        if val:
-            cleaned.append(val)
-    return cleaned
+
+    pattern = re.compile(
+        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(%|\s*[A-Za-z]+)?(?![A-Za-z0-9_])"
+    )
+    tokens = []
+    for match in pattern.finditer(normalized):
+        raw_num = match.group(1).replace(",", "")
+        suffix = match.group(2)
+
+        if not suffix:
+            tokens.append(raw_num)
+            continue
+
+        has_space = suffix.startswith(" ")
+        s_clean = suffix.strip()
+
+        if s_clean == "%":
+            tokens.append(raw_num)
+        elif s_clean.lower() in ("st", "nd", "rd", "th"):
+            tokens.append(raw_num)
+        elif not has_space and s_clean in _ATTACHED_SCALE_SUFFIXES:
+            tokens.append(f"{raw_num}{_ATTACHED_SCALE_SUFFIXES[s_clean]}")
+        elif s_clean in _CASE_SENSITIVE_UNITS:
+            tokens.append(f"{raw_num}{s_clean}")
+        elif s_clean.lower() in _CASE_INSENSITIVE_UNITS:
+            tokens.append(f"{raw_num}{s_clean.lower()}")
+        else:
+            if has_space:
+                tokens.append(raw_num)
+            else:
+                # Attached unrecognized alphanumeric suffix -> identifier, ignore
+                pass
+    return tokens
+
+
+def _extract_scale_word_equivalences(text: str) -> Counter:
+    """Extracts phrases like '42 million' -> '42M', '10 thousand' -> '10k'."""
+    norm = unicodedata.normalize("NFKC", text)
+    scales: Counter[str] = Counter()
+    for m in re.finditer(
+        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s+(million|billion|thousand|trillion)(?![A-Za-z0-9_])",
+        norm,
+        re.IGNORECASE,
+    ):
+        raw_num = m.group(1).replace(",", "")
+        unit = _SCALE_WORDS_MAP[m.group(2).lower()]
+        scales[f"{raw_num}{unit}"] += 1
+    return scales
+
+
+def _extract_source_month_numbers(text: str) -> Counter:
+    """Detects numbers in source text explicitly used in month/date context."""
+    norm = unicodedata.normalize("NFKC", text)
+    months: Counter[str] = Counter()
+    # Japanese 1月 through 12月
+    for m in re.finditer(r"(?<!\d)(1[0-2]|[1-9])\s*月", norm):
+        months[m.group(1)] += 1
+    # English month words (for en2ja)
+    for num, name in _MONTH_NAMES_EN.items():
+        if re.search(rf"\b{name}\b", norm, re.IGNORECASE):
+            months[num] += 1
+    return months
+
+
+def _extract_target_month_counts(text: str) -> Counter:
+    """Extracts word-bounded English month names and abbreviations from target text."""
+    norm = unicodedata.normalize("NFKC", text)
+    months: Counter[str] = Counter()
+    for num, name in _MONTH_NAMES_EN.items():
+        count = len(re.findall(rf"\b{name}\b", norm, re.IGNORECASE))
+        if count > 0:
+            months[num] += count
+    for num, abbr in _MONTH_ABBRS_EN.items():
+        count = len(re.findall(rf"\b{abbr}\.?(?![A-Za-z0-9_])", norm, re.IGNORECASE))
+        if count > 0:
+            months[num] += count
+    return months
+
+
+def _extract_target_ordinal_counts(text: str) -> Counter:
+    """Extracts word-bounded spelled-out English ordinals (first -> 1, second -> 2)."""
+    norm = unicodedata.normalize("NFKC", text)
+    ordinals: Counter[str] = Counter()
+    for word, num in _ORDINAL_WORD_TO_NUM.items():
+        count = len(re.findall(rf"\b{word}\b", norm, re.IGNORECASE))
+        if count > 0:
+            ordinals[num] += count
+    return ordinals
 
 
 def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult:
     """
     Checks that numbers present in the source text appear in the target text.
-    Accounts for localized month names (e.g. '10月' -> 'October').
+    Preserves units and scale multipliers (e.g. '500kg', '42M').
+    Accounts for localized month names when source has month context (e.g. '10月' -> 'October').
+    Supports spelled-out English ordinals (e.g. 第1 -> 'first').
     Compares token counts (multiset semantics).
     Returns NumericAuditResult(passed, missing, added, src_tokens, tgt_tokens).
     """
@@ -234,19 +375,38 @@ def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult
             passed=True, missing=[], added=tgt_nums, src_tokens=[], tgt_tokens=tgt_nums
         )
 
-    target_lower = target_text.lower()
+    src_month_nums = _extract_source_month_numbers(source_text)
+    tgt_month_counts = _extract_target_month_counts(target_text)
+    tgt_ordinal_counts = _extract_target_ordinal_counts(target_text)
+    tgt_scale_words = _extract_scale_word_equivalences(target_text)
+
     tgt_counter = Counter(tgt_nums)
     missing: list[str] = []
 
     for num in src_nums:
+        # 1. Direct match in target numeric tokens
         if tgt_counter.get(num, 0) > 0:
             tgt_counter[num] -= 1
             continue
 
-        if num in _MONTH_NAMES_EN:
-            month_word = _MONTH_NAMES_EN[num]
-            if month_word in target_lower or month_word[:3] in target_lower:
-                continue
+        # 2. Scale word match (e.g. source '42M' matched by target '42 million')
+        if num in tgt_scale_words and tgt_scale_words[num] > 0:
+            tgt_scale_words[num] -= 1
+            base_num = re.sub(r"[A-Za-z]+$", "", num)
+            if tgt_counter.get(base_num, 0) > 0:
+                tgt_counter[base_num] -= 1
+            continue
+
+        # 3. Spelled-out ordinal word match (e.g. 第1 -> 'first')
+        if num in tgt_ordinal_counts and tgt_ordinal_counts[num] > 0:
+            tgt_ordinal_counts[num] -= 1
+            continue
+
+        # 4. Month name match: ONLY if source number was in explicit month context
+        if num in src_month_nums and src_month_nums[num] > 0 and tgt_month_counts.get(num, 0) > 0:
+            src_month_nums[num] -= 1
+            tgt_month_counts[num] -= 1
+            continue
 
         missing.append(num)
 
@@ -830,6 +990,7 @@ class TranslationEngine:
                         category="cache",
                         location=location_id,
                     )
+                self._cache_mgr.delete(key=key, direction=direction, fingerprint=fp, mode=mode_str)
                 if key in dir_cache:
                     del dir_cache[key]
                 cached_trans = None

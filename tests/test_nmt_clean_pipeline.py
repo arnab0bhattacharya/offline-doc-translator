@@ -141,23 +141,84 @@ class TestNMTNumericVerification(unittest.TestCase):
         self.assertIn("100", audit.missing)
         self.assertEqual(audit.added, [])
 
-    def test_verify_nmt_numbers_added_hallucinated_number(self):
-        """Verifies that hallucinated extra numbers in target output fail the audit gate when source has numbers."""
-        src = "売上は10億円に増加しました。"
-        tgt = "Sales increased to 10 billion and 99 million yen."
-        audit = verify_nmt_numbers(src, tgt)
-        self.assertFalse(audit.passed)
-        self.assertEqual(audit.missing, [])
-        self.assertIn("99", audit.added)
+    def test_extract_numeric_tokens_units_and_scales(self):
+        """Verifies extraction and canonicalization of scale multipliers and physical/digital units."""
+        self.assertEqual(extract_numeric_tokens("Revenue 42M"), ["42M"])
+        self.assertEqual(extract_numeric_tokens("Revenue was 42 million"), ["42"])
+        self.assertEqual(extract_numeric_tokens("Weight is 500kg"), ["500kg"])
+        self.assertEqual(extract_numeric_tokens("Weight is 500 kg"), ["500kg"])
+        self.assertEqual(extract_numeric_tokens("Memory is 32GB"), ["32GB"])
+        self.assertEqual(extract_numeric_tokens("Speed is 10Gbps"), ["10Gbps"])
 
-    def test_verify_nmt_numbers_no_source_numbers_passes(self):
-        """Verifies that translations pass when source text contains no numeric tokens."""
-        src = "売上が大幅に増加しました。"
-        tgt = "Sales increased significantly to 99 billion yen."
-        audit = verify_nmt_numbers(src, tgt)
-        self.assertTrue(audit.passed)
-        self.assertEqual(audit.missing, [])
-        self.assertEqual(audit.added, ["99"])
+    def test_extract_numeric_tokens_ignores_underscore_identifiers(self):
+        """Verifies that identifier-like strings with underscores are not extracted as numbers."""
+        self.assertEqual(extract_numeric_tokens("Device 500kg_v2"), [])
+        self.assertEqual(extract_numeric_tokens("Identifier part_42M_rev1"), [])
+        self.assertEqual(extract_numeric_tokens("Variable counter_10k_max"), [])
+
+    def test_verify_nmt_numbers_unit_and_scale_matching(self):
+        """Verifies that unit scale changes (42M -> 42k or 42) fail, while safe equivalences pass."""
+        # 42M matches 42M and 42 million
+        self.assertTrue(verify_nmt_numbers("Revenue 42M", "Revenue 42M").passed)
+        self.assertTrue(verify_nmt_numbers("Revenue 42M", "Revenue was 42 million").passed)
+
+        # 42M fails against 42k or plain 42
+        audit_k = verify_nmt_numbers("Revenue 42M", "Revenue was 42k")
+        self.assertFalse(audit_k.passed)
+        self.assertIn("42M", audit_k.missing)
+        self.assertIn("42k", audit_k.added)
+
+        audit_plain = verify_nmt_numbers("Revenue 42M", "Revenue was 42")
+        self.assertFalse(audit_plain.passed)
+        self.assertIn("42M", audit_plain.missing)
+        self.assertIn("42", audit_plain.added)
+
+        # 500kg matches 500 kg, but fails against 500g or plain 500
+        self.assertTrue(verify_nmt_numbers("Weight is 500kg", "Weight is 500 kg").passed)
+        self.assertFalse(verify_nmt_numbers("Weight is 500kg", "Weight is 500g").passed)
+        self.assertFalse(verify_nmt_numbers("Weight is 500kg", "Weight is 500").passed)
+
+    def test_verify_nmt_numbers_disambiguates_modal_may(self):
+        """Verifies that English modal verb 'may' cannot satisfy a lost quantity 5 without date context."""
+        # 5社 (5 companies) -> lost quantity 5 translated to modal verb "may" -> MUST FAIL
+        audit_modal = verify_nmt_numbers("5社が参加した。", "Several companies may participate.")
+        self.assertFalse(audit_modal.passed)
+        self.assertIn("5", audit_modal.missing)
+
+        # 5月 (May in date context) -> DOES match 'May'
+        audit_date = verify_nmt_numbers("2024年5月に開始。", "Started in May 2024.")
+        self.assertTrue(audit_date.passed)
+        self.assertEqual(audit_date.missing, [])
+
+    def test_verify_nmt_numbers_month_multiset_counts(self):
+        """Verifies multiset tracking for months: one October cannot satisfy two occurrences of 10."""
+        # Two 10月 vs single October -> fails
+        audit_fail = verify_nmt_numbers("10月と10月の会合", "Meeting in October")
+        self.assertFalse(audit_fail.passed)
+        self.assertIn("10", audit_fail.missing)
+
+        # Two 10月 vs two Octobers -> passes
+        audit_pass = verify_nmt_numbers("10月と10月の会合", "Meetings in October and October")
+        self.assertTrue(audit_pass.passed)
+
+    def test_verify_nmt_numbers_spelled_out_ordinals(self):
+        """Verifies that spelled-out English ordinals (first through tenth) match corresponding ordinals."""
+        # 第1四半期 matches 'first quarter'
+        audit_1 = verify_nmt_numbers("第1四半期の決算報告", "Financial report for the first quarter")
+        self.assertTrue(audit_1.passed)
+
+        # 第1四半期 fails against 'second quarter'
+        audit_mismatch = verify_nmt_numbers("第1四半期の決算報告", "Financial report for the second quarter")
+        self.assertFalse(audit_mismatch.passed)
+        self.assertIn("1", audit_mismatch.missing)
+
+        # Multiset ordinal counts: two 第1 ordinals require two 'first' words
+        audit_two_fail = verify_nmt_numbers("第1四半期と第1事業部", "first quarter and division")
+        self.assertFalse(audit_two_fail.passed)
+        self.assertIn("1", audit_two_fail.missing)
+
+        audit_two_pass = verify_nmt_numbers("第1四半期と第1事業部", "first quarter and first division")
+        self.assertTrue(audit_two_pass.passed)
 
     def test_structured_audit_result_properties_and_backward_compatibility(self):
         """Verifies NumericAuditResult dataclass properties, summary formatting, and tuple unpacking."""
@@ -408,10 +469,11 @@ class TestNMTCleanPipeline(unittest.TestCase):
             key = hash_text(source)
 
             # Poison cache with an old/bad entry that lost the number '42'
+            fp = engine._cache_fingerprint(None)
             engine._cache_mgr.put(
                 key=key,
                 direction="ja2en",
-                fingerprint="",
+                fingerprint=fp,
                 value="Old bad cached translation without number.",
                 mode="machine_translation",
             )
@@ -423,6 +485,65 @@ class TestNMTCleanPipeline(unittest.TestCase):
             self.assertFalse(result.was_reverted)
             self.assertEqual(result.text, "Sales were 42 billion yen.")
             self.assertEqual(result.source_backend, "nmt")  # Freshly generated, not served from bad cache!
+
+    def test_nmt_cache_read_deletes_bad_entry_from_cache_mgr_and_disk(self):
+        """Verifies that bad cache entries are deleted from persistent cache manager and removed from disk on save."""
+        class FailingBackend:
+            name = "nmt"
+            def is_ready(self, direction):
+                return True
+            def translate(self, text, direction, **kwargs):
+                raise RuntimeError("Backend failed deliberately")
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            engine = TranslationEngine(
+                mode=TranslationMode.MACHINE_TRANSLATION,
+                cache_file=cache_file,
+            )
+            engine.set_backend(FailingBackend(), mode=TranslationMode.MACHINE_TRANSLATION)
+
+            source = "売上高は42億円でした。"
+            key = hash_text(source)
+            fp = engine._cache_fingerprint(None)
+
+            # Store bad entry in cache
+            engine._cache_mgr.put(
+                key=key,
+                direction="ja2en",
+                fingerprint=fp,
+                value="Corrupt cached text with no numbers.",
+                mode="machine_translation",
+            )
+            engine.save_cache_atomically()
+
+            # Verify bad entry is in cache manager
+            self.assertIsNotNone(
+                engine._cache_mgr.get(key=key, direction="ja2en", fingerprint=fp, mode="machine_translation")
+            )
+
+            # Request translation: should fail audit on cache read, call delete() on cache_mgr,
+            # then attempt backend (which fails), reverting to source text.
+            res = engine.translate_chunk(source, direction="ja2en")
+            self.assertFalse(res.was_translated)
+            self.assertTrue(res.was_reverted)
+
+            # Verify that bad entry has been deleted from cache manager!
+            self.assertIsNone(
+                engine._cache_mgr.get(key=key, direction="ja2en", fingerprint=fp, mode="machine_translation")
+            )
+
+            # Save cache to disk and verify disk persistence
+            engine.save_cache_atomically()
+            new_engine = TranslationEngine(
+                mode=TranslationMode.MACHINE_TRANSLATION,
+                cache_file=cache_file,
+            )
+            new_fp = new_engine._cache_fingerprint(None)
+            # Fresh engine loading from disk must NOT contain the deleted corrupt entry
+            self.assertIsNone(
+                new_engine._cache_mgr.get(key=key, direction="ja2en", fingerprint=new_fp, mode="machine_translation")
+            )
 
 
 

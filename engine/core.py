@@ -311,6 +311,18 @@ _MONTH_ABBRS_EN = {
     "12": "dec",
 }
 
+_MAY_DATE_STRICT = re.compile(
+    r"(?:"
+    r"(?<![A-Za-z0-9_])(?i:in|during|for|on|of|by|since|until|from|as\s+of|early|mid|mid-|late)\s+May(?![A-Za-z0-9_])"
+    r"|"
+    r"(?<![A-Za-z0-9_])May\s+(?:\d{1,2}(?:st|nd|rd|th)?|\d{4})(?![A-Za-z0-9_])"
+    r"|"
+    r"(?<![A-Za-z0-9_])\d{1,2}(?:st|nd|rd|th)?\s+(?:(?i:of)\s+)?May(?![A-Za-z0-9_])"
+    r"|"
+    r"(?<![A-Za-z0-9_])May\s*,\s*\d{4}(?![A-Za-z0-9_])"
+    r")"
+)
+
 
 def extract_numeric_tokens(text: str) -> list[str]:
     """
@@ -369,76 +381,118 @@ def _extract_scale_word_equivalences(text: str) -> Counter:
     return scales
 
 
-def _extract_source_month_numbers(text: str) -> Counter:
-    """Detects numbers in source text explicitly used in month/date context."""
+def _extract_month_counts(text: str) -> Counter:
+    """
+    Extracts month counts from Japanese date context or English month names.
+    Applies strict contextual anchoring for 'May' to prevent English modal auxiliary verb
+    confusion ('may increase' vs 'May 2024' or 'in May').
+    Uses ASCII boundary lookarounds to correctly handle CJK-English character boundaries.
+    """
     norm = unicodedata.normalize("NFKC", text)
     months: Counter[str] = Counter()
     # Japanese 1月 through 12月
     for m in re.finditer(r"(?<!\d)(1[0-2]|[1-9])\s*月", norm):
         months[m.group(1)] += 1
-    # English month words (for en2ja)
+    # English full months (except May, which requires strict date context)
     for num, name in _MONTH_NAMES_EN.items():
-        if re.search(rf"\b{name}\b", norm, re.IGNORECASE):
-            months[num] += 1
+        if num == "5":
+            continue
+        count = len(re.findall(rf"(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])", norm, re.IGNORECASE))
+        if count > 0:
+            months[num] += count
+    # May with strict date context and capitalization
+    may_count = len(_MAY_DATE_STRICT.findall(norm))
+    if may_count > 0:
+        months["5"] += may_count
+    # English month abbreviations
+    for num, abbr in _MONTH_ABBRS_EN.items():
+        count = len(re.findall(rf"(?<![A-Za-z0-9_]){abbr}\.?(?![A-Za-z0-9_])", norm, re.IGNORECASE))
+        if count > 0:
+            months[num] += count
     return months
+
+
+def _extract_source_month_numbers(text: str) -> Counter:
+    return _extract_month_counts(text)
 
 
 def _extract_target_month_counts(text: str) -> Counter:
-    """Extracts word-bounded English month names and abbreviations from target text."""
-    norm = unicodedata.normalize("NFKC", text)
-    months: Counter[str] = Counter()
-    for num, name in _MONTH_NAMES_EN.items():
-        count = len(re.findall(rf"\b{name}\b", norm, re.IGNORECASE))
-        if count > 0:
-            months[num] += count
-    for num, abbr in _MONTH_ABBRS_EN.items():
-        count = len(re.findall(rf"\b{abbr}\.?(?![A-Za-z0-9_])", norm, re.IGNORECASE))
-        if count > 0:
-            months[num] += count
-    return months
+    return _extract_month_counts(text)
 
 
-def _extract_target_ordinal_counts(text: str) -> Counter:
-    """Extracts word-bounded spelled-out English ordinals (first -> 1, second -> 2)."""
+def _extract_ordinal_counts(text: str) -> Counter:
+    """Extracts spelled-out English ordinals (first -> 1, second -> 2) using ASCII word boundaries."""
     norm = unicodedata.normalize("NFKC", text)
     ordinals: Counter[str] = Counter()
     for word, num in _ORDINAL_WORD_TO_NUM.items():
-        count = len(re.findall(rf"\b{word}\b", norm, re.IGNORECASE))
+        count = len(re.findall(rf"(?<![A-Za-z0-9_]){word}(?![A-Za-z0-9_])", norm, re.IGNORECASE))
         if count > 0:
             ordinals[num] += count
     return ordinals
+
+
+def _extract_target_ordinal_counts(text: str) -> Counter:
+    return _extract_ordinal_counts(text)
 
 
 def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult:
     """
     Checks that numbers present in the source text appear in the target text.
     Preserves units and scale multipliers (e.g. '500kg', '42M').
-    Accounts for localized month names when source has month context (e.g. '10月' -> 'October').
-    Supports spelled-out English ordinals (e.g. 第1 -> 'first').
+    Accounts for localized month names and date context symmetrically (e.g. '10月' <-> 'October').
+    Supports spelled-out English ordinals symmetrically (e.g. 第1 <-> 'first').
+    Supports scale-word equivalences symmetrically (e.g. '42 million' <-> '42M').
     Compares token counts (multiset semantics).
     Returns NumericAuditResult(passed, missing, added, src_tokens, tgt_tokens).
     """
     src_nums = extract_numeric_tokens(source_text)
     tgt_nums = extract_numeric_tokens(target_text)
 
-    if not src_nums:
-        return NumericAuditResult(passed=True, missing=[], added=tgt_nums, src_tokens=[], tgt_tokens=tgt_nums)
-
-    src_month_nums = _extract_source_month_numbers(source_text)
-    tgt_month_counts = _extract_target_month_counts(target_text)
-    tgt_ordinal_counts = _extract_target_ordinal_counts(target_text)
+    src_month_counts = _extract_month_counts(source_text)
+    tgt_month_counts = _extract_month_counts(target_text)
+    src_ordinal_counts = _extract_ordinal_counts(source_text)
+    tgt_ordinal_counts = _extract_ordinal_counts(target_text)
+    src_scale_words = _extract_scale_word_equivalences(source_text)
     tgt_scale_words = _extract_scale_word_equivalences(target_text)
+
+    if not src_nums and not src_month_counts and not src_ordinal_counts:
+        return NumericAuditResult(passed=True, missing=[], added=tgt_nums, src_tokens=[], tgt_tokens=tgt_nums)
 
     tgt_counter = Counter(tgt_nums)
     missing: list[str] = []
 
     for num in src_nums:
-        # 1. Direct match in target numeric tokens
+        # Check if this source number is scaled by a scale word (e.g. 42 in '42 million')
+        scaled_tok = None
+        for st in list(src_scale_words.keys()):
+            if src_scale_words[st] > 0 and (st == f"{num}M" or st == f"{num}k" or st == f"{num}B" or st == f"{num}T"):
+                scaled_tok = st
+                break
+
+        if scaled_tok:
+            # 1. Matches attached scale in target (e.g. source '42 million' -> target '42M')
+            if tgt_counter.get(scaled_tok, 0) > 0:
+                tgt_counter[scaled_tok] -= 1
+                src_scale_words[scaled_tok] -= 1
+                continue
+            # 2. Matches scale word in target (e.g. source '42 million' -> target '42 million')
+            if tgt_scale_words.get(scaled_tok, 0) > 0:
+                tgt_scale_words[scaled_tok] -= 1
+                src_scale_words[scaled_tok] -= 1
+                if tgt_counter.get(num, 0) > 0:
+                    tgt_counter[num] -= 1
+                continue
+            # Scaled number in source did not match equivalent in target
+            missing.append(scaled_tok)
+            src_scale_words[scaled_tok] -= 1
+            continue
+
+        # Direct match in target numeric tokens
         if tgt_counter.get(num, 0) > 0:
             tgt_counter[num] -= 1
             continue
 
-        # 2. Scale word match (e.g. source '42M' matched by target '42 million')
+        # Source attached scale matched by target scale word (e.g. source '42M' -> target '42 million')
         if num in tgt_scale_words and tgt_scale_words[num] > 0:
             tgt_scale_words[num] -= 1
             base_num = re.sub(r"[A-Za-z]+$", "", num)
@@ -446,18 +500,32 @@ def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult
                 tgt_counter[base_num] -= 1
             continue
 
-        # 3. Spelled-out ordinal word match (e.g. 第1 -> 'first')
+        # Spelled-out ordinal word match (e.g. source 第1 -> target 'first')
         if num in tgt_ordinal_counts and tgt_ordinal_counts[num] > 0:
             tgt_ordinal_counts[num] -= 1
             continue
 
-        # 4. Month name match: ONLY if source number was in explicit month context
-        if num in src_month_nums and src_month_nums[num] > 0 and tgt_month_counts.get(num, 0) > 0:
-            src_month_nums[num] -= 1
+        # Month match (e.g. source 5月 -> target May)
+        if num in src_month_counts and src_month_counts[num] > 0 and tgt_month_counts.get(num, 0) > 0:
+            src_month_counts[num] -= 1
             tgt_month_counts[num] -= 1
             continue
 
         missing.append(num)
+
+    # Reverse direction checks (e.g. en2ja):
+    # Leftover target numbers against source words (months and ordinals)
+    for num in list(tgt_counter.keys()):
+        # Reverse month matching (source May 2024 -> target 2024年5月)
+        while tgt_counter[num] > 0 and src_month_counts.get(num, 0) > 0 and tgt_month_counts.get(num, 0) > 0:
+            tgt_counter[num] -= 1
+            src_month_counts[num] -= 1
+            tgt_month_counts[num] -= 1
+
+        # Reverse ordinal matching (source first quarter -> target 第1四半期)
+        while tgt_counter[num] > 0 and src_ordinal_counts.get(num, 0) > 0:
+            tgt_counter[num] -= 1
+            src_ordinal_counts[num] -= 1
 
     added = [k for k, count in tgt_counter.items() if count > 0 for _ in range(count)]
     passed = len(missing) == 0 and len(added) == 0

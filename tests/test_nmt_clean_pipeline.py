@@ -232,6 +232,76 @@ class TestNMTNumericVerification(unittest.TestCase):
         self.assertFalse(audit[0])
         self.assertEqual(audit[1], ["100"])
 
+    def test_verify_nmt_numbers_bidirectional_scale_words(self):
+        """Verifies scale-word equivalences operate symmetrically in both directions."""
+        # Attached to word
+        self.assertTrue(verify_nmt_numbers("Revenue 42M", "Revenue was 42 million").passed)
+        # Word to attached (reverse)
+        self.assertTrue(verify_nmt_numbers("Revenue was 42 million", "Revenue 42M").passed)
+        # Word to word
+        self.assertTrue(verify_nmt_numbers("Revenue was 42 million", "Revenue was 42 million").passed)
+        # Scale mismatch
+        audit_scale_diff = verify_nmt_numbers("Revenue was 42 million", "Revenue was 42 thousand")
+        self.assertFalse(audit_scale_diff.passed)
+        self.assertIn("42M", audit_scale_diff.missing)
+        self.assertIn("42", audit_scale_diff.added)
+
+        audit_scale_k = verify_nmt_numbers("Revenue was 42 million", "Revenue 42k")
+        self.assertFalse(audit_scale_k.passed)
+        self.assertIn("42M", audit_scale_k.missing)
+        self.assertIn("42k", audit_scale_k.added)
+
+        # Scale dropped
+        audit_plain = verify_nmt_numbers("Revenue was 42 million", "Revenue was 42")
+        self.assertFalse(audit_plain.passed)
+        self.assertIn("42M", audit_plain.missing)
+        self.assertIn("42", audit_plain.added)
+
+    def test_verify_nmt_numbers_bidirectional_month_conversion(self):
+        """Verifies month equivalences operate symmetrically in ja2en and en2ja."""
+        # ja2en
+        self.assertTrue(verify_nmt_numbers("Started in 5月 2024", "Started in May 2024").passed)
+        # en2ja (reverse)
+        self.assertTrue(verify_nmt_numbers("Started in May 2024", "2024年5月に開始").passed)
+        # Month alteration in reverse
+        audit_mismatch = verify_nmt_numbers("Started in May 2024", "2024年10月に開始")
+        self.assertFalse(audit_mismatch.passed)
+        self.assertIn("10", audit_mismatch.added)
+
+        # Other months en2ja
+        self.assertTrue(verify_nmt_numbers("Started in October 2024", "2024年10月に開始").passed)
+
+    def test_verify_nmt_numbers_bidirectional_spelled_out_ordinals(self):
+        """Verifies ordinal word equivalences operate symmetrically across CJK boundaries."""
+        # ja2en
+        self.assertTrue(verify_nmt_numbers("第1四半期と2024年", "2024年とfirst quarter").passed)
+        # en2ja (reverse)
+        self.assertTrue(verify_nmt_numbers("2024年とfirst quarter", "第1四半期と2024年").passed)
+        # Ordinal alteration in reverse
+        audit_mismatch = verify_nmt_numbers("2024年とfirst quarter", "第2四半期と2024年")
+        self.assertFalse(audit_mismatch.passed)
+        self.assertIn("2", audit_mismatch.added)
+
+        # Correct second quarter
+        self.assertTrue(verify_nmt_numbers("2024年とsecond quarter", "第2四半期と2024年").passed)
+
+    def test_verify_nmt_numbers_may_modal_verb_strict_date_anchoring(self):
+        """Verifies strict date anchoring prevents English modal verb 'may' from satisfying missing month."""
+        # Missing date number 5 translated to modal verb "may" -> REJECTED
+        audit_modal = verify_nmt_numbers("5月の売上は増加した", "Sales may increase.")
+        self.assertFalse(audit_modal.passed)
+        self.assertIn("5", audit_modal.missing)
+
+        audit_modal_cap = verify_nmt_numbers("5月の売上は増加した", "Sales May increase.")
+        self.assertFalse(audit_modal_cap.passed)
+        self.assertIn("5", audit_modal_cap.missing)
+
+        # Proper preposition date context -> ACCEPTED
+        self.assertTrue(verify_nmt_numbers("5月の売上は増加した", "Sales in May increased.").passed)
+        # Proper month + year date context -> ACCEPTED
+        self.assertTrue(verify_nmt_numbers("2024年5月に開始", "Started in May 2024.").passed)
+        self.assertTrue(verify_nmt_numbers("2024年5月に開始", "Started in late May 2024.").passed)
+
 
 class TestNMTCleanPipeline(unittest.TestCase):
     """Test that NMT translates clean unmasked text and applies post-translation glossary."""

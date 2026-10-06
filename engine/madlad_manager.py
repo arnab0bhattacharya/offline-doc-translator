@@ -97,9 +97,7 @@ def verify_madlad_integrity(model_dir: str | None = None) -> tuple[bool, list[st
         try:
             actual_size = os.path.getsize(file_path)
             if actual_size != exact_size:
-                errors.append(
-                    f"{filename}: size mismatch (got {actual_size} bytes, expected {exact_size} bytes)"
-                )
+                errors.append(f"{filename}: size mismatch (got {actual_size} bytes, expected {exact_size} bytes)")
                 continue
         except OSError as e:
             errors.append(f"{filename}: could not read file size ({e})")
@@ -117,7 +115,6 @@ def verify_madlad_integrity(model_dir: str | None = None) -> tuple[bool, list[st
                 errors.append(f"{filename}: could not compute checksum ({e})")
 
     return len(errors) == 0, errors
-
 
 
 class _SystemSSLAdapter(HTTPAdapter):
@@ -151,7 +148,6 @@ def create_secure_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
-
 
 
 def get_models_root_dir() -> str:
@@ -257,7 +253,6 @@ def check_madlad_installed(
 
     # Check for vocabulary file (either .json or .txt)
     vocab_ok = False
-    vocab_exact = EXACT_MODEL_FILES.get("shared_vocabulary.json", 5_477_099)
     min_vocab = REQUIRED_MODEL_FILES.get(
         "shared_vocabulary.json", REQUIRED_MODEL_FILES.get("shared_vocabulary.txt", 50 * 1024)
     )
@@ -284,9 +279,7 @@ def check_madlad_installed(
     return vocab_ok
 
 
-def get_madlad_model_info(
-    model_dir: str | None = None, check_hashes: bool = False
-) -> dict[str, Any]:
+def get_madlad_model_info(model_dir: str | None = None, check_hashes: bool = False) -> dict[str, Any]:
     """
     Returns detailed diagnostic info about local MADLAD model status.
     Distinguishes between uninstalled, size-mismatched/corrupted, ready (exact sizes verified),
@@ -320,9 +313,7 @@ def get_madlad_model_info(
                 size = os.path.getsize(file_path)
                 total_bytes += size
                 if size != expected_size:
-                    integrity_errors.append(
-                        f"{filename}: size mismatch (got {size} B, expected {expected_size} B)"
-                    )
+                    integrity_errors.append(f"{filename}: size mismatch (got {size} B, expected {expected_size} B)")
             except OSError as e:
                 integrity_errors.append(f"{filename}: could not read size ({e})")
         else:
@@ -330,7 +321,6 @@ def get_madlad_model_info(
 
     # SentencePiece model
     sp_found = False
-    sp_expected = EXACT_MODEL_FILES.get("spiece.model", 4_427_844)
     min_sp = REQUIRED_MODEL_FILES.get("spiece.model", 1 * 1024 * 1024)
     for sp_name in ("spiece.model", "sentencepiece.model", "sentencepiece.bpe.model"):
         sp_path = os.path.join(target_dir, sp_name)
@@ -353,7 +343,6 @@ def get_madlad_model_info(
 
     # Vocabulary file
     vocab_found = False
-    vocab_expected = EXACT_MODEL_FILES.get("shared_vocabulary.json", 5_477_099)
     min_vocab = REQUIRED_MODEL_FILES.get("shared_vocabulary.json", 50 * 1024)
     for vocab_name in ("shared_vocabulary.json", "shared_vocabulary.txt"):
         vpath = os.path.join(target_dir, vocab_name)
@@ -406,7 +395,6 @@ def get_madlad_model_info(
         "size_mb": round(total_bytes / (1024 * 1024), 1),
         "missing_files": missing,
     }
-
 
 
 def download_madlad_model(
@@ -642,4 +630,3 @@ def import_local_madlad_folder(
         return False, f"Destination integrity verification failed after copying: {dst_err_msg}"
     except Exception as e:
         return False, f"Failed to copy model files: {e}"
-

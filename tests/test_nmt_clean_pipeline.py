@@ -14,7 +14,6 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from engine.core import (
-    NumericAuditResult,
     TranslationEngine,
     TranslationMode,
     TranslationResult,
@@ -22,7 +21,6 @@ from engine.core import (
     hash_text,
     verify_nmt_numbers,
 )
-
 
 
 class MockNMTBackend:
@@ -235,7 +233,6 @@ class TestNMTNumericVerification(unittest.TestCase):
         self.assertEqual(audit[1], ["100"])
 
 
-
 class TestNMTCleanPipeline(unittest.TestCase):
     """Test that NMT translates clean unmasked text and applies post-translation glossary."""
 
@@ -438,14 +435,12 @@ class TestNMTCleanPipeline(unittest.TestCase):
             self.assertIn(key, engine.failed_this_run)
 
             # 3. Cache must NOT contain the corrupted output
-            cached = engine._cache_mgr.get(
-                key=key, direction="ja2en", fingerprint="", mode="machine_translation"
-            )
+            cached = engine._cache_mgr.get(key=key, direction="ja2en", fingerprint="", mode="machine_translation")
             self.assertIsNone(cached)
 
             # 4. Human review log must be recorded
             self.assertTrue(os.path.exists(review_log))
-            with open(review_log, "r", encoding="utf-8") as f:
+            with open(review_log, encoding="utf-8") as f:
                 content = f.read()
                 self.assertIn("sheet1_A1", content)
                 self.assertIn(key[:16], content)
@@ -488,10 +483,13 @@ class TestNMTCleanPipeline(unittest.TestCase):
 
     def test_nmt_cache_read_deletes_bad_entry_from_cache_mgr_and_disk(self):
         """Verifies that bad cache entries are deleted from persistent cache manager and removed from disk on save."""
+
         class FailingBackend:
             name = "nmt"
+
             def is_ready(self, direction):
                 return True
+
             def translate(self, text, direction, **kwargs):
                 raise RuntimeError("Backend failed deliberately")
 
@@ -544,7 +542,6 @@ class TestNMTCleanPipeline(unittest.TestCase):
             self.assertIsNone(
                 new_engine._cache_mgr.get(key=key, direction="ja2en", fingerprint=new_fp, mode="machine_translation")
             )
-
 
 
 if __name__ == "__main__":

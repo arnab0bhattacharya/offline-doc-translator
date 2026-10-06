@@ -172,7 +172,6 @@ class MADLADBackend(TranslationBackend):
                 "Please download or repair the model before translating."
             )
 
-
         # Enforce mutual exclusivity: evict any resident Ollama models from RAM
         try:
             from engine.ollama_manager import get_ollama_manager

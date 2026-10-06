@@ -6,8 +6,8 @@ manager diagnostics, and preflight validation.
 """
 
 import os
-import sys
 import ssl
+import sys
 import tempfile
 import threading
 import unittest
@@ -21,7 +21,6 @@ from engine.core import TranslationEngine, TranslationMode
 from engine.errors import ErrorCode, TranslatorError
 from engine.madlad_manager import (
     EXACT_MODEL_FILES,
-    MODEL_FILE_SHA256,
     REQUIRED_MODEL_FILES,
     _SystemSSLAdapter,
     check_madlad_installed,
@@ -167,7 +166,6 @@ class TestMADLADManager(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("failed integrity verification", msg)
             self.assertFalse(os.path.exists(os.path.join(dst_dir, "model.bin")))
-
 
     def test_download_madlad_model_already_installed(self):
         test_required = {
@@ -400,6 +398,7 @@ class TestMADLADManager(unittest.TestCase):
     def test_create_secure_session_mounts_adapter(self):
         """Verifies create_secure_session mounts _SystemSSLAdapter on both http and https."""
         from engine.madlad_manager import create_secure_session
+
         session = create_secure_session()
         self.assertIsInstance(session.adapters.get("https://"), _SystemSSLAdapter)
         self.assertIsInstance(session.adapters.get("http://"), _SystemSSLAdapter)
@@ -432,7 +431,6 @@ class TestMADLADManager(unittest.TestCase):
             self.assertFalse(backend.is_available())
             with self.assertRaises(RuntimeError):
                 backend._ensure_loaded()
-
 
 
 class TestMADLADBackendLazyLoading(unittest.TestCase):

@@ -796,10 +796,7 @@ class SystemView(ctk.CTkFrame):
 
         if self.on_mt_status:
             if not installed:
-                if status in ("size_mismatch", "corrupted"):
-                    status_label = "● MT: Corrupted"
-                else:
-                    status_label = "● MT: Not Installed"
+                status_label = "● MT: Corrupted" if status in ("size_mismatch", "corrupted") else "● MT: Not Installed"
             elif is_loaded:
                 status_label = "● MT: Active (RAM)"
             else:

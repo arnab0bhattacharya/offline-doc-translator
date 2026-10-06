@@ -80,7 +80,6 @@ class NumericAuditResult:
         return "; ".join(parts) if parts else "OK"
 
 
-
 class TranslationMode(str, Enum):
     MACHINE_TRANSLATION = "machine_translation"  # 100% CTranslate2 / Google MADLAD-400 3B (Apache 2.0)
     AI_TRANSLATION = "ai_translation"  # 100% Local LLM via Ollama (Gemma 4, Apache 2.0)
@@ -192,24 +191,64 @@ def verify_placeholders(
 # Case-sensitive units (distinguish bytes B vs bits b, etc.)
 _CASE_SENSITIVE_UNITS = {
     # Data units
-    "PB", "TB", "GB", "MB", "KB", "B",
-    "Pb", "Tb", "Gb", "Mb", "Kb", "b",
-    "Gbps", "Mbps", "Kbps", "bps",
+    "PB",
+    "TB",
+    "GB",
+    "MB",
+    "KB",
+    "B",
+    "Pb",
+    "Tb",
+    "Gb",
+    "Mb",
+    "Kb",
+    "b",
+    "Gbps",
+    "Mbps",
+    "Kbps",
+    "bps",
     # Power / Frequency / Electrical / Pressure
-    "GHz", "MHz", "kHz", "Hz",
-    "GW", "MW", "kW", "W",
-    "kV", "mV", "V",
-    "mA", "A",
-    "kWh", "MPa", "kPa", "Pa",
+    "GHz",
+    "MHz",
+    "kHz",
+    "Hz",
+    "GW",
+    "MW",
+    "kW",
+    "W",
+    "kV",
+    "mV",
+    "V",
+    "mA",
+    "A",
+    "kWh",
+    "MPa",
+    "kPa",
+    "Pa",
 }
 
 # Case-insensitive units (normalized to lowercase)
 _CASE_INSENSITIVE_UNITS = {
-    "kg", "mg", "g",
-    "km", "cm", "mm", "nm", "m",
-    "ml", "l",
-    "bar", "psi", "rpm", "db", "deg",
-    "ms", "ns", "min", "hr", "hrs",
+    "kg",
+    "mg",
+    "g",
+    "km",
+    "cm",
+    "mm",
+    "nm",
+    "m",
+    "ml",
+    "l",
+    "bar",
+    "psi",
+    "rpm",
+    "db",
+    "deg",
+    "ms",
+    "ns",
+    "min",
+    "hr",
+    "hrs",
 }
 
 # Attached single-letter scale suffixes (e.g. 42M, 10k, 1.5B, 1T)
@@ -231,8 +270,16 @@ _SCALE_WORDS_MAP = {
 
 # Spelled-out ordinals (first through tenth)
 _ORDINAL_WORDS_EN = {
-    "1": "first", "2": "second", "3": "third", "4": "fourth", "5": "fifth",
-    "6": "sixth", "7": "seventh", "8": "eighth", "9": "ninth", "10": "tenth",
+    "1": "first",
+    "2": "second",
+    "3": "third",
+    "4": "fourth",
+    "5": "fifth",
+    "6": "sixth",
+    "7": "seventh",
+    "8": "eighth",
+    "9": "ninth",
+    "10": "tenth",
 }
 _ORDINAL_WORD_TO_NUM = {v: k for k, v in _ORDINAL_WORDS_EN.items()}
 
@@ -251,9 +298,17 @@ _MONTH_NAMES_EN = {
     "12": "december",
 }
 _MONTH_ABBRS_EN = {
-    "1": "jan", "2": "feb", "3": "mar", "4": "apr",
-    "6": "jun", "7": "jul", "8": "aug",
-    "9": "sep", "10": "oct", "11": "nov", "12": "dec",
+    "1": "jan",
+    "2": "feb",
+    "3": "mar",
+    "4": "apr",
+    "6": "jun",
+    "7": "jul",
+    "8": "aug",
+    "9": "sep",
+    "10": "oct",
+    "11": "nov",
+    "12": "dec",
 }
 
 
@@ -269,9 +324,7 @@ def extract_numeric_tokens(text: str) -> list[str]:
     """
     normalized = unicodedata.normalize("NFKC", text)
 
-    pattern = re.compile(
-        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(%|\s*[A-Za-z]+)?(?![A-Za-z0-9_])"
-    )
+    pattern = re.compile(r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(%|\s*[A-Za-z]+)?(?![A-Za-z0-9_])")
     tokens = []
     for match in pattern.finditer(normalized):
         raw_num = match.group(1).replace(",", "")
@@ -284,9 +337,7 @@ def extract_numeric_tokens(text: str) -> list[str]:
         has_space = suffix.startswith(" ")
         s_clean = suffix.strip()
 
-        if s_clean == "%":
-            tokens.append(raw_num)
-        elif s_clean.lower() in ("st", "nd", "rd", "th"):
+        if s_clean == "%" or s_clean.lower() in ("st", "nd", "rd", "th"):
             tokens.append(raw_num)
         elif not has_space and s_clean in _ATTACHED_SCALE_SUFFIXES:
             tokens.append(f"{raw_num}{_ATTACHED_SCALE_SUFFIXES[s_clean]}")
@@ -371,9 +422,7 @@ def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult
     tgt_nums = extract_numeric_tokens(target_text)
 
     if not src_nums:
-        return NumericAuditResult(
-            passed=True, missing=[], added=tgt_nums, src_tokens=[], tgt_tokens=tgt_nums
-        )
+        return NumericAuditResult(passed=True, missing=[], added=tgt_nums, src_tokens=[], tgt_tokens=tgt_nums)
 
     src_month_nums = _extract_source_month_numbers(source_text)
     tgt_month_counts = _extract_target_month_counts(target_text)
@@ -420,7 +469,6 @@ def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult
         src_tokens=src_nums,
         tgt_tokens=tgt_nums,
     )
-
 
 
 def unmask_numbers(text: str, number_map: dict[str, str]) -> str:
@@ -1124,7 +1172,6 @@ class TranslationEngine:
             elapsed=elapsed,
             source_backend=backend_name,
         )
-
 
     def _translate_chunk_llm(
         self,

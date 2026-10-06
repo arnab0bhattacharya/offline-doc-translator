@@ -291,6 +291,23 @@ def _normalize_decimal(d: Decimal) -> str:
     return f"{d:f}".rstrip("0").rstrip(".")
 
 
+def _format_scaled_display(norm_val: str) -> str:
+    """Formats a normalized quantitative integer string into canonical scale display (e.g. 4.2B, 500k, 1T)."""
+    try:
+        d = Decimal(norm_val)
+    except (InvalidOperation, ValueError):
+        return norm_val
+    if d >= Decimal("1000000000000"):
+        return f"{_normalize_decimal(d / Decimal('1000000000000'))}T"
+    if d >= Decimal("1000000000"):
+        return f"{_normalize_decimal(d / Decimal('1000000000'))}B"
+    if d >= Decimal("1000000"):
+        return f"{_normalize_decimal(d / Decimal('1000000'))}M"
+    if d >= Decimal("1000"):
+        return f"{_normalize_decimal(d / Decimal('1000'))}k"
+    return norm_val
+
+
 # Scale words mapped to canonical unit (e.g. 42 million -> 42M)
 _SCALE_WORDS_MAP = {
     "million": "M",
@@ -460,7 +477,7 @@ def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
             norm_val = _normalize_decimal(Decimal(raw_num) * _JP_SCALE_MULTIPLIER[jp_scale])
         except (InvalidOperation, ValueError):
             norm_val = raw_num
-        disp = raw_num
+        disp = _format_scaled_display(norm_val)
         tok = CanonicalToken(kind="number", value=norm_val, display=disp)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=98))
 
@@ -517,26 +534,17 @@ def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
         tok = CanonicalToken(kind="month", value=month_num, display=month_num)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=80))
 
-    # 6. Ambiguous English Months: 'March', 'May' (require strict date context)
-    for m_num, m_name in (("3", "March"), ("5", "May")):
+    # 6. Ambiguous English Months (person names or ordinary words):
+    # March (verb/noun), April (person name), May (modal verb/name), June (person name), August (adjective/name)
+    for m_num, m_name in (("3", "March"), ("4", "April"), ("5", "May"), ("6", "June"), ("8", "August")):
         for s, e in _match_abbr_or_word_date_context(norm, m_name):
             tok = CanonicalToken(kind="month", value=m_num, display=m_num)
             candidates.append(_SpanToken(start=s, end=e, token=tok, priority=80))
 
-    # 7. Other English Months: January, February, April, June, July, August, September, October, November, December
+    # 7. Unambiguous English Months: January, February, July, September, October, November, December
     for num, name in _MONTH_NAMES_EN.items():
-        if num in ("3", "5"):
+        if num in ("3", "4", "5", "6", "8"):
             continue
-        if num == "8":
-            # August: capitalized August is month; lowercase august requires date context
-            for m in re.finditer(r"(?<![A-Za-z0-9_])August(?![A-Za-z0-9_])", norm):
-                tok = CanonicalToken(kind="month", value="8", display="8")
-                candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
-            for s, e in _match_abbr_or_word_date_context(norm, "august"):
-                tok = CanonicalToken(kind="month", value="8", display="8")
-                candidates.append(_SpanToken(start=s, end=e, token=tok, priority=75))
-            continue
-
         for m in re.finditer(rf"(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])", norm, re.IGNORECASE):
             tok = CanonicalToken(kind="month", value=num, display=num)
             candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
@@ -552,6 +560,17 @@ def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
         ord_num = str(int(m.group(1)))
         tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=70))
+
+    # 9b. Quarter notation: 'Q1', 'Q2', 'Q3', 'Q4', '1Q', '2Q', '3Q', '4Q'
+    for m in re.finditer(r"(?<![A-Za-z0-9_])(?:Q|q)\s*([1-4])(?![A-Za-z0-9_])", norm):
+        ord_num = m.group(1)
+        tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=68))
+
+    for m in re.finditer(r"(?<![A-Za-z0-9_])([1-4])\s*(?:Q|q)(?![A-Za-z0-9_])", norm):
+        ord_num = m.group(1)
+        tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=68))
 
     # 10. English Ordinals with suffix: '1st', '2nd', '3rd'
     for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+)(?:st|nd|rd|th)(?![A-Za-z0-9_])", norm, re.IGNORECASE):

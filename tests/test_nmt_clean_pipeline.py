@@ -86,7 +86,7 @@ class TestNMTNumericVerification(unittest.TestCase):
         tgt = "The sales for the quarter were 3 billion yen."
         valid, missing = verify_nmt_numbers(src, tgt)
         self.assertFalse(valid)
-        self.assertIn("42", missing)
+        self.assertIn("4.2B", missing)
 
     def test_verify_nmt_numbers_month_conversion(self):
         # Japanese '10月' translated natively to English 'October'
@@ -136,7 +136,7 @@ class TestNMTNumericVerification(unittest.TestCase):
         tgt = "Company A invested 10 billion yen."
         audit = verify_nmt_numbers(src, tgt)
         self.assertFalse(audit.passed)
-        self.assertIn("100", audit.missing)
+        self.assertIn("10B", audit.missing)
         self.assertEqual(audit.added, [])
 
     def test_extract_numeric_tokens_units_and_scales(self):
@@ -309,7 +309,7 @@ class TestNMTNumericVerification(unittest.TestCase):
         self.assertTrue(verify_nmt_numbers("売上は42億円でした。", "Revenue was 4.2 billion yen.").passed)
         audit_42b_wrong = verify_nmt_numbers("売上は42億円でした。", "Revenue was 42 billion yen.")
         self.assertFalse(audit_42b_wrong.passed)
-        self.assertIn("42", audit_42b_wrong.missing)
+        self.assertIn("4.2B", audit_42b_wrong.missing)
         self.assertIn("42B", audit_42b_wrong.added)
 
         # 50万円 = 500,000 yen / 500k yen (NOT 50 thousand)
@@ -317,11 +317,27 @@ class TestNMTNumericVerification(unittest.TestCase):
         self.assertTrue(verify_nmt_numbers("費用は50万円です。", "Fee is 500k yen.").passed)
         audit_50k_wrong = verify_nmt_numbers("費用は50万円です。", "Fee is 50 thousand yen.")
         self.assertFalse(audit_50k_wrong.passed)
-        self.assertIn("50", audit_50k_wrong.missing)
+        self.assertIn("500k", audit_50k_wrong.missing)
         self.assertIn("50k", audit_50k_wrong.added)
 
         # 1兆円 = 1 trillion yen
         self.assertTrue(verify_nmt_numbers("資産は1兆円です。", "Assets are 1 trillion yen.").passed)
+
+    def test_verify_nmt_numbers_quarter_notation_q1_to_q4(self):
+        """Verifies quarter notation (Q1-Q4, 1Q-4Q) produces same ordinal token as 第1四半期 and first quarter."""
+        # 第1四半期 matches Q1
+        self.assertTrue(verify_nmt_numbers("第1四半期と2024年", "Q1 2024").passed)
+        # Reverse: Q1 2024 matches 2024年第1四半期
+        self.assertTrue(verify_nmt_numbers("Q1 2024", "2024年第1四半期").passed)
+        # 2Q reverse notation
+        self.assertTrue(verify_nmt_numbers("第2四半期と2024年", "2024 2Q").passed)
+        # Q1 vs Q2 mismatch
+        audit_mismatch = verify_nmt_numbers("第1四半期と2024年", "Q2 2024")
+        self.assertFalse(audit_mismatch.passed)
+        self.assertIn("1", audit_mismatch.missing)
+        self.assertIn("2", audit_mismatch.added)
+        # Unrelated identifiers like Q1_v2 or part_Q1 are not extracted
+        self.assertTrue(verify_nmt_numbers("Model Q1_v2 has 5 units", "Model Q1_v2 has 5 units").passed)
 
     def test_verify_nmt_numbers_no_source_numbers_strict_bilateral(self):
         """Verifies bilateral gate rejects added target numbers even when source has zero numbers."""
@@ -354,6 +370,27 @@ class TestNMTNumericVerification(unittest.TestCase):
         # Legitimate date contexts DO emit Month(3)
         self.assertTrue(verify_nmt_numbers("Started in March 2024", "2024年3月に開始").passed)
         self.assertTrue(verify_nmt_numbers("March 2024 revenue", "2024年3月の売上").passed)
+
+    def test_verify_nmt_numbers_ambiguous_name_and_word_months(self):
+        """Verifies person names and ordinary words (June, April, August) without date context do not emit month tokens."""
+        # June as person name: omitted or translated without month 6 must pass
+        audit_june = verify_nmt_numbers("June was promoted in 2024", "2024年に昇進した")
+        self.assertTrue(audit_june.passed)
+        self.assertEqual(audit_june.missing, [])
+
+        # April as person name
+        audit_april = verify_nmt_numbers("April was hired in 2024", "2024年に採用された")
+        self.assertTrue(audit_april.passed)
+
+        # August as adjective
+        audit_august = verify_nmt_numbers("An august institution in 2024", "2024年の威厳ある機関")
+        self.assertTrue(audit_august.passed)
+
+        # Genuine date contexts for these months DO emit month tokens
+        self.assertTrue(verify_nmt_numbers("Started in June 2024", "2024年6月に開始").passed)
+        self.assertTrue(verify_nmt_numbers("June 2024 revenue", "2024年6月の売上").passed)
+        self.assertTrue(verify_nmt_numbers("Started in April 2024", "2024年4月に開始").passed)
+        self.assertTrue(verify_nmt_numbers("Started in August 2024", "2024年8月に開始").passed)
 
     def test_verify_nmt_numbers_percentages_distinct_and_equivalences(self):
         """Verifies percentages are distinct from plain numbers and match equivalents like パーセント."""

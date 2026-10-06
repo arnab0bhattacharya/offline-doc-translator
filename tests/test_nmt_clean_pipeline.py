@@ -244,7 +244,7 @@ class TestNMTNumericVerification(unittest.TestCase):
         audit_scale_diff = verify_nmt_numbers("Revenue was 42 million", "Revenue was 42 thousand")
         self.assertFalse(audit_scale_diff.passed)
         self.assertIn("42M", audit_scale_diff.missing)
-        self.assertIn("42", audit_scale_diff.added)
+        self.assertIn("42k", audit_scale_diff.added)
 
         audit_scale_k = verify_nmt_numbers("Revenue was 42 million", "Revenue 42k")
         self.assertFalse(audit_scale_k.passed)
@@ -256,6 +256,52 @@ class TestNMTNumericVerification(unittest.TestCase):
         self.assertFalse(audit_plain.passed)
         self.assertIn("42M", audit_plain.missing)
         self.assertIn("42", audit_plain.added)
+
+    def test_verify_nmt_numbers_canonical_reconciliation_regressions(self):
+        """Verifies the 5 reproduced regression cases from bilateral leftover accounting."""
+        # 1. Scale inflation: Revenue 42 -> Revenue 42 million MUST FAIL
+        audit_scale_inf = verify_nmt_numbers("Revenue 42", "Revenue 42 million")
+        self.assertFalse(audit_scale_inf.passed)
+        self.assertIn("42", audit_scale_inf.missing)
+        self.assertIn("42M", audit_scale_inf.added)
+
+        # 2. Dropped month: May 2024 revenue -> 2024 revenue MUST FAIL
+        audit_drop_month = verify_nmt_numbers("May 2024 revenue", "2024 revenue")
+        self.assertFalse(audit_drop_month.passed)
+        self.assertIn("5", audit_drop_month.missing)
+
+        # 3. Dropped ordinal: 2024 and the first quarter -> 2024 MUST FAIL
+        audit_drop_ord = verify_nmt_numbers("2024 and the first quarter", "2024")
+        self.assertFalse(audit_drop_ord.passed)
+        self.assertIn("1", audit_drop_ord.missing)
+
+        # 4. Added month: 2024 revenue -> May 2024 revenue MUST FAIL
+        audit_add_month = verify_nmt_numbers("2024 revenue", "May 2024 revenue")
+        self.assertFalse(audit_add_month.passed)
+        self.assertIn("5", audit_add_month.added)
+
+        # 5. Added ordinal: 2024 quarter -> first quarter 2024 MUST FAIL
+        audit_add_ord = verify_nmt_numbers("2024 quarter", "first quarter 2024")
+        self.assertFalse(audit_add_ord.passed)
+        self.assertIn("1", audit_add_ord.added)
+
+        # Reverse scale drop: Revenue 42 million -> Revenue 42 MUST FAIL
+        audit_rev_scale = verify_nmt_numbers("Revenue 42 million", "Revenue 42")
+        self.assertFalse(audit_rev_scale.passed)
+        self.assertIn("42M", audit_rev_scale.missing)
+        self.assertIn("42", audit_rev_scale.added)
+
+    def test_verify_nmt_numbers_discourse_markers_versus_ordinals(self):
+        """Verifies discourse connectors ('First, ...') are ignored as non-numeric prose."""
+        # Sentence opener discourse marker is ignored
+        audit_discourse = verify_nmt_numbers("First, we must review the plan.", "まず、計画を見直す必要があります。")
+        self.assertTrue(audit_discourse.passed)
+
+        # Discourse opener ignored while genuine ordinal modifier is matched
+        audit_mixed = verify_nmt_numbers(
+            "First, let us examine the first quarter.", "まず、第1四半期を検討しましょう。"
+        )
+        self.assertTrue(audit_mixed.passed)
 
     def test_verify_nmt_numbers_bidirectional_month_conversion(self):
         """Verifies month equivalences operate symmetrically in ja2en and en2ja."""

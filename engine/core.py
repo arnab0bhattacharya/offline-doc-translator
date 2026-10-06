@@ -19,7 +19,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, NamedTuple
 
 import psutil
 import requests
@@ -324,6 +324,190 @@ _MAY_DATE_STRICT = re.compile(
 )
 
 
+# Ordinal context nouns
+_ORDINAL_NOUNS_PATTERN = (
+    r"(?:quarter|quarterly|half|phase|stage|step|part|round|place|session|chapter|"
+    r"period|edition|version|generation|division|rank|tier|grade|priority|choice|"
+    r"option|attempt|time|year|month|week|day)"
+)
+
+_ORDINAL_WORD_CONTEXT_RE = re.compile(
+    rf"(?:"
+    rf"(?<![A-Za-z0-9_])(?:the|a|an|our|their|its|his|her|this|that|every)\s+({'|'.join(_ORDINAL_WORD_TO_NUM.keys())})(?![A-Za-z0-9_])"
+    rf"|"
+    rf"(?<![A-Za-z0-9_])({'|'.join(_ORDINAL_WORD_TO_NUM.keys())})\s+{_ORDINAL_NOUNS_PATTERN}(?![A-Za-z0-9_])"
+    rf"|"
+    rf"(?<![A-Za-z0-9_])({'|'.join(_ORDINAL_WORD_TO_NUM.keys())})-(?:quarter|half|phase|stage|tier|rate|class|degree|generation)(?![A-Za-z0-9_])"
+    rf")",
+    re.IGNORECASE,
+)
+
+
+class CanonicalToken:
+    def __init__(self, kind: str, value: str, display: str = ""):
+        self.kind = kind
+        self.value = value
+        self.display = display or value
+
+    def __eq__(self, other):
+        if not isinstance(other, CanonicalToken):
+            return False
+        return self.kind == other.kind and self.value == other.value
+
+    def __hash__(self):
+        return hash((self.kind, self.value))
+
+    def __repr__(self):
+        return f"{self.kind}({self.value}, display={self.display})"
+
+
+class _SpanToken(NamedTuple):
+    start: int
+    end: int
+    token: CanonicalToken
+    priority: int
+
+
+def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
+    """
+    Extracts non-overlapping typed canonical tokens using span-aware greedy precedence:
+    1. Scaled quantities: '42 million', '42M', '42億円' -> Scaled('42M' or '42B')
+    2. Physical/digital units: '500kg', '32GB' -> Unit('500kg')
+    3. Japanese date months: '5月' -> Month('5')
+    4. English date months: 'May 2024', 'in May' (strict date context) -> Month('5'), 'October' -> Month('10')
+    5. Japanese ordinals: '第1' -> Ordinal('1')
+    6. English ordinals: '1st', 'the first quarter' (contextual) -> Ordinal('1')
+    7. Plain numbers & percentages: '2024', '15.5%', '1250000' -> Number('2024')
+    """
+    norm = unicodedata.normalize("NFKC", text)
+    candidates: list[_SpanToken] = []
+
+    # 1. Scaled quantities: phrases like '42 million'
+    for m in re.finditer(
+        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s+(million|billion|thousand|trillion)(?![A-Za-z0-9_])",
+        norm,
+        re.IGNORECASE,
+    ):
+        raw_num = m.group(1).replace(",", "")
+        unit = _SCALE_WORDS_MAP[m.group(2).lower()]
+        tok = CanonicalToken(kind="scaled", value=f"{raw_num}{unit}", display=f"{raw_num}{unit}")
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=100))
+
+    # 1b. Scaled quantities: Japanese currency scales 42億円, 10万円, 1兆円
+    for m in re.finditer(r"(?<!\d)(\d+(?:,\d{3})*(?:\.\d+)?)\s*(万|億|兆)", norm):
+        raw_num = m.group(1).replace(",", "")
+        jp_scale = m.group(2)
+        unit = "k" if jp_scale == "万" else ("B" if jp_scale == "億" else "T")
+        tok = CanonicalToken(kind="scaled", value=f"{raw_num}{unit}", display=raw_num)
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=98))
+
+    # 2. Scaled quantities: attached like '42M', '10k'
+    for m in re.finditer(
+        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(M|k|K|B|T)(?![A-Za-z0-9_])",
+        norm,
+    ):
+        raw_num = m.group(1).replace(",", "")
+        unit = _ATTACHED_SCALE_SUFFIXES[m.group(2)]
+        tok = CanonicalToken(kind="scaled", value=f"{raw_num}{unit}", display=f"{raw_num}{unit}")
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=95))
+
+    # 3. Physical & Digital Units: '500kg', '32GB'
+    for m in re.finditer(
+        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s*([A-Za-z]+)(?![A-Za-z0-9_])",
+        norm,
+    ):
+        raw_num = m.group(1).replace(",", "")
+        suffix = m.group(2)
+        if suffix in _CASE_SENSITIVE_UNITS:
+            tok = CanonicalToken(kind="unit", value=f"{raw_num}{suffix}", display=f"{raw_num}{suffix}")
+            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=90))
+        elif suffix.lower() in _CASE_INSENSITIVE_UNITS:
+            tok = CanonicalToken(kind="unit", value=f"{raw_num}{suffix.lower()}", display=f"{raw_num}{suffix.lower()}")
+            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=90))
+
+    # 4. Japanese Date Months: '5月', '10月'
+    for m in re.finditer(r"(?<!\d)(1[0-2]|[1-9])\s*月", norm):
+        month_num = m.group(1)
+        tok = CanonicalToken(kind="month", value=month_num, display=month_num)
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=80))
+
+    # 5. English Months: strict May
+    for m in _MAY_DATE_STRICT.finditer(norm):
+        may_pos = norm.find("May", m.start(), m.end())
+        if may_pos != -1:
+            tok = CanonicalToken(kind="month", value="5", display="5")
+            candidates.append(_SpanToken(start=may_pos, end=may_pos + 3, token=tok, priority=80))
+
+    # 6. English Months: other months (Jan - Dec except May)
+    for num, name in _MONTH_NAMES_EN.items():
+        if num == "5":
+            continue
+        for m in re.finditer(rf"(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])", norm, re.IGNORECASE):
+            tok = CanonicalToken(kind="month", value=num, display=num)
+            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
+
+    for num, abbr in _MONTH_ABBRS_EN.items():
+        for m in re.finditer(rf"(?<![A-Za-z0-9_]){abbr}\.?(?![A-Za-z0-9_])", norm, re.IGNORECASE):
+            tok = CanonicalToken(kind="month", value=num, display=num)
+            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
+
+    # 7. Japanese Ordinals: '第1', '第3'
+    for m in re.finditer(r"第\s*(\d+|[1-9])", norm):
+        ord_num = m.group(1)
+        tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=70))
+
+    # 8. English Ordinals with suffix: '1st', '2nd', '3rd'
+    for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+)(?:st|nd|rd|th)(?![A-Za-z0-9_])", norm, re.IGNORECASE):
+        raw_num = m.group(1)
+        tok = CanonicalToken(kind="ordinal", value=raw_num, display=raw_num)
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=70))
+
+    # 9. English Spelled-out Ordinals in Ordinal Context
+    for m in _ORDINAL_WORD_CONTEXT_RE.finditer(norm):
+        for g_idx in (1, 2, 3):
+            word = m.group(g_idx)
+            if word:
+                ord_num = _ORDINAL_WORD_TO_NUM[word.lower()]
+                tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
+                candidates.append(_SpanToken(start=m.start(g_idx), end=m.end(g_idx), token=tok, priority=65))
+                break
+
+    # 10. Plain numbers & percentages
+    for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(%|\s*[A-Za-z]+)?(?![A-Za-z0-9_])", norm):
+        raw_num = m.group(1).replace(",", "")
+        suffix = m.group(2)
+        if not suffix:
+            tok = CanonicalToken(kind="number", value=raw_num, display=raw_num)
+            candidates.append(_SpanToken(start=m.start(1), end=m.end(1), token=tok, priority=10))
+        elif suffix.strip() == "%":
+            tok = CanonicalToken(kind="number", value=raw_num, display=raw_num)
+            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=10))
+        elif suffix.startswith(" "):
+            tok = CanonicalToken(kind="number", value=raw_num, display=raw_num)
+            candidates.append(_SpanToken(start=m.start(1), end=m.end(1), token=tok, priority=10))
+
+    # Sort candidates by priority descending, span length descending, start ascending
+    candidates.sort(key=lambda c: (-c.priority, -(c.end - c.start), c.start))
+
+    # Greedy non-overlapping interval selection
+    selected: list[_SpanToken] = []
+    occupied_spans: list[tuple[int, int]] = []
+
+    for cand in candidates:
+        overlaps = False
+        for s, e in occupied_spans:
+            if not (cand.end <= s or cand.start >= e):
+                overlaps = True
+                break
+        if not overlaps:
+            selected.append(cand)
+            occupied_spans.append((cand.start, cand.end))
+
+    selected.sort(key=lambda s: s.start)
+    return [s.token for s in selected]
+
+
 def extract_numeric_tokens(text: str) -> list[str]:
     """
     Extracts numeric tokens, preserving:
@@ -382,34 +566,9 @@ def _extract_scale_word_equivalences(text: str) -> Counter:
 
 
 def _extract_month_counts(text: str) -> Counter:
-    """
-    Extracts month counts from Japanese date context or English month names.
-    Applies strict contextual anchoring for 'May' to prevent English modal auxiliary verb
-    confusion ('may increase' vs 'May 2024' or 'in May').
-    Uses ASCII boundary lookarounds to correctly handle CJK-English character boundaries.
-    """
-    norm = unicodedata.normalize("NFKC", text)
-    months: Counter[str] = Counter()
-    # Japanese 1月 through 12月
-    for m in re.finditer(r"(?<!\d)(1[0-2]|[1-9])\s*月", norm):
-        months[m.group(1)] += 1
-    # English full months (except May, which requires strict date context)
-    for num, name in _MONTH_NAMES_EN.items():
-        if num == "5":
-            continue
-        count = len(re.findall(rf"(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])", norm, re.IGNORECASE))
-        if count > 0:
-            months[num] += count
-    # May with strict date context and capitalization
-    may_count = len(_MAY_DATE_STRICT.findall(norm))
-    if may_count > 0:
-        months["5"] += may_count
-    # English month abbreviations
-    for num, abbr in _MONTH_ABBRS_EN.items():
-        count = len(re.findall(rf"(?<![A-Za-z0-9_]){abbr}\.?(?![A-Za-z0-9_])", norm, re.IGNORECASE))
-        if count > 0:
-            months[num] += count
-    return months
+    """Extracts month counts from Japanese date context or English month names."""
+    tokens = extract_canonical_tokens(text)
+    return Counter(tok.value for tok in tokens if tok.kind == "month")
 
 
 def _extract_source_month_numbers(text: str) -> Counter:
@@ -421,14 +580,9 @@ def _extract_target_month_counts(text: str) -> Counter:
 
 
 def _extract_ordinal_counts(text: str) -> Counter:
-    """Extracts spelled-out English ordinals (first -> 1, second -> 2) using ASCII word boundaries."""
-    norm = unicodedata.normalize("NFKC", text)
-    ordinals: Counter[str] = Counter()
-    for word, num in _ORDINAL_WORD_TO_NUM.items():
-        count = len(re.findall(rf"(?<![A-Za-z0-9_]){word}(?![A-Za-z0-9_])", norm, re.IGNORECASE))
-        if count > 0:
-            ordinals[num] += count
-    return ordinals
+    """Extracts ordinal counts from Japanese or English text."""
+    tokens = extract_canonical_tokens(text)
+    return Counter(tok.value for tok in tokens if tok.kind == "ordinal")
 
 
 def _extract_target_ordinal_counts(text: str) -> Counter:
@@ -437,105 +591,41 @@ def _extract_target_ordinal_counts(text: str) -> Counter:
 
 def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult:
     """
-    Checks that numbers present in the source text appear in the target text.
-    Preserves units and scale multipliers (e.g. '500kg', '42M').
-    Accounts for localized month names and date context symmetrically (e.g. '10月' <-> 'October').
-    Supports spelled-out English ordinals symmetrically (e.g. 第1 <-> 'first').
-    Supports scale-word equivalences symmetrically (e.g. '42 million' <-> '42M').
-    Compares token counts (multiset semantics).
-    Returns NumericAuditResult(passed, missing, added, src_tokens, tgt_tokens).
+    Checks that numeric and quantified content present in the source text is preserved in the target.
+    Uses typed, span-aware canonical occurrences (Scaled, Unit, Month, Ordinal, Number)
+    and strictly compares multisets. Leftover source tokens are reported as missing; leftover
+    target tokens are reported as added.
+    Returns: NumericAuditResult(passed, missing, added, src_tokens, tgt_tokens)
     """
-    src_nums = extract_numeric_tokens(source_text)
-    tgt_nums = extract_numeric_tokens(target_text)
+    src_tokens = extract_canonical_tokens(source_text)
+    tgt_tokens = extract_canonical_tokens(target_text)
 
-    src_month_counts = _extract_month_counts(source_text)
-    tgt_month_counts = _extract_month_counts(target_text)
-    src_ordinal_counts = _extract_ordinal_counts(source_text)
-    tgt_ordinal_counts = _extract_ordinal_counts(target_text)
-    src_scale_words = _extract_scale_word_equivalences(source_text)
-    tgt_scale_words = _extract_scale_word_equivalences(target_text)
+    if not src_tokens:
+        return NumericAuditResult(
+            passed=True,
+            missing=[],
+            added=[tok.display for tok in tgt_tokens],
+            src_tokens=[],
+            tgt_tokens=[tok.display for tok in tgt_tokens],
+        )
 
-    if not src_nums and not src_month_counts and not src_ordinal_counts:
-        return NumericAuditResult(passed=True, missing=[], added=tgt_nums, src_tokens=[], tgt_tokens=tgt_nums)
+    src_counter = Counter(src_tokens)
+    tgt_counter = Counter(tgt_tokens)
 
-    tgt_counter = Counter(tgt_nums)
-    missing: list[str] = []
+    missing_tokens = src_counter - tgt_counter
+    added_tokens = tgt_counter - src_counter
 
-    for num in src_nums:
-        # Check if this source number is scaled by a scale word (e.g. 42 in '42 million')
-        scaled_tok = None
-        for st in list(src_scale_words.keys()):
-            if src_scale_words[st] > 0 and (st == f"{num}M" or st == f"{num}k" or st == f"{num}B" or st == f"{num}T"):
-                scaled_tok = st
-                break
+    missing = [tok.display for tok, cnt in missing_tokens.items() for _ in range(cnt)]
+    added = [tok.display for tok, cnt in added_tokens.items() for _ in range(cnt)]
 
-        if scaled_tok:
-            # 1. Matches attached scale in target (e.g. source '42 million' -> target '42M')
-            if tgt_counter.get(scaled_tok, 0) > 0:
-                tgt_counter[scaled_tok] -= 1
-                src_scale_words[scaled_tok] -= 1
-                continue
-            # 2. Matches scale word in target (e.g. source '42 million' -> target '42 million')
-            if tgt_scale_words.get(scaled_tok, 0) > 0:
-                tgt_scale_words[scaled_tok] -= 1
-                src_scale_words[scaled_tok] -= 1
-                if tgt_counter.get(num, 0) > 0:
-                    tgt_counter[num] -= 1
-                continue
-            # Scaled number in source did not match equivalent in target
-            missing.append(scaled_tok)
-            src_scale_words[scaled_tok] -= 1
-            continue
-
-        # Direct match in target numeric tokens
-        if tgt_counter.get(num, 0) > 0:
-            tgt_counter[num] -= 1
-            continue
-
-        # Source attached scale matched by target scale word (e.g. source '42M' -> target '42 million')
-        if num in tgt_scale_words and tgt_scale_words[num] > 0:
-            tgt_scale_words[num] -= 1
-            base_num = re.sub(r"[A-Za-z]+$", "", num)
-            if tgt_counter.get(base_num, 0) > 0:
-                tgt_counter[base_num] -= 1
-            continue
-
-        # Spelled-out ordinal word match (e.g. source 第1 -> target 'first')
-        if num in tgt_ordinal_counts and tgt_ordinal_counts[num] > 0:
-            tgt_ordinal_counts[num] -= 1
-            continue
-
-        # Month match (e.g. source 5月 -> target May)
-        if num in src_month_counts and src_month_counts[num] > 0 and tgt_month_counts.get(num, 0) > 0:
-            src_month_counts[num] -= 1
-            tgt_month_counts[num] -= 1
-            continue
-
-        missing.append(num)
-
-    # Reverse direction checks (e.g. en2ja):
-    # Leftover target numbers against source words (months and ordinals)
-    for num in list(tgt_counter.keys()):
-        # Reverse month matching (source May 2024 -> target 2024年5月)
-        while tgt_counter[num] > 0 and src_month_counts.get(num, 0) > 0 and tgt_month_counts.get(num, 0) > 0:
-            tgt_counter[num] -= 1
-            src_month_counts[num] -= 1
-            tgt_month_counts[num] -= 1
-
-        # Reverse ordinal matching (source first quarter -> target 第1四半期)
-        while tgt_counter[num] > 0 and src_ordinal_counts.get(num, 0) > 0:
-            tgt_counter[num] -= 1
-            src_ordinal_counts[num] -= 1
-
-    added = [k for k, count in tgt_counter.items() if count > 0 for _ in range(count)]
     passed = len(missing) == 0 and len(added) == 0
 
     return NumericAuditResult(
         passed=passed,
         missing=missing,
         added=added,
-        src_tokens=src_nums,
-        tgt_tokens=tgt_nums,
+        src_tokens=[tok.display for tok in src_tokens],
+        tgt_tokens=[tok.display for tok in tgt_tokens],
     )
 
 

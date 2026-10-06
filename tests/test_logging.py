@@ -278,10 +278,13 @@ class TestEngineStructuredLoggingIntegration(unittest.TestCase):
         )
 
         res = engine.translate_chunk("Total: 500 items", "en2ja", location_id="nmt_chunk")
-        self.assertTrue(res.was_translated)
+        self.assertFalse(res.was_translated)
+        self.assertTrue(res.was_reverted)
+        self.assertEqual(res.text, "Total: 500 items")
         warn_events = [e for e in events if e.level == "warning"]
         self.assertGreaterEqual(len(warn_events), 1)
-        self.assertIn("NMT numeric check: missing ['500']", warn_events[-1].message)
+        self.assertIn("NMT numeric check failed", warn_events[-1].message)
+        self.assertIn("missing ['500']", warn_events[-1].message)
 
 
 if __name__ == "__main__":

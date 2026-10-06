@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,6 +51,34 @@ class TranslationResult:
     def __getitem__(self, index):
         """Supports index-based tuple access for backward compatibility."""
         return (self.text, self.was_translated, self.was_reverted)[index]
+
+
+@dataclass(frozen=True)
+class NumericAuditResult:
+    """Encapsulates the structured evaluation of numeric token preservation in NMT."""
+
+    passed: bool
+    missing: list[str]
+    added: list[str]
+    src_tokens: list[str]
+    tgt_tokens: list[str]
+
+    def __iter__(self):
+        """Supports backward-compatible unpacking: (passed, missing) = result."""
+        return iter((self.passed, self.missing))
+
+    def __getitem__(self, index):
+        """Supports index-based tuple access for backward compatibility: (passed, missing)[index]."""
+        return (self.passed, self.missing)[index]
+
+    def summary(self) -> str:
+        parts = []
+        if self.missing:
+            parts.append(f"missing {self.missing}")
+        if self.added:
+            parts.append(f"added {self.added}")
+        return "; ".join(parts) if parts else "OK"
+
 
 
 class TranslationMode(str, Enum):
@@ -177,31 +206,38 @@ _MONTH_NAMES_EN = {
 
 
 def extract_numeric_tokens(text: str) -> list[str]:
-    """Extracts numeric values without commas or percentages for consistency checks."""
-    matches = re.findall(r"(?<![A-Za-z0-9])\d+(?:,\d{3})*(?:\.\d+)?%?(?![A-Za-z0-9])", text)
+    """Extracts numeric values without commas, ordinals, or percentages for consistency checks."""
+    normalized = unicodedata.normalize("NFKC", text)
+    pattern = r"(?<![A-Za-z0-9])\d+(?:,\d{3})*(?:\.\d+)?(?:%|st|nd|rd|th)?(?![A-Za-z0-9])"
+    matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
     cleaned = []
     for m in matches:
-        val = m.replace(",", "").rstrip("%").strip()
+        val = re.sub(r"(?:%|st|nd|rd|th)$", "", m, flags=re.IGNORECASE)
+        val = val.replace(",", "").strip()
         if val:
             cleaned.append(val)
     return cleaned
 
 
-def verify_nmt_numbers(source_text: str, target_text: str) -> tuple[bool, list[str]]:
+def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult:
     """
     Checks that numbers present in the source text appear in the target text.
     Accounts for localized month names (e.g. '10月' -> 'October').
-    Returns (all_present: bool, missing_numbers: list[str]).
+    Compares token counts (multiset semantics).
+    Returns NumericAuditResult(passed, missing, added, src_tokens, tgt_tokens).
     """
     src_nums = extract_numeric_tokens(source_text)
+    tgt_nums = extract_numeric_tokens(target_text)
+
     if not src_nums:
-        return True, []
+        return NumericAuditResult(
+            passed=True, missing=[], added=tgt_nums, src_tokens=[], tgt_tokens=tgt_nums
+        )
 
     target_lower = target_text.lower()
-    tgt_nums = extract_numeric_tokens(target_text)
     tgt_counter = Counter(tgt_nums)
+    missing: list[str] = []
 
-    missing = []
     for num in src_nums:
         if tgt_counter.get(num, 0) > 0:
             tgt_counter[num] -= 1
@@ -214,7 +250,17 @@ def verify_nmt_numbers(source_text: str, target_text: str) -> tuple[bool, list[s
 
         missing.append(num)
 
-    return len(missing) == 0, missing
+    added = [k for k, count in tgt_counter.items() if count > 0 for _ in range(count)]
+    passed = len(missing) == 0 and len(added) == 0
+
+    return NumericAuditResult(
+        passed=passed,
+        missing=missing,
+        added=added,
+        src_tokens=src_nums,
+        tgt_tokens=tgt_nums,
+    )
+
 
 
 def unmask_numbers(text: str, number_map: dict[str, str]) -> str:
@@ -756,25 +802,37 @@ class TranslationEngine:
             cached_trans = dir_cache[key]
 
         if cached_trans is not None:
-            self._record_cache_access(direction, context, key)
-            preview_src = (text[:24] + "..") if len(text) > 26 else text
-            preview_res = (cached_trans[:24] + "..") if len(cached_trans) > 26 else cached_trans
-            if self.logger:
-                self.logger.info(
-                    message=f'"{preview_src}" => "{preview_res}"',
-                    category="cache",
-                    location=location_id,
+            cache_audit = verify_nmt_numbers(text, cached_trans)
+            if cache_audit.passed:
+                self._record_cache_access(direction, context, key)
+                preview_src = (text[:24] + "..") if len(text) > 26 else text
+                preview_res = (cached_trans[:24] + "..") if len(cached_trans) > 26 else cached_trans
+                if self.logger:
+                    self.logger.info(
+                        message=f'"{preview_src}" => "{preview_res}"',
+                        category="cache",
+                        location=location_id,
+                        elapsed=0.0,
+                    )
+                if log_cb:
+                    log_cb(f'  [⚡ Cache] {location_id}: "{preview_src}" => "{preview_res}"')
+                return TranslationResult(
+                    text=cached_trans,
+                    was_translated=True,
+                    was_reverted=False,
                     elapsed=0.0,
+                    source_backend="cache",
                 )
-            if log_cb:
-                log_cb(f'  [⚡ Cache] {location_id}: "{preview_src}" => "{preview_res}"')
-            return TranslationResult(
-                text=cached_trans,
-                was_translated=True,
-                was_reverted=False,
-                elapsed=0.0,
-                source_backend="cache",
-            )
+            else:
+                if self.logger:
+                    self.logger.warning(
+                        message=f"Bypassing invalid cached translation for '{location_id}': {cache_audit.summary()}",
+                        category="cache",
+                        location=location_id,
+                    )
+                if key in dir_cache:
+                    del dir_cache[key]
+                cached_trans = None
 
         # 2. Check runtime failure tracker
         if key in self.failed_this_run:
@@ -858,19 +916,29 @@ class TranslationEngine:
                 source_backend=backend_name,
             )
 
-        # 5. Post-translation numeric audit
-        nums_ok, missing_nums = verify_nmt_numbers(text, translated_raw)
-        if not nums_ok:
-            warn_msg = f"NMT numeric check: missing {missing_nums} in '{location_id}'"
+        # 5. Post-translation glossary substitution
+        final_trans = self._apply_post_translation_glossary(translated_raw, text, direction, backend)
+
+        # 6. Post-translation numeric audit gate
+        audit = verify_nmt_numbers(text, final_trans)
+        if not audit.passed:
+            warn_msg = f"NMT numeric check failed ({audit.summary()}) in '{location_id}'. Original kept."
             if self.logger:
                 self.logger.warning(message=warn_msg, category="translation", location=location_id)
             if log_cb:
                 log_cb(f"  [⚠ Number Audit] {warn_msg}")
+            self.failed_this_run.add(key)
+            if review_log_path:
+                self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
+            return TranslationResult(
+                text=text,
+                was_translated=False,
+                was_reverted=True,
+                elapsed=elapsed,
+                source_backend=backend_name,
+            )
 
-        # 6. Post-translation glossary substitution
-        final_trans = self._apply_post_translation_glossary(translated_raw, text, direction, backend)
-
-        # 7. Store in cache & return
+        # 7. Store in cache & return (Only reached if audit passed)
         self._cache_mgr.put(key=key, direction=direction, fingerprint=fp, value=final_trans, mode=mode_str)
         dir_cache[key] = final_trans
         self._record_cache_access(direction, context, key)
@@ -895,6 +963,7 @@ class TranslationEngine:
             elapsed=elapsed,
             source_backend=backend_name,
         )
+
 
     def _translate_chunk_llm(
         self,

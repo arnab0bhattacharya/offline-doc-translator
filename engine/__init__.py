@@ -19,6 +19,7 @@ from .cache import (
 from .core import (
     CACHE_TTL_DAYS,
     DIRECTIONS,
+    NumericAuditResult,
     TranslationEngine,
     TranslationMode,
     TranslationResult,
@@ -108,6 +109,7 @@ __all__ = [
     "escape_xml",
     "execute_translation",
     "extract_numeric_tokens",
+    "NumericAuditResult",
     "find_ollama_binary",
     "get_hardware_specs",
     "get_logger",

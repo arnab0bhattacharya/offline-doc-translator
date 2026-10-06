@@ -14,12 +14,15 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from engine.core import (
+    NumericAuditResult,
     TranslationEngine,
     TranslationMode,
     TranslationResult,
     extract_numeric_tokens,
+    hash_text,
     verify_nmt_numbers,
 )
+
 
 
 class MockNMTBackend:
@@ -101,6 +104,75 @@ class TestNMTNumericVerification(unittest.TestCase):
         valid, missing = verify_nmt_numbers(src, tgt)
         self.assertTrue(valid)
         self.assertEqual(missing, [])
+
+    def test_verify_nmt_numbers_full_width_zenkaku(self):
+        """Verifies that Japanese full-width numerals (NFKC) match standard ASCII numbers."""
+        src = "２０２４年１０月５日に開始、売上は１５．５％増"
+        tgt = "Started on October 5, 2024, sales up 15.5%"
+        audit = verify_nmt_numbers(src, tgt)
+        self.assertTrue(audit.passed)
+        self.assertEqual(audit.missing, [])
+        self.assertEqual(audit.added, [])
+
+    def test_verify_nmt_numbers_ordinals_matching(self):
+        """Verifies that ordinal indicators (1st, 2nd, etc.) match base ordinal quantities."""
+        src = "第1四半期の決算報告"
+        tgt = "Financial report for the 1st quarter"
+        audit = verify_nmt_numbers(src, tgt)
+        self.assertTrue(audit.passed)
+        self.assertEqual(audit.missing, [])
+        self.assertEqual(audit.added, [])
+
+    def test_verify_nmt_numbers_ordinal_mismatch(self):
+        """Verifies that ordinal number alterations (1st -> 2nd) fail the audit gate."""
+        src = "第1四半期の決算報告"
+        tgt = "Financial report for the 2nd quarter"
+        audit = verify_nmt_numbers(src, tgt)
+        self.assertFalse(audit.passed)
+        self.assertIn("1", audit.missing)
+        self.assertIn("2", audit.added)
+
+    def test_verify_nmt_numbers_repeated_count_mismatch(self):
+        """Verifies multiset comparison catches dropped duplicate numbers."""
+        src = "A社は100億円、B社も100億円の出資を行いました。"
+        tgt = "Company A invested 100 billion yen."
+        audit = verify_nmt_numbers(src, tgt)
+        self.assertFalse(audit.passed)
+        self.assertIn("100", audit.missing)
+        self.assertEqual(audit.added, [])
+
+    def test_verify_nmt_numbers_added_hallucinated_number(self):
+        """Verifies that hallucinated extra numbers in target output fail the audit gate when source has numbers."""
+        src = "売上は10億円に増加しました。"
+        tgt = "Sales increased to 10 billion and 99 million yen."
+        audit = verify_nmt_numbers(src, tgt)
+        self.assertFalse(audit.passed)
+        self.assertEqual(audit.missing, [])
+        self.assertIn("99", audit.added)
+
+    def test_verify_nmt_numbers_no_source_numbers_passes(self):
+        """Verifies that translations pass when source text contains no numeric tokens."""
+        src = "売上が大幅に増加しました。"
+        tgt = "Sales increased significantly to 99 billion yen."
+        audit = verify_nmt_numbers(src, tgt)
+        self.assertTrue(audit.passed)
+        self.assertEqual(audit.missing, [])
+        self.assertEqual(audit.added, ["99"])
+
+    def test_structured_audit_result_properties_and_backward_compatibility(self):
+        """Verifies NumericAuditResult dataclass properties, summary formatting, and tuple unpacking."""
+        audit = verify_nmt_numbers("100", "200")
+        self.assertFalse(audit.passed)
+        self.assertIn("missing ['100']", audit.summary())
+        self.assertIn("added ['200']", audit.summary())
+        # Test tuple unpacking backward compatibility: (valid, missing) = result
+        valid, missing = audit
+        self.assertFalse(valid)
+        self.assertEqual(missing, ["100"])
+        # Test index access
+        self.assertFalse(audit[0])
+        self.assertEqual(audit[1], ["100"])
+
 
 
 class TestNMTCleanPipeline(unittest.TestCase):
@@ -270,6 +342,88 @@ class TestNMTCleanPipeline(unittest.TestCase):
             result = engine.translate_chunk(source, direction="ja2en")
             self.assertTrue(result.was_translated)
             self.assertIn("sales", result.text)
+
+    def test_nmt_number_audit_failure_reverts_and_refuses_cache(self):
+        """Ensures that when an NMT model drops a number, the output is reverted and NOT cached."""
+        mock_backend = MockNMTBackend(
+            mapping={
+                "売上高は42億円でした。": "Sales were reported for the period.",  # Number '42' dropped!
+            }
+        )
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            review_log = os.path.join(td, "review.txt")
+            engine = TranslationEngine(
+                mode=TranslationMode.MACHINE_TRANSLATION,
+                cache_file=cache_file,
+            )
+            engine.set_backend(mock_backend, mode=TranslationMode.MACHINE_TRANSLATION)
+
+            source = "売上高は42億円でした。"
+            result = engine.translate_chunk(
+                source,
+                direction="ja2en",
+                location_id="sheet1_A1",
+                review_log_path=review_log,
+            )
+
+            # 1. Output must be reverted to original source text
+            self.assertFalse(result.was_translated)
+            self.assertTrue(result.was_reverted)
+            self.assertEqual(result.text, source)
+
+            # 2. Key must be registered in failed_this_run
+            key = hash_text(source)
+            self.assertIn(key, engine.failed_this_run)
+
+            # 3. Cache must NOT contain the corrupted output
+            cached = engine._cache_mgr.get(
+                key=key, direction="ja2en", fingerprint="", mode="machine_translation"
+            )
+            self.assertIsNone(cached)
+
+            # 4. Human review log must be recorded
+            self.assertTrue(os.path.exists(review_log))
+            with open(review_log, "r", encoding="utf-8") as f:
+                content = f.read()
+                self.assertIn("sheet1_A1", content)
+                self.assertIn(key[:16], content)
+
+    def test_nmt_cache_read_rejects_and_bypasses_bad_cached_number(self):
+        """Ensures that stale/legacy cache entries with missing numbers are rejected on read and evicted."""
+        mock_backend = MockNMTBackend(
+            mapping={
+                "売上高は42億円でした。": "Sales were 42 billion yen.",  # Valid translation
+            }
+        )
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = os.path.join(td, "cache.json")
+            engine = TranslationEngine(
+                mode=TranslationMode.MACHINE_TRANSLATION,
+                cache_file=cache_file,
+            )
+            engine.set_backend(mock_backend, mode=TranslationMode.MACHINE_TRANSLATION)
+
+            source = "売上高は42億円でした。"
+            key = hash_text(source)
+
+            # Poison cache with an old/bad entry that lost the number '42'
+            engine._cache_mgr.put(
+                key=key,
+                direction="ja2en",
+                fingerprint="",
+                value="Old bad cached translation without number.",
+                mode="machine_translation",
+            )
+
+            # Request translation: engine should detect numeric failure on cache read,
+            # evict the corrupt cache hit, and generate a fresh translation via backend.
+            result = engine.translate_chunk(source, direction="ja2en")
+            self.assertTrue(result.was_translated)
+            self.assertFalse(result.was_reverted)
+            self.assertEqual(result.text, "Sales were 42 billion yen.")
+            self.assertEqual(result.source_backend, "nmt")  # Freshly generated, not served from bad cache!
+
 
 
 if __name__ == "__main__":

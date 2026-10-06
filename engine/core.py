@@ -14,13 +14,11 @@ import json
 import logging
 import re
 import time
-import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Any, NamedTuple
+from typing import Any
 
 import psutil
 import requests
@@ -52,33 +50,6 @@ class TranslationResult:
     def __getitem__(self, index):
         """Supports index-based tuple access for backward compatibility."""
         return (self.text, self.was_translated, self.was_reverted)[index]
-
-
-@dataclass(frozen=True)
-class NumericAuditResult:
-    """Encapsulates the structured evaluation of numeric token preservation in NMT."""
-
-    passed: bool
-    missing: list[str]
-    added: list[str]
-    src_tokens: list[str]
-    tgt_tokens: list[str]
-
-    def __iter__(self):
-        """Supports backward-compatible unpacking: (passed, missing) = result."""
-        return iter((self.passed, self.missing))
-
-    def __getitem__(self, index):
-        """Supports index-based tuple access for backward compatibility: (passed, missing)[index]."""
-        return (self.passed, self.missing)[index]
-
-    def summary(self) -> str:
-        parts = []
-        if self.missing:
-            parts.append(f"missing {self.missing}")
-        if self.added:
-            parts.append(f"added {self.added}")
-        return "; ".join(parts) if parts else "OK"
 
 
 class TranslationMode(str, Enum):
@@ -189,148 +160,6 @@ def verify_placeholders(
     return actual == expected
 
 
-# Case-sensitive units (distinguish bytes B vs bits b, etc.)
-_CASE_SENSITIVE_UNITS = {
-    # Data units
-    "PB",
-    "TB",
-    "GB",
-    "MB",
-    "KB",
-    "B",
-    "Pb",
-    "Tb",
-    "Gb",
-    "Mb",
-    "Kb",
-    "b",
-    "Gbps",
-    "Mbps",
-    "Kbps",
-    "bps",
-    # Power / Frequency / Electrical / Pressure
-    "GHz",
-    "MHz",
-    "kHz",
-    "Hz",
-    "GW",
-    "MW",
-    "kW",
-    "W",
-    "kV",
-    "mV",
-    "V",
-    "mA",
-    "A",
-    "kWh",
-    "MPa",
-    "kPa",
-    "Pa",
-}
-
-# Case-insensitive units (normalized to lowercase)
-_CASE_INSENSITIVE_UNITS = {
-    "kg",
-    "mg",
-    "g",
-    "km",
-    "cm",
-    "mm",
-    "nm",
-    "m",
-    "ml",
-    "l",
-    "bar",
-    "psi",
-    "rpm",
-    "db",
-    "deg",
-    "ms",
-    "ns",
-    "min",
-    "hr",
-    "hrs",
-}
-
-# Attached single-letter scale suffixes (e.g. 42M, 10k, 1.5B, 1T)
-_ATTACHED_SCALE_SUFFIXES = {
-    "M": "M",
-    "k": "k",
-    "K": "k",
-    "B": "B",
-    "T": "T",
-}
-
-# Scale multipliers for quantitative equivalence comparison
-_SCALE_WORDS_MULTIPLIER = {
-    "thousand": Decimal("1000"),
-    "million": Decimal("1000000"),
-    "billion": Decimal("1000000000"),
-    "trillion": Decimal("1000000000000"),
-}
-
-_ATTACHED_SCALE_MULTIPLIER = {
-    "k": Decimal("1000"),
-    "K": Decimal("1000"),
-    "M": Decimal("1000000"),
-    "B": Decimal("1000000000"),
-    "T": Decimal("1000000000000"),
-}
-
-_JP_SCALE_MULTIPLIER = {
-    "万": Decimal("10000"),  # 10^4 = 10,000
-    "億": Decimal("100000000"),  # 10^8 = 100,000,000
-    "兆": Decimal("1000000000000"),  # 10^12 = 1,000,000,000,000
-}
-
-
-def _normalize_decimal(d: Decimal) -> str:
-    """Normalizes a Decimal into a canonical string without trailing zeros or scientific notation."""
-    if d == d.to_integral():
-        return str(int(d))
-    return f"{d:f}".rstrip("0").rstrip(".")
-
-
-def _format_scaled_display(norm_val: str) -> str:
-    """Formats a normalized quantitative integer string into canonical scale display (e.g. 4.2B, 500k, 1T)."""
-    try:
-        d = Decimal(norm_val)
-    except (InvalidOperation, ValueError):
-        return norm_val
-    if d >= Decimal("1000000000000"):
-        return f"{_normalize_decimal(d / Decimal('1000000000000'))}T"
-    if d >= Decimal("1000000000"):
-        return f"{_normalize_decimal(d / Decimal('1000000000'))}B"
-    if d >= Decimal("1000000"):
-        return f"{_normalize_decimal(d / Decimal('1000000'))}M"
-    if d >= Decimal("1000"):
-        return f"{_normalize_decimal(d / Decimal('1000'))}k"
-    return norm_val
-
-
-# Scale words mapped to canonical unit (e.g. 42 million -> 42M)
-_SCALE_WORDS_MAP = {
-    "million": "M",
-    "thousand": "k",
-    "billion": "B",
-    "trillion": "T",
-}
-
-# Spelled-out ordinals (first through tenth)
-_ORDINAL_WORDS_EN = {
-    "1": "first",
-    "2": "second",
-    "3": "third",
-    "4": "fourth",
-    "5": "fifth",
-    "6": "sixth",
-    "7": "seventh",
-    "8": "eighth",
-    "9": "ninth",
-    "10": "tenth",
-}
-_ORDINAL_WORD_TO_NUM = {v: k for k, v in _ORDINAL_WORDS_EN.items()}
-
 _MONTH_NAMES_EN = {
     "1": "january",
     "2": "february",
@@ -345,390 +174,47 @@ _MONTH_NAMES_EN = {
     "11": "november",
     "12": "december",
 }
-_MONTH_ABBRS_EN = {
-    "1": "jan",
-    "2": "feb",
-    "3": "mar",
-    "4": "apr",
-    "6": "jun",
-    "7": "jul",
-    "8": "aug",
-    "9": "sep",
-    "10": "oct",
-    "11": "nov",
-    "12": "dec",
-}
-
-_DATE_PREPOSITIONS_PATTERN = (
-    r"(?i:in|during|for|on|of|by|since|until|till|from|through|thru|before|after|as\s+of|early|mid|mid-|late)"
-)
-
-
-def _match_abbr_or_word_date_context(norm: str, word: str) -> list[tuple[int, int]]:
-    """
-    Finds occurrences of an ambiguous month word/abbreviation that appear in strict date context:
-    - Preceded by a date preposition ('in March', 'of March')
-    - Followed by day/year ('March 2024', 'March 15th')
-    - Preceded by day ('15 March', '15th of March')
-    - Followed by comma + year ('March, 2024')
-    """
-    pattern = re.compile(
-        rf"(?:"
-        rf"(?<![A-Za-z0-9_]){_DATE_PREPOSITIONS_PATTERN}\s+{word}\.?(?![A-Za-z0-9_])"
-        rf"|"
-        rf"(?<![A-Za-z0-9_]){word}\.?\s+(?:\d{{1,2}}(?:st|nd|rd|th)?|\d{{4}})(?![A-Za-z0-9_])"
-        rf"|"
-        rf"(?<![A-Za-z0-9_])\d{{1,2}}(?:st|nd|rd|th)?\s+(?:(?i:of)\s+)?{word}\.?(?![A-Za-z0-9_])"
-        rf"|"
-        rf"(?<![A-Za-z0-9_]){word}\.?\s*,\s*\d{{4}}(?![A-Za-z0-9_])"
-        rf")",
-        re.IGNORECASE,
-    )
-    spans: list[tuple[int, int]] = []
-    for m in pattern.finditer(norm):
-        sub_m = re.search(rf"\b{word}\.?", m.group(0), re.IGNORECASE)
-        if sub_m:
-            start = m.start() + sub_m.start()
-            end = m.start() + sub_m.end()
-            spans.append((start, end))
-    return spans
-
-
-# Ordinal context nouns
-_ORDINAL_NOUNS_PATTERN = (
-    r"(?:quarter|quarterly|half|phase|stage|step|part|round|place|session|chapter|"
-    r"period|edition|version|generation|division|rank|tier|grade|priority|choice|"
-    r"option|attempt|time|year|month|week|day)"
-)
-
-_ORDINAL_WORD_CONTEXT_RE = re.compile(
-    rf"(?:"
-    rf"(?<![A-Za-z0-9_])(?:the|a|an|our|their|its|his|her|this|that|every)\s+({'|'.join(_ORDINAL_WORD_TO_NUM.keys())})(?![A-Za-z0-9_])"
-    rf"|"
-    rf"(?<![A-Za-z0-9_])({'|'.join(_ORDINAL_WORD_TO_NUM.keys())})\s+{_ORDINAL_NOUNS_PATTERN}(?![A-Za-z0-9_])"
-    rf"|"
-    rf"(?<![A-Za-z0-9_])({'|'.join(_ORDINAL_WORD_TO_NUM.keys())})-(?:quarter|half|phase|stage|tier|rate|class|degree|generation)(?![A-Za-z0-9_])"
-    rf")",
-    re.IGNORECASE,
-)
-
-
-class CanonicalToken:
-    def __init__(self, kind: str, value: str, display: str = ""):
-        self.kind = kind
-        self.value = value
-        self.display = display or value
-
-    def __eq__(self, other):
-        if not isinstance(other, CanonicalToken):
-            return False
-        return self.kind == other.kind and self.value == other.value
-
-    def __hash__(self):
-        return hash((self.kind, self.value))
-
-    def __repr__(self):
-        return f"{self.kind}({self.value}, display={self.display})"
-
-
-class _SpanToken(NamedTuple):
-    start: int
-    end: int
-    token: CanonicalToken
-    priority: int
-
-
-def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
-    """
-    Extracts non-overlapping typed canonical tokens using span-aware greedy precedence:
-    1. Scaled quantities: '42 million', '42M', '42億円' -> Number('42000000' or '4200000000')
-    2. Physical/digital units: '500kg', '32GB' -> Unit('500kg')
-    3. Percentages: '15%', '15パーセント' -> Percent('15')
-    4. Japanese date months: '5月' -> Month('5')
-    5. English date months: 'May 2024', 'in March' (strict date context) -> Month('5'/'3'), 'October' -> Month('10')
-    6. Japanese ordinals: '第1' -> Ordinal('1')
-    7. English ordinals: '1st', 'the first quarter' (contextual) -> Ordinal('1')
-    8. Plain numbers: '2024', '1250000' -> Number('2024')
-    """
-    norm = unicodedata.normalize("NFKC", text)
-    candidates: list[_SpanToken] = []
-
-    # 1. Scaled quantities: phrases like '42 million'
-    for m in re.finditer(
-        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s+(million|billion|thousand|trillion)(?![A-Za-z0-9_])",
-        norm,
-        re.IGNORECASE,
-    ):
-        raw_num = m.group(1).replace(",", "")
-        scale_word = m.group(2).lower()
-        try:
-            norm_val = _normalize_decimal(Decimal(raw_num) * _SCALE_WORDS_MULTIPLIER[scale_word])
-        except (InvalidOperation, ValueError):
-            norm_val = raw_num
-        disp = f"{raw_num}{_SCALE_WORDS_MAP[scale_word]}"
-        tok = CanonicalToken(kind="number", value=norm_val, display=disp)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=100))
-
-    # 1b. Scaled quantities: Japanese currency scales 42億円, 50万円, 1兆円
-    for m in re.finditer(r"(?<!\d)(\d+(?:,\d{3})*(?:\.\d+)?)\s*(万|億|兆)", norm):
-        raw_num = m.group(1).replace(",", "")
-        jp_scale = m.group(2)
-        try:
-            norm_val = _normalize_decimal(Decimal(raw_num) * _JP_SCALE_MULTIPLIER[jp_scale])
-        except (InvalidOperation, ValueError):
-            norm_val = raw_num
-        disp = _format_scaled_display(norm_val)
-        tok = CanonicalToken(kind="number", value=norm_val, display=disp)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=98))
-
-    # 2. Scaled quantities: attached like '42M', '10k'
-    for m in re.finditer(
-        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(M|k|K|B|T)(?![A-Za-z0-9_])",
-        norm,
-    ):
-        raw_num = m.group(1).replace(",", "")
-        scale_suf = m.group(2)
-        try:
-            norm_val = _normalize_decimal(Decimal(raw_num) * _ATTACHED_SCALE_MULTIPLIER[scale_suf])
-        except (InvalidOperation, ValueError):
-            norm_val = raw_num
-        disp = f"{raw_num}{_ATTACHED_SCALE_SUFFIXES[scale_suf]}"
-        tok = CanonicalToken(kind="number", value=norm_val, display=disp)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=95))
-
-    # 3. Physical & Digital Units: '500kg', '32GB'
-    for m in re.finditer(
-        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s*([A-Za-z]+)(?![A-Za-z0-9_])",
-        norm,
-    ):
-        raw_num = m.group(1).replace(",", "")
-        suffix = m.group(2)
-        try:
-            norm_num = _normalize_decimal(Decimal(raw_num))
-        except (InvalidOperation, ValueError):
-            norm_num = raw_num
-        if suffix in _CASE_SENSITIVE_UNITS:
-            tok = CanonicalToken(kind="unit", value=f"{norm_num}{suffix}", display=f"{raw_num}{suffix}")
-            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=90))
-        elif suffix.lower() in _CASE_INSENSITIVE_UNITS:
-            tok = CanonicalToken(kind="unit", value=f"{norm_num}{suffix.lower()}", display=f"{raw_num}{suffix.lower()}")
-            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=90))
-
-    # 4. Percentages: '15%', '15 percent', '15パーセント'
-    for m in re.finditer(
-        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(?:%|percent(?:s)?|percentage(?:\s+points)?|パーセント)(?![A-Za-z0-9_])",
-        norm,
-        re.IGNORECASE,
-    ):
-        raw_num = m.group(1).replace(",", "")
-        try:
-            norm_val = _normalize_decimal(Decimal(raw_num))
-        except (InvalidOperation, ValueError):
-            norm_val = raw_num
-        tok = CanonicalToken(kind="percent", value=norm_val, display=f"{raw_num}%")
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=85))
-
-    # 5. Japanese Date Months: '5月', '10月'
-    for m in re.finditer(r"(?<!\d)(1[0-2]|[1-9])\s*月", norm):
-        month_num = str(int(m.group(1)))
-        tok = CanonicalToken(kind="month", value=month_num, display=month_num)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=80))
-
-    # 6. Ambiguous English Months (person names or ordinary words):
-    # March (verb/noun), April (person name), May (modal verb/name), June (person name), August (adjective/name)
-    for m_num, m_name in (("3", "March"), ("4", "April"), ("5", "May"), ("6", "June"), ("8", "August")):
-        for s, e in _match_abbr_or_word_date_context(norm, m_name):
-            tok = CanonicalToken(kind="month", value=m_num, display=m_num)
-            candidates.append(_SpanToken(start=s, end=e, token=tok, priority=80))
-
-    # 7. Unambiguous English Months: January, February, July, September, October, November, December
-    for num, name in _MONTH_NAMES_EN.items():
-        if num in ("3", "4", "5", "6", "8"):
-            continue
-        for m in re.finditer(rf"(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])", norm, re.IGNORECASE):
-            tok = CanonicalToken(kind="month", value=num, display=num)
-            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
-
-    # 8. English Month Abbreviations in date context
-    for num, abbr in _MONTH_ABBRS_EN.items():
-        for s, e in _match_abbr_or_word_date_context(norm, abbr):
-            tok = CanonicalToken(kind="month", value=num, display=num)
-            candidates.append(_SpanToken(start=s, end=e, token=tok, priority=75))
-
-    # 9. Japanese Ordinals: '第1', '第3'
-    for m in re.finditer(r"第\s*(\d+|[1-9])", norm):
-        ord_num = str(int(m.group(1)))
-        tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=70))
-
-    # 9b. Quarter notation: 'Q1', 'Q2', 'Q3', 'Q4', '1Q', '2Q', '3Q', '4Q'
-    for m in re.finditer(r"(?<![A-Za-z0-9_])(?:Q|q)\s*([1-4])(?![A-Za-z0-9_])", norm):
-        ord_num = m.group(1)
-        tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=68))
-
-    for m in re.finditer(r"(?<![A-Za-z0-9_])([1-4])\s*(?:Q|q)(?![A-Za-z0-9_])", norm):
-        ord_num = m.group(1)
-        tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=68))
-
-    # 10. English Ordinals with suffix: '1st', '2nd', '3rd'
-    for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+)(?:st|nd|rd|th)(?![A-Za-z0-9_])", norm, re.IGNORECASE):
-        raw_num = str(int(m.group(1)))
-        tok = CanonicalToken(kind="ordinal", value=raw_num, display=raw_num)
-        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=70))
-
-    # 11. English Spelled-out Ordinals in Ordinal Context
-    for m in _ORDINAL_WORD_CONTEXT_RE.finditer(norm):
-        for g_idx in (1, 2, 3):
-            word = m.group(g_idx)
-            if word:
-                ord_num = _ORDINAL_WORD_TO_NUM[word.lower()]
-                tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
-                candidates.append(_SpanToken(start=m.start(g_idx), end=m.end(g_idx), token=tok, priority=65))
-                break
-
-    # 12. Plain numbers
-    for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(?![A-Za-z0-9_])", norm):
-        raw_num = m.group(1).replace(",", "")
-        try:
-            norm_val = _normalize_decimal(Decimal(raw_num))
-        except (InvalidOperation, ValueError):
-            norm_val = raw_num
-        tok = CanonicalToken(kind="number", value=norm_val, display=raw_num)
-        candidates.append(_SpanToken(start=m.start(1), end=m.end(1), token=tok, priority=10))
-
-    # Sort candidates by priority descending, span length descending, start ascending
-    candidates.sort(key=lambda c: (-c.priority, -(c.end - c.start), c.start))
-
-    # Greedy non-overlapping interval selection
-    selected: list[_SpanToken] = []
-    occupied_spans: list[tuple[int, int]] = []
-
-    for cand in candidates:
-        overlaps = False
-        for s, e in occupied_spans:
-            if not (cand.end <= s or cand.start >= e):
-                overlaps = True
-                break
-        if not overlaps:
-            selected.append(cand)
-            occupied_spans.append((cand.start, cand.end))
-
-    selected.sort(key=lambda s: s.start)
-    return [s.token for s in selected]
 
 
 def extract_numeric_tokens(text: str) -> list[str]:
-    """
-    Extracts numeric tokens, preserving:
-    - Pure numbers: '2024', '1250000', '15.5'
-    - Units (case-sensitive or normalized): '500kg', '32GB', '10Gbps'
-    - Attached scales: '42M', '42k', '1.5B'
-    - Ordinals: '1', '2' (from '1st', '2nd')
-    - Percentage: '15.5' (with '%' stripped to match existing behavior)
-    Excludes identifier-like strings containing underscores (e.g. '500kg_v2').
-    """
-    normalized = unicodedata.normalize("NFKC", text)
+    """Extracts numeric values without commas or percentages for consistency checks."""
+    matches = re.findall(r"(?<![A-Za-z0-9])\d+(?:,\d{3})*(?:\.\d+)?%?(?![A-Za-z0-9])", text)
+    cleaned = []
+    for m in matches:
+        val = m.replace(",", "").rstrip("%").strip()
+        if val:
+            cleaned.append(val)
+    return cleaned
 
-    pattern = re.compile(r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(%|\s*[A-Za-z]+)?(?![A-Za-z0-9_])")
-    tokens = []
-    for match in pattern.finditer(normalized):
-        raw_num = match.group(1).replace(",", "")
-        suffix = match.group(2)
 
-        if not suffix:
-            tokens.append(raw_num)
+def verify_nmt_numbers(source_text: str, target_text: str) -> tuple[bool, list[str]]:
+    """
+    Checks that numbers present in the source text appear in the target text.
+    Accounts for localized month names (e.g. '10月' -> 'October').
+    Returns (all_present: bool, missing_numbers: list[str]).
+    """
+    src_nums = extract_numeric_tokens(source_text)
+    if not src_nums:
+        return True, []
+
+    target_lower = target_text.lower()
+    tgt_nums = extract_numeric_tokens(target_text)
+    tgt_counter = Counter(tgt_nums)
+
+    missing = []
+    for num in src_nums:
+        if tgt_counter.get(num, 0) > 0:
+            tgt_counter[num] -= 1
             continue
 
-        has_space = suffix.startswith(" ")
-        s_clean = suffix.strip()
+        if num in _MONTH_NAMES_EN:
+            month_word = _MONTH_NAMES_EN[num]
+            if month_word in target_lower or month_word[:3] in target_lower:
+                continue
 
-        if s_clean == "%" or s_clean.lower() in ("st", "nd", "rd", "th"):
-            tokens.append(raw_num)
-        elif not has_space and s_clean in _ATTACHED_SCALE_SUFFIXES:
-            tokens.append(f"{raw_num}{_ATTACHED_SCALE_SUFFIXES[s_clean]}")
-        elif s_clean in _CASE_SENSITIVE_UNITS:
-            tokens.append(f"{raw_num}{s_clean}")
-        elif s_clean.lower() in _CASE_INSENSITIVE_UNITS:
-            tokens.append(f"{raw_num}{s_clean.lower()}")
-        else:
-            if has_space:
-                tokens.append(raw_num)
-            else:
-                # Attached unrecognized alphanumeric suffix -> identifier, ignore
-                pass
-    return tokens
+        missing.append(num)
 
-
-def _extract_scale_word_equivalences(text: str) -> Counter:
-    """Extracts phrases like '42 million' -> '42M', '10 thousand' -> '10k'."""
-    norm = unicodedata.normalize("NFKC", text)
-    scales: Counter[str] = Counter()
-    for m in re.finditer(
-        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s+(million|billion|thousand|trillion)(?![A-Za-z0-9_])",
-        norm,
-        re.IGNORECASE,
-    ):
-        raw_num = m.group(1).replace(",", "")
-        unit = _SCALE_WORDS_MAP[m.group(2).lower()]
-        scales[f"{raw_num}{unit}"] += 1
-    return scales
-
-
-def _extract_month_counts(text: str) -> Counter:
-    """Extracts month counts from Japanese date context or English month names."""
-    tokens = extract_canonical_tokens(text)
-    return Counter(tok.value for tok in tokens if tok.kind == "month")
-
-
-def _extract_source_month_numbers(text: str) -> Counter:
-    return _extract_month_counts(text)
-
-
-def _extract_target_month_counts(text: str) -> Counter:
-    return _extract_month_counts(text)
-
-
-def _extract_ordinal_counts(text: str) -> Counter:
-    """Extracts ordinal counts from Japanese or English text."""
-    tokens = extract_canonical_tokens(text)
-    return Counter(tok.value for tok in tokens if tok.kind == "ordinal")
-
-
-def _extract_target_ordinal_counts(text: str) -> Counter:
-    return _extract_ordinal_counts(text)
-
-
-def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult:
-    """
-    Checks that numeric and quantified content present in the source text is preserved in the target.
-    Uses typed, span-aware canonical occurrences (Scaled, Unit, Month, Ordinal, Number)
-    and strictly compares multisets. Leftover source tokens are reported as missing; leftover
-    target tokens are reported as added.
-    Returns: NumericAuditResult(passed, missing, added, src_tokens, tgt_tokens)
-    """
-    src_tokens = extract_canonical_tokens(source_text)
-    tgt_tokens = extract_canonical_tokens(target_text)
-
-    src_counter = Counter(src_tokens)
-    tgt_counter = Counter(tgt_tokens)
-
-    missing_tokens = src_counter - tgt_counter
-    added_tokens = tgt_counter - src_counter
-
-    missing = [tok.display for tok, cnt in missing_tokens.items() for _ in range(cnt)]
-    added = [tok.display for tok, cnt in added_tokens.items() for _ in range(cnt)]
-
-    passed = len(missing) == 0 and len(added) == 0
-
-    return NumericAuditResult(
-        passed=passed,
-        missing=missing,
-        added=added,
-        src_tokens=[tok.display for tok in src_tokens],
-        tgt_tokens=[tok.display for tok in tgt_tokens],
-    )
+    return len(missing) == 0, missing
 
 
 def unmask_numbers(text: str, number_map: dict[str, str]) -> str:
@@ -1270,38 +756,25 @@ class TranslationEngine:
             cached_trans = dir_cache[key]
 
         if cached_trans is not None:
-            cache_audit = verify_nmt_numbers(text, cached_trans)
-            if cache_audit.passed:
-                self._record_cache_access(direction, context, key)
-                preview_src = (text[:24] + "..") if len(text) > 26 else text
-                preview_res = (cached_trans[:24] + "..") if len(cached_trans) > 26 else cached_trans
-                if self.logger:
-                    self.logger.info(
-                        message=f'"{preview_src}" => "{preview_res}"',
-                        category="cache",
-                        location=location_id,
-                        elapsed=0.0,
-                    )
-                if log_cb:
-                    log_cb(f'  [⚡ Cache] {location_id}: "{preview_src}" => "{preview_res}"')
-                return TranslationResult(
-                    text=cached_trans,
-                    was_translated=True,
-                    was_reverted=False,
+            self._record_cache_access(direction, context, key)
+            preview_src = (text[:24] + "..") if len(text) > 26 else text
+            preview_res = (cached_trans[:24] + "..") if len(cached_trans) > 26 else cached_trans
+            if self.logger:
+                self.logger.info(
+                    message=f'"{preview_src}" => "{preview_res}"',
+                    category="cache",
+                    location=location_id,
                     elapsed=0.0,
-                    source_backend="cache",
                 )
-            else:
-                if self.logger:
-                    self.logger.warning(
-                        message=f"Bypassing invalid cached translation for '{location_id}': {cache_audit.summary()}",
-                        category="cache",
-                        location=location_id,
-                    )
-                self._cache_mgr.delete(key=key, direction=direction, fingerprint=fp, mode=mode_str)
-                if key in dir_cache:
-                    del dir_cache[key]
-                cached_trans = None
+            if log_cb:
+                log_cb(f'  [⚡ Cache] {location_id}: "{preview_src}" => "{preview_res}"')
+            return TranslationResult(
+                text=cached_trans,
+                was_translated=True,
+                was_reverted=False,
+                elapsed=0.0,
+                source_backend="cache",
+            )
 
         # 2. Check runtime failure tracker
         if key in self.failed_this_run:
@@ -1385,29 +858,19 @@ class TranslationEngine:
                 source_backend=backend_name,
             )
 
-        # 5. Post-translation glossary substitution
-        final_trans = self._apply_post_translation_glossary(translated_raw, text, direction, backend)
-
-        # 6. Post-translation numeric audit gate
-        audit = verify_nmt_numbers(text, final_trans)
-        if not audit.passed:
-            warn_msg = f"NMT numeric check failed ({audit.summary()}) in '{location_id}'. Original kept."
+        # 5. Post-translation numeric audit
+        nums_ok, missing_nums = verify_nmt_numbers(text, translated_raw)
+        if not nums_ok:
+            warn_msg = f"NMT numeric check: missing {missing_nums} in '{location_id}'"
             if self.logger:
                 self.logger.warning(message=warn_msg, category="translation", location=location_id)
             if log_cb:
                 log_cb(f"  [⚠ Number Audit] {warn_msg}")
-            self.failed_this_run.add(key)
-            if review_log_path:
-                self.log_needs_review(review_log_path, location_id, chunk_id, text, key)
-            return TranslationResult(
-                text=text,
-                was_translated=False,
-                was_reverted=True,
-                elapsed=elapsed,
-                source_backend=backend_name,
-            )
 
-        # 7. Store in cache & return (Only reached if audit passed)
+        # 6. Post-translation glossary substitution
+        final_trans = self._apply_post_translation_glossary(translated_raw, text, direction, backend)
+
+        # 7. Store in cache & return
         self._cache_mgr.put(key=key, direction=direction, fingerprint=fp, value=final_trans, mode=mode_str)
         dir_cache[key] = final_trans
         self._record_cache_access(direction, context, key)

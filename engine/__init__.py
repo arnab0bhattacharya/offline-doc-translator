@@ -19,7 +19,6 @@ from .cache import (
 from .core import (
     CACHE_TTL_DAYS,
     DIRECTIONS,
-    NumericAuditResult,
     TranslationEngine,
     TranslationMode,
     TranslationResult,
@@ -85,7 +84,6 @@ __all__ = [
     "LLMBackend",
     "MADLADBackend",
     "NullCache",
-    "NumericAuditResult",
     "OllamaManager",
     "TranslationBackend",
     "TranslationCache",

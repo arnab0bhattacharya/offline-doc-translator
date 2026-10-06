@@ -18,6 +18,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, NamedTuple
 
@@ -260,6 +261,36 @@ _ATTACHED_SCALE_SUFFIXES = {
     "T": "T",
 }
 
+# Scale multipliers for quantitative equivalence comparison
+_SCALE_WORDS_MULTIPLIER = {
+    "thousand": Decimal("1000"),
+    "million": Decimal("1000000"),
+    "billion": Decimal("1000000000"),
+    "trillion": Decimal("1000000000000"),
+}
+
+_ATTACHED_SCALE_MULTIPLIER = {
+    "k": Decimal("1000"),
+    "K": Decimal("1000"),
+    "M": Decimal("1000000"),
+    "B": Decimal("1000000000"),
+    "T": Decimal("1000000000000"),
+}
+
+_JP_SCALE_MULTIPLIER = {
+    "万": Decimal("10000"),  # 10^4 = 10,000
+    "億": Decimal("100000000"),  # 10^8 = 100,000,000
+    "兆": Decimal("1000000000000"),  # 10^12 = 1,000,000,000,000
+}
+
+
+def _normalize_decimal(d: Decimal) -> str:
+    """Normalizes a Decimal into a canonical string without trailing zeros or scientific notation."""
+    if d == d.to_integral():
+        return str(int(d))
+    return f"{d:f}".rstrip("0").rstrip(".")
+
+
 # Scale words mapped to canonical unit (e.g. 42 million -> 42M)
 _SCALE_WORDS_MAP = {
     "million": "M",
@@ -311,17 +342,39 @@ _MONTH_ABBRS_EN = {
     "12": "dec",
 }
 
-_MAY_DATE_STRICT = re.compile(
-    r"(?:"
-    r"(?<![A-Za-z0-9_])(?i:in|during|for|on|of|by|since|until|from|as\s+of|early|mid|mid-|late)\s+May(?![A-Za-z0-9_])"
-    r"|"
-    r"(?<![A-Za-z0-9_])May\s+(?:\d{1,2}(?:st|nd|rd|th)?|\d{4})(?![A-Za-z0-9_])"
-    r"|"
-    r"(?<![A-Za-z0-9_])\d{1,2}(?:st|nd|rd|th)?\s+(?:(?i:of)\s+)?May(?![A-Za-z0-9_])"
-    r"|"
-    r"(?<![A-Za-z0-9_])May\s*,\s*\d{4}(?![A-Za-z0-9_])"
-    r")"
+_DATE_PREPOSITIONS_PATTERN = (
+    r"(?i:in|during|for|on|of|by|since|until|till|from|through|thru|before|after|as\s+of|early|mid|mid-|late)"
 )
+
+
+def _match_abbr_or_word_date_context(norm: str, word: str) -> list[tuple[int, int]]:
+    """
+    Finds occurrences of an ambiguous month word/abbreviation that appear in strict date context:
+    - Preceded by a date preposition ('in March', 'of March')
+    - Followed by day/year ('March 2024', 'March 15th')
+    - Preceded by day ('15 March', '15th of March')
+    - Followed by comma + year ('March, 2024')
+    """
+    pattern = re.compile(
+        rf"(?:"
+        rf"(?<![A-Za-z0-9_]){_DATE_PREPOSITIONS_PATTERN}\s+{word}\.?(?![A-Za-z0-9_])"
+        rf"|"
+        rf"(?<![A-Za-z0-9_]){word}\.?\s+(?:\d{{1,2}}(?:st|nd|rd|th)?|\d{{4}})(?![A-Za-z0-9_])"
+        rf"|"
+        rf"(?<![A-Za-z0-9_])\d{{1,2}}(?:st|nd|rd|th)?\s+(?:(?i:of)\s+)?{word}\.?(?![A-Za-z0-9_])"
+        rf"|"
+        rf"(?<![A-Za-z0-9_]){word}\.?\s*,\s*\d{{4}}(?![A-Za-z0-9_])"
+        rf")",
+        re.IGNORECASE,
+    )
+    spans: list[tuple[int, int]] = []
+    for m in pattern.finditer(norm):
+        sub_m = re.search(rf"\b{word}\.?", m.group(0), re.IGNORECASE)
+        if sub_m:
+            start = m.start() + sub_m.start()
+            end = m.start() + sub_m.end()
+            spans.append((start, end))
+    return spans
 
 
 # Ordinal context nouns
@@ -371,13 +424,14 @@ class _SpanToken(NamedTuple):
 def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
     """
     Extracts non-overlapping typed canonical tokens using span-aware greedy precedence:
-    1. Scaled quantities: '42 million', '42M', '42億円' -> Scaled('42M' or '42B')
+    1. Scaled quantities: '42 million', '42M', '42億円' -> Number('42000000' or '4200000000')
     2. Physical/digital units: '500kg', '32GB' -> Unit('500kg')
-    3. Japanese date months: '5月' -> Month('5')
-    4. English date months: 'May 2024', 'in May' (strict date context) -> Month('5'), 'October' -> Month('10')
-    5. Japanese ordinals: '第1' -> Ordinal('1')
-    6. English ordinals: '1st', 'the first quarter' (contextual) -> Ordinal('1')
-    7. Plain numbers & percentages: '2024', '15.5%', '1250000' -> Number('2024')
+    3. Percentages: '15%', '15パーセント' -> Percent('15')
+    4. Japanese date months: '5月' -> Month('5')
+    5. English date months: 'May 2024', 'in March' (strict date context) -> Month('5'/'3'), 'October' -> Month('10')
+    6. Japanese ordinals: '第1' -> Ordinal('1')
+    7. English ordinals: '1st', 'the first quarter' (contextual) -> Ordinal('1')
+    8. Plain numbers: '2024', '1250000' -> Number('2024')
     """
     norm = unicodedata.normalize("NFKC", text)
     candidates: list[_SpanToken] = []
@@ -389,16 +443,25 @@ def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
         re.IGNORECASE,
     ):
         raw_num = m.group(1).replace(",", "")
-        unit = _SCALE_WORDS_MAP[m.group(2).lower()]
-        tok = CanonicalToken(kind="scaled", value=f"{raw_num}{unit}", display=f"{raw_num}{unit}")
+        scale_word = m.group(2).lower()
+        try:
+            norm_val = _normalize_decimal(Decimal(raw_num) * _SCALE_WORDS_MULTIPLIER[scale_word])
+        except (InvalidOperation, ValueError):
+            norm_val = raw_num
+        disp = f"{raw_num}{_SCALE_WORDS_MAP[scale_word]}"
+        tok = CanonicalToken(kind="number", value=norm_val, display=disp)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=100))
 
-    # 1b. Scaled quantities: Japanese currency scales 42億円, 10万円, 1兆円
+    # 1b. Scaled quantities: Japanese currency scales 42億円, 50万円, 1兆円
     for m in re.finditer(r"(?<!\d)(\d+(?:,\d{3})*(?:\.\d+)?)\s*(万|億|兆)", norm):
         raw_num = m.group(1).replace(",", "")
         jp_scale = m.group(2)
-        unit = "k" if jp_scale == "万" else ("B" if jp_scale == "億" else "T")
-        tok = CanonicalToken(kind="scaled", value=f"{raw_num}{unit}", display=raw_num)
+        try:
+            norm_val = _normalize_decimal(Decimal(raw_num) * _JP_SCALE_MULTIPLIER[jp_scale])
+        except (InvalidOperation, ValueError):
+            norm_val = raw_num
+        disp = raw_num
+        tok = CanonicalToken(kind="number", value=norm_val, display=disp)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=98))
 
     # 2. Scaled quantities: attached like '42M', '10k'
@@ -407,8 +470,13 @@ def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
         norm,
     ):
         raw_num = m.group(1).replace(",", "")
-        unit = _ATTACHED_SCALE_SUFFIXES[m.group(2)]
-        tok = CanonicalToken(kind="scaled", value=f"{raw_num}{unit}", display=f"{raw_num}{unit}")
+        scale_suf = m.group(2)
+        try:
+            norm_val = _normalize_decimal(Decimal(raw_num) * _ATTACHED_SCALE_MULTIPLIER[scale_suf])
+        except (InvalidOperation, ValueError):
+            norm_val = raw_num
+        disp = f"{raw_num}{_ATTACHED_SCALE_SUFFIXES[scale_suf]}"
+        tok = CanonicalToken(kind="number", value=norm_val, display=disp)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=95))
 
     # 3. Physical & Digital Units: '500kg', '32GB'
@@ -418,52 +486,80 @@ def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
     ):
         raw_num = m.group(1).replace(",", "")
         suffix = m.group(2)
+        try:
+            norm_num = _normalize_decimal(Decimal(raw_num))
+        except (InvalidOperation, ValueError):
+            norm_num = raw_num
         if suffix in _CASE_SENSITIVE_UNITS:
-            tok = CanonicalToken(kind="unit", value=f"{raw_num}{suffix}", display=f"{raw_num}{suffix}")
+            tok = CanonicalToken(kind="unit", value=f"{norm_num}{suffix}", display=f"{raw_num}{suffix}")
             candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=90))
         elif suffix.lower() in _CASE_INSENSITIVE_UNITS:
-            tok = CanonicalToken(kind="unit", value=f"{raw_num}{suffix.lower()}", display=f"{raw_num}{suffix.lower()}")
+            tok = CanonicalToken(kind="unit", value=f"{norm_num}{suffix.lower()}", display=f"{raw_num}{suffix.lower()}")
             candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=90))
 
-    # 4. Japanese Date Months: '5月', '10月'
+    # 4. Percentages: '15%', '15 percent', '15パーセント'
+    for m in re.finditer(
+        r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(?:%|percent(?:s)?|percentage(?:\s+points)?|パーセント)(?![A-Za-z0-9_])",
+        norm,
+        re.IGNORECASE,
+    ):
+        raw_num = m.group(1).replace(",", "")
+        try:
+            norm_val = _normalize_decimal(Decimal(raw_num))
+        except (InvalidOperation, ValueError):
+            norm_val = raw_num
+        tok = CanonicalToken(kind="percent", value=norm_val, display=f"{raw_num}%")
+        candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=85))
+
+    # 5. Japanese Date Months: '5月', '10月'
     for m in re.finditer(r"(?<!\d)(1[0-2]|[1-9])\s*月", norm):
-        month_num = m.group(1)
+        month_num = str(int(m.group(1)))
         tok = CanonicalToken(kind="month", value=month_num, display=month_num)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=80))
 
-    # 5. English Months: strict May
-    for m in _MAY_DATE_STRICT.finditer(norm):
-        may_pos = norm.find("May", m.start(), m.end())
-        if may_pos != -1:
-            tok = CanonicalToken(kind="month", value="5", display="5")
-            candidates.append(_SpanToken(start=may_pos, end=may_pos + 3, token=tok, priority=80))
+    # 6. Ambiguous English Months: 'March', 'May' (require strict date context)
+    for m_num, m_name in (("3", "March"), ("5", "May")):
+        for s, e in _match_abbr_or_word_date_context(norm, m_name):
+            tok = CanonicalToken(kind="month", value=m_num, display=m_num)
+            candidates.append(_SpanToken(start=s, end=e, token=tok, priority=80))
 
-    # 6. English Months: other months (Jan - Dec except May)
+    # 7. Other English Months: January, February, April, June, July, August, September, October, November, December
     for num, name in _MONTH_NAMES_EN.items():
-        if num == "5":
+        if num in ("3", "5"):
             continue
+        if num == "8":
+            # August: capitalized August is month; lowercase august requires date context
+            for m in re.finditer(r"(?<![A-Za-z0-9_])August(?![A-Za-z0-9_])", norm):
+                tok = CanonicalToken(kind="month", value="8", display="8")
+                candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
+            for s, e in _match_abbr_or_word_date_context(norm, "august"):
+                tok = CanonicalToken(kind="month", value="8", display="8")
+                candidates.append(_SpanToken(start=s, end=e, token=tok, priority=75))
+            continue
+
         for m in re.finditer(rf"(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])", norm, re.IGNORECASE):
             tok = CanonicalToken(kind="month", value=num, display=num)
             candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
 
+    # 8. English Month Abbreviations in date context
     for num, abbr in _MONTH_ABBRS_EN.items():
-        for m in re.finditer(rf"(?<![A-Za-z0-9_]){abbr}\.?(?![A-Za-z0-9_])", norm, re.IGNORECASE):
+        for s, e in _match_abbr_or_word_date_context(norm, abbr):
             tok = CanonicalToken(kind="month", value=num, display=num)
-            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=75))
+            candidates.append(_SpanToken(start=s, end=e, token=tok, priority=75))
 
-    # 7. Japanese Ordinals: '第1', '第3'
+    # 9. Japanese Ordinals: '第1', '第3'
     for m in re.finditer(r"第\s*(\d+|[1-9])", norm):
-        ord_num = m.group(1)
+        ord_num = str(int(m.group(1)))
         tok = CanonicalToken(kind="ordinal", value=ord_num, display=ord_num)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=70))
 
-    # 8. English Ordinals with suffix: '1st', '2nd', '3rd'
+    # 10. English Ordinals with suffix: '1st', '2nd', '3rd'
     for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+)(?:st|nd|rd|th)(?![A-Za-z0-9_])", norm, re.IGNORECASE):
-        raw_num = m.group(1)
+        raw_num = str(int(m.group(1)))
         tok = CanonicalToken(kind="ordinal", value=raw_num, display=raw_num)
         candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=70))
 
-    # 9. English Spelled-out Ordinals in Ordinal Context
+    # 11. English Spelled-out Ordinals in Ordinal Context
     for m in _ORDINAL_WORD_CONTEXT_RE.finditer(norm):
         for g_idx in (1, 2, 3):
             word = m.group(g_idx)
@@ -473,19 +569,15 @@ def extract_canonical_tokens(text: str) -> list[CanonicalToken]:
                 candidates.append(_SpanToken(start=m.start(g_idx), end=m.end(g_idx), token=tok, priority=65))
                 break
 
-    # 10. Plain numbers & percentages
-    for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(%|\s*[A-Za-z]+)?(?![A-Za-z0-9_])", norm):
+    # 12. Plain numbers
+    for m in re.finditer(r"(?<![A-Za-z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(?![A-Za-z0-9_])", norm):
         raw_num = m.group(1).replace(",", "")
-        suffix = m.group(2)
-        if not suffix:
-            tok = CanonicalToken(kind="number", value=raw_num, display=raw_num)
-            candidates.append(_SpanToken(start=m.start(1), end=m.end(1), token=tok, priority=10))
-        elif suffix.strip() == "%":
-            tok = CanonicalToken(kind="number", value=raw_num, display=raw_num)
-            candidates.append(_SpanToken(start=m.start(), end=m.end(), token=tok, priority=10))
-        elif suffix.startswith(" "):
-            tok = CanonicalToken(kind="number", value=raw_num, display=raw_num)
-            candidates.append(_SpanToken(start=m.start(1), end=m.end(1), token=tok, priority=10))
+        try:
+            norm_val = _normalize_decimal(Decimal(raw_num))
+        except (InvalidOperation, ValueError):
+            norm_val = raw_num
+        tok = CanonicalToken(kind="number", value=norm_val, display=raw_num)
+        candidates.append(_SpanToken(start=m.start(1), end=m.end(1), token=tok, priority=10))
 
     # Sort candidates by priority descending, span length descending, start ascending
     candidates.sort(key=lambda c: (-c.priority, -(c.end - c.start), c.start))
@@ -599,15 +691,6 @@ def verify_nmt_numbers(source_text: str, target_text: str) -> NumericAuditResult
     """
     src_tokens = extract_canonical_tokens(source_text)
     tgt_tokens = extract_canonical_tokens(target_text)
-
-    if not src_tokens:
-        return NumericAuditResult(
-            passed=True,
-            missing=[],
-            added=[tok.display for tok in tgt_tokens],
-            src_tokens=[],
-            tgt_tokens=[tok.display for tok in tgt_tokens],
-        )
 
     src_counter = Counter(src_tokens)
     tgt_counter = Counter(tgt_tokens)

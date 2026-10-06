@@ -173,7 +173,7 @@ class TestEngineCacheIntegration(unittest.TestCase):
 
             def translate(self, text, direction, **kwargs):
                 self.calls += 1
-                return f"[NMT {self.calls}: {text}]", 0.01
+                return f"[NMT:{text}]", 0.01
 
         backend = MockNMT()
         engine = TranslationEngine(

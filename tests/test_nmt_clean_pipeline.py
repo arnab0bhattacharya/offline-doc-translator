@@ -133,7 +133,7 @@ class TestNMTNumericVerification(unittest.TestCase):
     def test_verify_nmt_numbers_repeated_count_mismatch(self):
         """Verifies multiset comparison catches dropped duplicate numbers."""
         src = "A社は100億円、B社も100億円の出資を行いました。"
-        tgt = "Company A invested 100 billion yen."
+        tgt = "Company A invested 10 billion yen."
         audit = verify_nmt_numbers(src, tgt)
         self.assertFalse(audit.passed)
         self.assertIn("100", audit.missing)
@@ -302,6 +302,78 @@ class TestNMTNumericVerification(unittest.TestCase):
             "First, let us examine the first quarter.", "まず、第1四半期を検討しましょう。"
         )
         self.assertTrue(audit_mixed.passed)
+
+    def test_verify_nmt_numbers_japanese_scale_multipliers(self):
+        """Verifies Japanese scale multipliers (万=10^4, 億=10^8, 兆=10^12) are converted accurately."""
+        # 42億円 = 4.2 billion yen (NOT 42 billion)
+        self.assertTrue(verify_nmt_numbers("売上は42億円でした。", "Revenue was 4.2 billion yen.").passed)
+        audit_42b_wrong = verify_nmt_numbers("売上は42億円でした。", "Revenue was 42 billion yen.")
+        self.assertFalse(audit_42b_wrong.passed)
+        self.assertIn("42", audit_42b_wrong.missing)
+        self.assertIn("42B", audit_42b_wrong.added)
+
+        # 50万円 = 500,000 yen / 500k yen (NOT 50 thousand)
+        self.assertTrue(verify_nmt_numbers("費用は50万円です。", "Fee is 500,000 yen.").passed)
+        self.assertTrue(verify_nmt_numbers("費用は50万円です。", "Fee is 500k yen.").passed)
+        audit_50k_wrong = verify_nmt_numbers("費用は50万円です。", "Fee is 50 thousand yen.")
+        self.assertFalse(audit_50k_wrong.passed)
+        self.assertIn("50", audit_50k_wrong.missing)
+        self.assertIn("50k", audit_50k_wrong.added)
+
+        # 1兆円 = 1 trillion yen
+        self.assertTrue(verify_nmt_numbers("資産は1兆円です。", "Assets are 1 trillion yen.").passed)
+
+    def test_verify_nmt_numbers_no_source_numbers_strict_bilateral(self):
+        """Verifies bilateral gate rejects added target numbers even when source has zero numbers."""
+        audit_added = verify_nmt_numbers("No figures here", "There were 3 outcomes")
+        self.assertFalse(audit_added.passed)
+        self.assertEqual(audit_added.missing, [])
+        self.assertIn("3", audit_added.added)
+
+        audit_added_scale = verify_nmt_numbers(
+            "売上が増加しました。", "Sales increased significantly to 99 billion yen."
+        )
+        self.assertFalse(audit_added_scale.passed)
+        self.assertEqual(audit_added_scale.missing, [])
+        self.assertIn("99B", audit_added_scale.added)
+
+        # Both clean text with no numbers -> passes
+        audit_clean = verify_nmt_numbers("No figures here", "No figures here")
+        self.assertTrue(audit_clean.passed)
+        self.assertEqual(audit_clean.missing, [])
+        self.assertEqual(audit_clean.added, [])
+
+    def test_verify_nmt_numbers_ambiguous_march_verb_vs_month(self):
+        """Verifies ordinary English 'march' verb/noun without date context is not mistaken for March month."""
+        # Non-date 'march' does not emit Month(3)
+        audit_troops = verify_nmt_numbers("Troops march forward in 2024", "Troops advanced in 2024")
+        self.assertTrue(audit_troops.passed)
+        self.assertEqual(audit_troops.missing, [])
+        self.assertEqual(audit_troops.added, [])
+
+        # Legitimate date contexts DO emit Month(3)
+        self.assertTrue(verify_nmt_numbers("Started in March 2024", "2024年3月に開始").passed)
+        self.assertTrue(verify_nmt_numbers("March 2024 revenue", "2024年3月の売上").passed)
+
+    def test_verify_nmt_numbers_percentages_distinct_and_equivalences(self):
+        """Verifies percentages are distinct from plain numbers and match equivalents like パーセント."""
+        # 15% vs plain 15 must fail
+        audit_pct_plain = verify_nmt_numbers("15%", "15")
+        self.assertFalse(audit_pct_plain.passed)
+        self.assertIn("15%", audit_pct_plain.missing)
+        self.assertIn("15", audit_pct_plain.added)
+
+        # Plain 15 vs 15% must fail
+        audit_plain_pct = verify_nmt_numbers("15", "15%")
+        self.assertFalse(audit_plain_pct.passed)
+        self.assertIn("15", audit_plain_pct.missing)
+        self.assertIn("15%", audit_plain_pct.added)
+
+        # 15% matches Japanese パーセント and full-width percent sign
+        self.assertTrue(verify_nmt_numbers("売上は15%増", "Sales rose 15%").passed)
+        self.assertTrue(verify_nmt_numbers("売上は15パーセント増", "Sales rose 15%").passed)
+        self.assertTrue(verify_nmt_numbers("15パーセント", "15 percent").passed)
+        self.assertTrue(verify_nmt_numbers("15.5%", "15.5パーセント").passed)
 
     def test_verify_nmt_numbers_bidirectional_month_conversion(self):
         """Verifies month equivalences operate symmetrically in ja2en and en2ja."""
@@ -565,7 +637,7 @@ class TestNMTCleanPipeline(unittest.TestCase):
         """Ensures that stale/legacy cache entries with missing numbers are rejected on read and evicted."""
         mock_backend = MockNMTBackend(
             mapping={
-                "売上高は42億円でした。": "Sales were 42 billion yen.",  # Valid translation
+                "売上高は42億円でした。": "Sales were 4.2 billion yen.",  # Valid translation
             }
         )
         with tempfile.TemporaryDirectory() as td:
@@ -594,7 +666,7 @@ class TestNMTCleanPipeline(unittest.TestCase):
             result = engine.translate_chunk(source, direction="ja2en")
             self.assertTrue(result.was_translated)
             self.assertFalse(result.was_reverted)
-            self.assertEqual(result.text, "Sales were 42 billion yen.")
+            self.assertEqual(result.text, "Sales were 4.2 billion yen.")
             self.assertEqual(result.source_backend, "nmt")  # Freshly generated, not served from bad cache!
 
     def test_nmt_cache_read_deletes_bad_entry_from_cache_mgr_and_disk(self):

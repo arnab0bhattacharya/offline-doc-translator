@@ -1,189 +1,155 @@
 # Offline Document Translator
 
-A desktop application for translating Japanese ↔ English Office documents **entirely offline** — no cloud API, no subscription, no data leaving your machine.
+Translate Japanese ↔ English documents **100% privately on your own Windows computer**. No cloud APIs, no subscriptions, no internet required during translation, and complete privacy for confidential business and personal data.
 
-Supports `.docx`, `.pptx`, and `.xlsx` files with two translation engines: local Machine Translation (Google MADLAD-400 3B via CTranslate2) and local AI Translation (Gemma 4 via Ollama).
+---
 
 > [!WARNING]
-> **PDF TRANSLATION IS NOT OPERATIONAL (UNDER DEVELOPMENT)**
-> PDF translation is currently under active development and is **not functional**. **Do not attempt to translate PDF files.** Only Word (`.docx`), PowerPoint (`.pptx`), and Excel (`.xlsx`) files are supported for translation.
+> ### ⚠️ PDF Translation Status (Under Active Development)
+> PDF translation is currently under construction and **does not work yet**. 
+> **Please do not attempt to translate PDF files at this time.** 
+> 
+> ✅ **Fully supported document formats:**
+> - **Microsoft Word** (`.docx`) — Preserves fonts, bold/italic text, tables, and layouts.
+> - **Microsoft PowerPoint** (`.pptx`) — Preserves slide layouts, text boxes, and shapes.
+> - **Microsoft Excel** (`.xlsx`) — Preserves sheet structures, cell styles, and formulas.
 
 ---
 
-## Features
+## 📸 Step-by-Step Setup Guide
 
-- **Offline-first** — works without an internet connection once models are set up
-- **Dual engine** — fast Machine Translation (Google MADLAD-400 3B) or high-quality AI Translation (Ollama / Gemma 4)
-- **Supported formats** — Word (`.docx`), PowerPoint (`.pptx`), and Excel (`.xlsx`) *(PDF is under development)*
-- **Batch translation queue** — stage multiple files with per-document direction and engine overrides, live visual badges, and progress tracking
-- **Glossary support** — custom term pairs with file save/load and cross-session persistence
-- **Encrypted cache** — machine-bound AES cache so repeated segments translate instantly
-- **Review workflow** — reverted segments flagged in `.needs_review.log` with locations
-- **Quick Translate tab** — side-by-side text lookup with glossary injection and number masking
-- **Hardware-aware** — automatic CPU core scaling and dynamic memory eviction for smooth operation on 8 GB+ RAM systems
-- **Structured errors** — every failure has a structured error code, a plain-English title, and a suggested action
+Follow this simple 4-step walkthrough to get completely set up in just a few minutes.
 
 ---
 
-## Requirements
+### Step 1: Install Offline Document Translator
 
-| Component | Purpose |
-| :--- | :--- |
-| **Python 3.11+** | Runtime environment |
-| **CTranslate2 & SentencePiece** | Offline Machine Translation engine (Google MADLAD-400 3B) |
-| **Ollama** *(Optional)* | Local AI server (required only for AI Translation mode) |
-| **Gemma 4 E2B QAT** *(Optional)* | Pinned Ollama model (`ollama pull gemma4:e2b-it-qat`) |
+1. Download **`OfflineTranslatorSetup.exe`** from the latest [GitHub Releases](https://github.com/arnab0bhattacharya/offline-doc-translator/releases).
+2. Double-click the file to start the installation wizard.
+   > **Note for Windows SmartScreen**: If Windows displays a blue popup saying *"Windows protected your PC"*, click **More info**, then click **Run anyway**.
+3. Follow the on-screen setup prompts and click **Next** until finished.
+
+![Step 1: Installer Screen](assets/screenshots/01-app-installer.png)
+*Follow the on-screen setup wizard to install the application.*
 
 ---
 
-## Installation
+### Step 2: Install Ollama (Essential for AI Translation!) ⚠️
 
-### Option 1 — Windows Installer (Recommended)
+> [!IMPORTANT]
+> **Do not skip this step!**  
+> To use the **AI Translation** features, Windows needs a free local AI engine called **Ollama**.
 
-Download `OfflineTranslatorSetup.exe` from the [Releases](../../releases) page and run it. The installer handles desktop shortcuts and dependencies automatically.
+#### 2A. Download Ollama
+The app installer will automatically offer to launch the Ollama installation for you. If you need to install it manually:
+- Open your browser and go to **[https://ollama.com/download](https://ollama.com/download)**.
+- Click the **Download for Windows** button to download `OllamaSetup.exe`.
 
-### Option 2 — From Source
+![Step 2A: Ollama Download Page](assets/screenshots/02-ollama-download-page.png)
+*Download Ollama for Windows from the official website.*
+
+#### 2B. Run the Ollama Installer
+- Double-click `OllamaSetup.exe` and click **Install**.
+- The installer will unpack and prepare the local background service.
+
+![Step 2B: Ollama Installer](assets/screenshots/03-ollama-installer.png)
+*Click Install to set up Ollama on your computer.*
+
+#### 2C. Skip Sign-in — Select "No thanks, I'll use Ollama locally"
+> [!TIP]
+> **No account or sign-in is required!**  
+> When the installation completes, Ollama may open a prompt asking you to sign in.  
+> Click **"No thanks, I'll use Ollama locally"** (or skip sign-in).
+
+- Ollama will now run quietly in your Windows taskbar tray (near the clock in the bottom-right corner of your screen).
+
+![Step 2C: Select Use Ollama Locally](assets/screenshots/04-ollama-skip-signin.png)
+*Select "No thanks, I'll use Ollama locally" to keep everything 100% offline without creating an account.*
+
+---
+
+### Step 3: First-Time Setup (Download Both Models)
+
+When you open the app for the very first time, you need to download the two translation models onto your computer. **You only ever have to do this once!**
+
+1. Launch **Offline Document Translator** from your desktop shortcut.
+2. In the left-hand menu, click on the **System & AI** tab.
+3. Download both models using the two buttons on this screen:
+   - **Model 1 — Machine Translation (Fast)**:
+     - Under the **Machine Translation (MADLAD-400 3B)** section, click **⬇ Download Model (~3.0 GB)**.
+     - Wait for the progress bar to finish until it displays **✅ Model ready**.
+   - **Model 2 — AI Translation (Smart AI)**:
+     - Under the **AI Translation Engine (Ollama)** section, click **⬇ Download Gemma 4 Model (~1.6 GB)**.
+     - Wait for the progress bar to finish until it displays **✅ Google Gemma 4 is ready**.
+
+![Step 3: System & AI Tab Model Downloads](assets/screenshots/05-system-ai-downloads.png)
+*Download both models in the System & AI tab until both engines show green checkmarks.*
+
+> 💡 **Using an Air-Gapped / Completely Offline PC?**  
+> If your computer has no internet access at all, you can download the model on another PC, put the folder on a USB drive, and click **📁 Import Local Folder** under Machine Translation.
+
+---
+
+### Step 4: Translating Your Documents
+
+Once both models are downloaded and show green checkmarks, you are ready to translate:
+
+1. Click **Documents** in the left sidebar menu.
+2. **Add Files**: Drag and drop your `.docx`, `.pptx`, or `.xlsx` files into the box, or click **Browse Files**.
+3. **Select Direction**: Choose **Japanese ➔ English** or **English ➔ Japanese**.
+4. **Choose Translation Engine**:
+   - **⚡ Machine Translation**: Ultra-fast; great for long reports, large data sheets, and batch files.
+   - **🧠 AI Translation**: High-fidelity AI; great for conversational, marketing, and nuanced phrasing.
+5. Click the green **▶ Start Translation** button.
+6. When translation is finished, click **Open Output Folder** to view your translated files with all formatting, tables, and colors preserved!
+
+![Step 4: Translating Documents](assets/screenshots/06-documents-translate.png)
+*Drop your files, choose your language direction and engine, and click Start Translation.*
+
+---
+
+## ⚡ Additional Features
+
+### 🔍 Quick Translate (Instant Lookup)
+Need to translate a quick paragraph, email draft, or phrase without translating an entire document?
+- Click **Quick Translate** in the left sidebar.
+- Type or paste your text on the left and see the translation appear instantly on the right.
+
+![Quick Translate](assets/screenshots/07-quick-translate.png)
+*Instant side-by-side text lookup with custom glossary injection.*
+
+### 📖 Custom Glossaries
+Need specific company names, technical terminology, or product names translated consistently?
+- In the **Documents** tab, expand the **Custom Glossary** section.
+- Add your exact word mappings (e.g. `株式会社 -> Corporation` or `納期 -> Delivery Date`).
+
+---
+
+## 🛠️ Frequently Asked Questions & Troubleshooting
+
+#### 1. What if my model download gets interrupted or disconnects?
+If your internet drops mid-download, simply return to the **System & AI** tab and click **↻ Repair / Re-download Model**. The app automatically checks file integrity, removes any partial downloads, and resumes cleanly.
+
+#### 2. Does this app ever send my documents to the cloud or third parties?
+**Never.** Both the machine translation engine and the AI engine run 100% locally on your computer's hardware. Your documents and translations never leave your machine.
+
+#### 3. Can I run this without an expensive graphics card (GPU)?
+**Yes.** The Machine Translation engine is optimized to run smoothly on any standard Windows CPU with 8 GB of RAM or more.
+
+---
+
+## 💻 For Developers / Running from Source
+
+If you prefer to run from source code rather than using the installer:
 
 ```bash
+# Clone the repository
 git clone https://github.com/arnab0bhattacharya/offline-doc-translator.git
 cd offline-doc-translator
 
+# Install dependencies
 pip install -r requirements.txt
 
-# Launch the GUI
-python main.py
-
-# Or use the CLI
-python main.py --help
-```
-
-### Model Setup
-
-- **Machine Translation (MADLAD-400 3B)**: Download the model post-install with a single click from the **System & AI** tab inside the app.
-- **AI Translation (Gemma 4 via Ollama)**: Install [Ollama](https://ollama.ai) and pull the model:
-  ```bash
-  ollama pull gemma4:e2b-it-qat
-  ```
-
----
-
-## Usage
-
-### Desktop GUI
-
-```bash
+# Launch the desktop app
 python main.py
 ```
-
-1. Drop files into the **Documents** tab staging area (or use the folder picker).
-2. Choose your translation direction and engine per-document or globally:
-   - **⚡ Machine Translation**: Google MADLAD-400 3B (fast, lightweight, offline).
-   - **🧠 AI Translation**: Gemma 4 via Ollama (high fidelity, 4096 context window).
-3. Add optional custom glossary terms.
-4. Click **▶ Start Translation**.
-
-### Command Line Interface (CLI)
-
-```bash
-# Translate a single Word document with Machine Translation
-python main.py --input report.docx --output report_en.docx --direction ja2en --mode machine_translation
-
-# Translate PowerPoint with custom glossary
-python main.py --input spec.pptx --output spec_en.pptx --direction ja2en --glossary terms.txt
-
-# Translate Excel workbook with AI Translation (Gemma 4)
-python main.py --input data.xlsx --output data_en.xlsx --direction en2ja --mode ai_translation
-```
-
-Glossary file format (`terms.txt`):
-```text
-# One term per line, delimiter: ->, :, or =
-株式会社 -> Corporation
-納期 -> Delivery Date
-```
-
----
-
-## Architecture
-
-```text
-offline-doc-translator/
-├── engine/               # Translation core: backends, cache, queue, security policy
-│   ├── core.py           # TranslationEngine: masking, glossary, cache, verification
-│   ├── backend_madlad.py # Google MADLAD-400 3B (CTranslate2) MT backend
-│   ├── backend_llm.py    # Ollama LLM backend (Gemma 4, 4096 context)
-│   ├── cache.py          # JSONFileCache / EncryptedFileCache / NullCache
-│   ├── queue_manager.py  # Thread-safe multi-document queue orchestrator
-│   ├── security_policy.py# DocumentSecurityPolicy resource limits
-│   └── run_job.py        # Shared job executor (CLI + GUI)
-├── formats/              # Format handlers: one class per file type
-│   ├── base.py           # BaseFormatHandler ABC + shared OOXML helpers
-│   ├── docx_handler.py   # Word (.docx) handler
-│   ├── pptx_handler.py   # PowerPoint (.pptx) handler
-│   ├── xlsx_handler.py   # Excel (.xlsx) handler
-│   ├── pdf_handler.py    # PDF handler (under active development)
-│   └── xml_utils.py      # Secure lxml DOM mutation utilities
-├── gui/                  # CustomTkinter desktop UI (MVC)
-│   ├── app.py            # Main application window & sidebar navigation
-│   ├── views/            # DocumentsView, QuickView, SystemView
-│   ├── controllers/      # TranslationController
-│   └── widgets/          # JobRow, StagedFileList
-├── tests/                # 260+ automated unit & integration test suites
-└── main.py               # Desktop GUI launcher and CLI entry point
-```
-
----
-
-## Running Tests
-
-```bash
-# Run full automated test suite
-python -m unittest discover tests
-
-# Or with pytest
-python -m pytest tests/ -v
-```
-
-Static analysis and linting:
-
-```bash
-pip install ruff bandit
-python lint.py          # Ruff + Bandit check
-python lint.py --fix    # Auto-fix safe issues
-```
-
----
-
-## Security & Privacy
-
-- **Zero external calls** during translation — all inference runs strictly locally on your hardware.
-- **XXE / entity injection blocked** — hardened `lxml` parser with `resolve_entities=False` and `no_network=True`.
-- **Zip-slip & traversal protection** — strict path validation during OOXML extraction.
-- **Encrypted cache** — machine-bound AES key (DPAPI-derived on Windows).
-- **Privacy-safe review logs** — source text is never logged; only location, chunk ID, and SHA-256 hash.
-- **Placeholder integrity** — `Counter`-based multiset checks ensure all masked numbers and tags survive translation unaltered.
-
----
-
-## Limitations
-
-- **PDF translation is NOT operational** — PDF translation is currently non-functional and under active development. **Do not try to translate PDFs.** Use Word (`.docx`), PowerPoint (`.pptx`), or Excel (`.xlsx`) documents instead.
-- **Japanese ↔ English only** — the translation models and LLM prompts are optimized specifically for this language pair.
-- **Windows only** — the desktop GUI uses Windows-specific APIs (`AppUserModelID`, `os.startfile`, DPAPI). The CLI and engine core run cross-platform.
-- **AI mode requires Ollama** — AI Translation requires Ollama running with `gemma4:e2b-it-qat` installed.
-
----
-
-## License
-
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see the [LICENSE](LICENSE) file for details.
-
-### Third-Party Components & Notices
-
-- **Google MADLAD-400**: Apache 2.0 License.
-- **CTranslate2**: MIT License.
-- **PyMuPDF (`fitz`)**: GNU AGPL v3.0 / Artifex Software Inc.
-- **CustomTkinter**: MIT License.
-- **lxml**: BSD License.
-- **defusedxml**: Python Software Foundation License.
-- **cryptography**: Apache-2.0 / BSD.
